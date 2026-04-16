@@ -33,7 +33,7 @@ let state = {
   groceryItems: null,
   aiPlannerResult: null,
   weekStart: getWeekStart(),
-  apiKey: localStorage.getItem('macrolens_apikey') ?? '',
+  // apiKey moved server-side — no longer needed in client
   editingRecipe: null,  // recipe being edited in modal
 }
 
@@ -809,12 +809,13 @@ function renderAccount(container) {
       </div>` : ''}
     </div>
 
-    <!-- API Key -->
+    <!-- AI info -->
     <div class="upload-card" style="max-width:520px;margin-bottom:20px">
-      <div class="section-title">API key</div>
-      <p style="font-size:13px;color:var(--text2);margin-bottom:14px;line-height:1.6">Your Anthropic API key powers food analysis. In a future update this will be managed server-side.</p>
-      <input class="api-input" type="password" id="account-api-key" placeholder="sk-ant-..." value="${state.apiKey}" style="margin-bottom:10px" />
-      <button class="analyze-btn" onclick="saveApiKeyHandler()">Save API key</button>
+      <div class="section-title">AI analysis</div>
+      <p style="font-size:13px;color:var(--text2);line-height:1.6">
+        Food analysis is powered by Claude AI and runs securely on our servers.
+        No API key needed — usage is tracked and billed against your monthly budget above.
+      </p>
     </div>
 
     <!-- Admin panel -->
@@ -899,22 +900,20 @@ async function loadAdminPanel() {
 
 // ─── Analyze Food ─────────────────────────────────────────────────────────────
 async function doAnalyze() {
-  const apiKey = state.apiKey
-  if (!apiKey) { showToast('Please add your API key in Account settings', 'error'); switchPage('account'); return null }
   const mealHint = document.getElementById('meal-name-input')?.value.trim() ?? ''
 
   if (state.currentMode === 'photo') {
     if (!state.imageBase64) { showToast('Please upload a food image first', 'error'); return null }
-    return await analyzePhoto(apiKey, state.imageBase64, mealHint, state.user.id)
+    return await analyzePhoto(state.imageBase64, mealHint)
   } else if (state.currentMode === 'recipe') {
     const recipe = document.getElementById('recipe-input')?.value.trim()
     if (!recipe) { showToast('Please describe your recipe first', 'error'); return null }
-    return await analyzeRecipe(apiKey, recipe, mealHint, state.user.id)
+    return await analyzeRecipe(recipe, mealHint)
   } else if (state.currentMode === 'link') {
     const dishName = document.getElementById('dish-name-input')?.value.trim()
     const link = document.getElementById('link-input')?.value.trim()
     if (!dishName) { showToast('Please enter the dish name', 'error'); return null }
-    return await analyzeDishBySearch(apiKey, dishName, link, state.user.id)
+    return await analyzeDishBySearch(dishName, link)
   }
   return null
 }
@@ -1140,13 +1139,7 @@ function wireGlobals() {
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
-  window.saveApiKeyHandler = () => {
-    const key = document.getElementById('account-api-key')?.value.trim()
-    if (!key) return
-    state.apiKey = key
-    localStorage.setItem('macrolens_apikey', key)
-    showToast('API key saved!', 'success')
-  }
+  // API key no longer needed client-side — handled by server proxy
 
   window.handleSignOut = async () => {
     try { await signOut() } catch (e) { console.error(e) }
@@ -1345,14 +1338,12 @@ function wireGlobals() {
   window.analyzePlannerMealHandler = async () => {
     const input = document.getElementById('pm-ai-input')?.value.trim()
     if (!input) { showToast('Please describe the meal first', 'error'); return }
-    const apiKey = state.apiKey
-    if (!apiKey) { showToast('Please add your API key in Account settings', 'error'); return }
     const btn = document.getElementById('pm-analyze-btn')
     btn.disabled = true
     btn.innerHTML = '<span class="analyzing-spinner"></span> Analyzing...'
     document.getElementById('pm-result').style.display = 'none'
     try {
-      const r = await analyzePlannerDescription(apiKey, input, state.user.id)
+      const r = await analyzePlannerDescription(input)
       state.aiPlannerResult = r
       document.getElementById('pm-result-name').textContent = r.name
       document.getElementById('pm-result-pills').innerHTML = `
@@ -1442,8 +1433,6 @@ function wireGlobals() {
   }
 
   window.fetchAndSaveIngredients = async (mealId, mealName) => {
-    const apiKey = state.apiKey
-    if (!apiKey) { showToast('API key needed — check Account settings', 'error'); return }
     showToast(`Extracting ingredients for ${mealName}...`, '')
     try {
       // Find or create recipe
@@ -1454,7 +1443,7 @@ function wireGlobals() {
         })
         state.recipes.unshift(recipe)
       }
-      const result = await extractIngredients(apiKey, mealName, recipe.description || '', recipe.servings || 4, state.user.id)
+      const result = await extractIngredients(mealName, recipe.description || '', recipe.servings || 4)
       const updated = await upsertRecipe(state.user.id, { ...recipe, ingredients: result.ingredients || [] })
       const idx = state.recipes.findIndex(r => r.id === updated.id)
       if (idx !== -1) state.recipes[idx] = updated
@@ -1511,12 +1500,10 @@ function wireGlobals() {
   window.fetchIngredients = async (recipeId) => {
     const recipe = state.recipes.find(r => r.id === recipeId) || state.editingRecipe
     if (!recipe) return
-    const apiKey = state.apiKey
-    if (!apiKey) { showToast('API key needed — check Account settings', 'error'); return }
     const btn = document.querySelector('[onclick*="fetchIngredients"]')
     if (btn) { btn.textContent = '⏳ Extracting...'; btn.disabled = true }
     try {
-      const result = await extractIngredients(apiKey, recipe.name, recipe.description, recipe.servings, state.user.id)
+      const result = await extractIngredients(recipe.name, recipe.description, recipe.servings)
       state.editingRecipe = { ...(state.editingRecipe || recipe), ingredients: result.ingredients || [] }
       document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
       showToast(`Extracted ${result.ingredients?.length || 0} ingredients!`, 'success')
@@ -1528,13 +1515,11 @@ function wireGlobals() {
 
   window.recalculateMacrosHandler = async () => {
     if (!state.editingRecipe?.ingredients?.length) { showToast('Add ingredients first', 'error'); return }
-    const apiKey = state.apiKey
-    if (!apiKey) { showToast('API key needed — check Account settings', 'error'); return }
     const btn = document.getElementById('recalc-btn')
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Calculating...' }
     const servings = parseFloat(document.getElementById('recipe-servings')?.value) || state.editingRecipe.servings || 4
     try {
-      const macros = await recalculateMacros(apiKey, state.editingRecipe.name, state.editingRecipe.ingredients, servings, state.user.id)
+      const macros = await recalculateMacros(state.editingRecipe.name, state.editingRecipe.ingredients, servings)
       const fields = { 'r-cal': macros.calories, 'r-protein': macros.protein, 'r-carbs': macros.carbs, 'r-fat': macros.fat, 'r-fiber': macros.fiber, 'r-sugar': macros.sugar }
       Object.entries(fields).forEach(([id, val]) => { const el = document.getElementById(id); if (el) el.value = Math.round(val || 0) })
       state.editingRecipe = { ...state.editingRecipe, ...macros, servings }
