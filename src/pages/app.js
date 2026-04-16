@@ -25,6 +25,9 @@ let state = {
   editingEntry: null,
   plannerTarget: null,
   plannerTab: 'history',
+  plannerView: 'meals',   // 'meals' | 'grocery'
+  groceryView: 'full',    // 'full' | 'bymeal'
+  groceryItems: null,     // reset when week changes
   aiPlannerResult: null,
   weekStart: getWeekStart(),
   apiKey: localStorage.getItem('macrolens_apikey') ?? '',
@@ -150,10 +153,15 @@ function renderShell(container) {
             <button class="pm-add-btn" onclick="addAiMealToPlannerHandler()">+ Add to planner</button>
           </div>
         </div>
-        <label class="leftover-toggle">
-          <input type="checkbox" id="leftover-check" />
-          Mark as leftovers from previous day
-        </label>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <label class="leftover-toggle">
+            <input type="checkbox" id="leftover-check" onchange="toggleLeftoverPreview(this.checked)" />
+            Also add as next-day lunch (leftovers)
+          </label>
+          <div id="leftover-preview" style="display:none;margin-top:8px;font-size:12px;color:var(--carbs);padding:6px 10px;background:rgba(122,180,232,0.08);border-radius:var(--r);border:1px solid rgba(122,180,232,0.2)">
+            Will also be added to <span id="leftover-day-label">Monday</span> as lunch
+          </div>
+        </div>
       </div>
     </div>
 
@@ -326,9 +334,29 @@ async function renderPlanner(container) {
   const planner = await getPlannerWeek(state.user.id, state.weekStart)
   state.planner = planner
 
+  // Build grocery list from all meals in the week
+  const allMeals = planner.meals.flat()
+
   container.innerHTML = `
     <div class="greeting">Meal Planner</div>
-    <div class="greeting-sub">Week of ${formatWeekLabel(state.weekStart)}</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+      <button class="td-act" onclick="shiftWeek(-1)" style="font-size:18px;padding:4px 10px">‹</button>
+      <div class="greeting-sub" style="margin-bottom:0">Week of ${formatWeekLabel(state.weekStart)}</div>
+      <button class="td-act" onclick="shiftWeek(1)" style="font-size:18px;padding:4px 10px">›</button>
+    </div>
+
+    <!-- Planner / Grocery tabs -->
+    <div style="display:flex;gap:4px;margin-bottom:20px">
+      <button class="mode-tab ${state.plannerView !== 'grocery' ? 'active' : ''}" onclick="setPlannerView('meals')" style="flex:0 0 auto;padding:8px 18px">📅 Meal plan</button>
+      <button class="mode-tab ${state.plannerView === 'grocery' ? 'active' : ''}" onclick="setPlannerView('grocery')" style="flex:0 0 auto;padding:8px 18px">🛒 Grocery list</button>
+    </div>
+
+    ${state.plannerView === 'grocery' ? renderGroceryList(allMeals, planner) : renderMealPlanView(planner)}
+  `
+}
+
+function renderMealPlanView(planner) {
+  return `
     <div class="planner-summary">
       <div class="planner-summary-title">Weekly calorie overview</div>
       <div class="planner-summary-grid">
@@ -352,7 +380,7 @@ async function renderPlanner(container) {
         const cal = meals.reduce((a, m) => a + (m.calories || 0), 0)
         const mealItems = meals.map((m, mi) => `
           <div class="planner-meal" onclick="openEditModal('${m.id}', 'planner', {d:${di},m:${mi}})">
-            <div class="planner-meal-name">${esc(m.meal_name || m.name)}${m.is_leftover || m.leftover ? '<span class="leftovers-badge">↩</span>' : ''}</div>
+            <div class="planner-meal-name">${esc(m.meal_name || m.name)}</div>
             <div class="planner-meal-cals">${Math.round(m.calories)} kcal</div>
             <button class="planner-meal-del" onclick="deletePlannerMealHandler('${m.id}',${di},${mi});event.stopPropagation()">×</button>
           </div>`).join('')
@@ -364,6 +392,101 @@ async function renderPlanner(container) {
           <div class="planner-meals">${mealItems}</div>
           <button class="planner-add-btn" onclick="openPlannerModal(${di})">+ Add meal</button>
         </div>`
+      }).join('')}
+    </div>
+  `
+}
+
+function renderGroceryList(allMeals, planner) {
+  const view = state.groceryView || 'full'
+  // Load any manual edits from state
+  const groceryItems = state.groceryItems || buildGroceryItems(allMeals, planner)
+  if (!state.groceryItems) state.groceryItems = groceryItems
+
+  return `
+    <div class="log-card" style="margin-bottom:20px">
+      <div class="log-header">
+        <span class="log-header-title">🛒 Grocery list</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="clear-btn" onclick="addGroceryItem()" style="color:var(--accent)">+ Add item</button>
+          <button class="clear-btn" onclick="clearCheckedItems()">Clear checked</button>
+        </div>
+      </div>
+
+      <!-- View toggle: full list vs by meal -->
+      <div style="display:flex;gap:4px;padding:12px 16px;border-bottom:1px solid var(--border)">
+        <button class="mode-tab ${view === 'full' ? 'active' : ''}" onclick="setGroceryView('full')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">Full list</button>
+        <button class="mode-tab ${view === 'bymeal' ? 'active' : ''}" onclick="setGroceryView('bymeal')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">By meal</button>
+      </div>
+
+      ${view === 'full' ? renderGroceryFull(groceryItems) : renderGroceryByMeal(planner)}
+    </div>
+  `
+}
+
+function buildGroceryItems(allMeals, planner) {
+  // Build a flat list of items from meal names — one line per meal as a starting point
+  // Users can edit/add/delete freely
+  const items = []
+  DAYS.forEach((day, di) => {
+    const meals = planner.meals[di] || []
+    meals.forEach(m => {
+      items.push({
+        id: `${m.id}-${Date.now()}-${Math.random()}`,
+        text: m.meal_name || m.name,
+        checked: false,
+        mealId: m.id,
+        mealName: m.meal_name || m.name,
+        day: di
+      })
+    })
+  })
+  return items
+}
+
+function renderGroceryFull(items) {
+  if (!items.length) return `<div class="log-empty">No meals planned yet. Add meals to the planner to generate a grocery list.</div>`
+  return `
+    <div style="padding:8px 0">
+      ${items.map((item, i) => `
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border);${item.checked ? 'opacity:0.45' : ''}">
+          <input type="checkbox" ${item.checked ? 'checked' : ''} onchange="toggleGroceryItem(${i})"
+            style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;flex-shrink:0" />
+          <input type="text" value="${esc(item.text)}" onchange="editGroceryItem(${i}, this.value)"
+            style="flex:1;background:none;border:none;outline:none;color:${item.checked ? 'var(--text3)' : 'var(--text)'};font-size:14px;font-family:inherit;${item.checked ? 'text-decoration:line-through' : ''}" />
+          <span style="font-size:11px;color:var(--text3)">${DAYS[item.day] || ''}</span>
+          <button class="td-act" onclick="removeGroceryItem(${i})" style="color:var(--text3);font-size:16px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'">×</button>
+        </div>`).join('')}
+    </div>
+  `
+}
+
+function renderGroceryByMeal(planner) {
+  const hasMeals = planner.meals.some(d => d.length > 0)
+  if (!hasMeals) return `<div class="log-empty">No meals planned yet.</div>`
+  return `
+    <div style="padding:12px 20px">
+      ${DAYS.map((day, di) => {
+        const meals = planner.meals[di] || []
+        if (!meals.length) return ''
+        return `
+          <div style="margin-bottom:20px">
+            <div style="font-size:12px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">${day}</div>
+            ${meals.map(m => `
+              <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
+                <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:6px">${esc(m.meal_name || m.name)}</div>
+                <div style="font-size:11px;color:var(--text3)">${Math.round(m.calories)} kcal · P${Math.round(m.protein)} C${Math.round(m.carbs)} F${Math.round(m.fat)}</div>
+                <div style="margin-top:8px">
+                  <div id="ingredients-${m.id}" style="font-size:12px;color:var(--text2)">
+                    ${(m.ingredients || []).map((ing, ii) => `
+                      <div style="display:flex;align-items:center;gap:8px;padding:3px 0">
+                        <input type="checkbox" style="accent-color:var(--accent);cursor:pointer" />
+                        <span>${esc(ing)}</span>
+                      </div>`).join('') || `<span style="color:var(--text3);font-size:11px">No ingredients listed · </span><button class="clear-btn" style="color:var(--accent);font-size:11px" onclick="addIngredientToMeal('${m.id}',${di})">+ Add ingredients</button>`}
+                  </div>
+                </div>
+              </div>`).join('')}
+          </div>`
       }).join('')}
     </div>
   `
@@ -858,13 +981,95 @@ function wireGlobals() {
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
+  // ── Planner view / week navigation ─────────────────────────────
+  window.setPlannerView = (view) => {
+    state.plannerView = view
+    renderPage()
+  }
+
+  window.shiftWeek = (dir) => {
+    const d = new Date(state.weekStart + 'T00:00:00')
+    d.setDate(d.getDate() + dir * 7)
+    state.weekStart = d.toISOString().split('T')[0]
+    state.groceryItems = null // reset grocery list for new week
+    renderPage()
+  }
+
+  // ── Grocery list handlers ───────────────────────────────────────
+  window.setGroceryView = (view) => {
+    state.groceryView = view
+    renderPage()
+  }
+
+  window.toggleGroceryItem = (idx) => {
+    if (!state.groceryItems) return
+    state.groceryItems[idx].checked = !state.groceryItems[idx].checked
+    renderPage()
+  }
+
+  window.editGroceryItem = (idx, val) => {
+    if (!state.groceryItems) return
+    state.groceryItems[idx].text = val
+    // Don't re-render — let the input stay focused
+  }
+
+  window.removeGroceryItem = (idx) => {
+    if (!state.groceryItems) return
+    state.groceryItems.splice(idx, 1)
+    renderPage()
+  }
+
+  window.addGroceryItem = () => {
+    if (!state.groceryItems) state.groceryItems = []
+    state.groceryItems.push({ id: Date.now().toString(), text: '', checked: false, day: -1 })
+    renderPage()
+    // Focus the new input
+    setTimeout(() => {
+      const inputs = document.querySelectorAll('[data-grocery-input]')
+      const last = inputs[inputs.length - 1]
+      if (last) last.focus()
+    }, 50)
+  }
+
+  window.clearCheckedItems = () => {
+    if (!state.groceryItems) return
+    state.groceryItems = state.groceryItems.filter(i => !i.checked)
+    renderPage()
+  }
+
+  window.addIngredientToMeal = (mealId, dayIdx) => {
+    const ingredient = prompt('Add ingredient:')
+    if (!ingredient) return
+    const meal = state.planner.meals[dayIdx]?.find(m => m.id === mealId)
+    if (!meal) return
+    if (!meal.ingredients) meal.ingredients = []
+    meal.ingredients.push(ingredient)
+    renderPage()
+  }
+
+  // ── Leftover preview ────────────────────────────────────────────
+  window.toggleLeftoverPreview = (checked) => {
+    const preview = document.getElementById('leftover-preview')
+    if (!preview || !state.plannerTarget) return
+    if (checked) {
+      const nextDay = (state.plannerTarget.dayIdx + 1) % 7
+      document.getElementById('leftover-day-label').textContent = DAYS[nextDay] + ' lunch'
+      preview.style.display = 'block'
+    } else {
+      preview.style.display = 'none'
+    }
+  }
+
   // ── Planner modal ───────────────────────────────────────────────
   window.openPlannerModal = (dayIdx) => {
     state.plannerTarget = { dayIdx }
     state.aiPlannerResult = null
+    const nextDay = (dayIdx + 1) % 7
     document.getElementById('planner-modal-title').textContent = `Add meal — ${DAYS[dayIdx]}`
     document.getElementById('planner-search').value = ''
     document.getElementById('leftover-check').checked = false
+    document.getElementById('leftover-preview').style.display = 'none'
+    document.getElementById('leftover-day-label').textContent = DAYS[nextDay] + ' lunch'
     document.getElementById('pm-ai-input').value = ''
     document.getElementById('pm-result').style.display = 'none'
     document.getElementById('pm-analyze-btn').disabled = false
@@ -917,13 +1122,27 @@ function wireGlobals() {
   window.addAiMealToPlannerHandler = async () => {
     if (!state.plannerTarget || !state.aiPlannerResult) return
     const r = state.aiPlannerResult
-    const isLeftover = document.getElementById('leftover-check').checked
+    const addAsLeftover = document.getElementById('leftover-check').checked
+    const dayIdx = state.plannerTarget.dayIdx
     try {
-      const meal = await addPlannerMeal(state.user.id, state.weekStart, state.plannerTarget.dayIdx, { ...r, leftover: isLeftover })
-      state.planner.meals[state.plannerTarget.dayIdx].push(meal)
+      // Add to selected day
+      const meal = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, { ...r })
+      state.planner.meals[dayIdx].push(meal)
+      // If leftovers checked, also add to next day as lunch
+      if (addAsLeftover) {
+        const nextDay = (dayIdx + 1) % 7
+        const leftoverMeal = await addPlannerMeal(state.user.id, state.weekStart, nextDay, {
+          ...r, name: r.name + ' (leftovers)', meal_name: (r.meal_name || r.name) + ' (leftovers)'
+        })
+        state.planner.meals[nextDay].push(leftoverMeal)
+        showToast(`Added to ${DAYS[dayIdx]} + ${DAYS[nextDay]} lunch!`, 'success')
+      } else {
+        showToast(`${r.name} added to ${DAYS[dayIdx]}!`, 'success')
+      }
+      // Reset grocery list so it picks up the new meal
+      state.groceryItems = null
       closePlannerModal()
       renderPage()
-      showToast(`${r.name} added to ${DAYS[state.plannerTarget.dayIdx]}!`, 'success')
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
@@ -931,6 +1150,7 @@ function wireGlobals() {
     try {
       await deletePlannerMeal(state.user.id, id)
       state.planner.meals[d].splice(m, 1)
+      state.groceryItems = null // regenerate grocery list
       renderPage()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
@@ -990,13 +1210,24 @@ function filterPlannerList() {
     if (!state.plannerTarget) return
     const meal = state.log.find(e => String(e.id) === String(id))
     if (!meal) return
-    const isLeftover = document.getElementById('leftover-check').checked
+    const addAsLeftover = document.getElementById('leftover-check').checked
+    const dayIdx = state.plannerTarget.dayIdx
     try {
-      const added = await addPlannerMeal(state.user.id, state.weekStart, state.plannerTarget.dayIdx, { ...meal, leftover: isLeftover })
-      state.planner.meals[state.plannerTarget.dayIdx].push(added)
+      const added = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, { ...meal })
+      state.planner.meals[dayIdx].push(added)
+      if (addAsLeftover) {
+        const nextDay = (dayIdx + 1) % 7
+        const leftover = await addPlannerMeal(state.user.id, state.weekStart, nextDay, {
+          ...meal, name: meal.name + ' (leftovers)'
+        })
+        state.planner.meals[nextDay].push(leftover)
+        showToast(`Added to ${DAYS[dayIdx]} + ${DAYS[nextDay]} lunch!`, 'success')
+      } else {
+        showToast(`${meal.name} added to ${DAYS[dayIdx]}!`, 'success')
+      }
+      state.groceryItems = null
       closePlannerModal()
       renderPage()
-      showToast(`${meal.name} added to ${DAYS[state.plannerTarget.dayIdx]}!`, 'success')
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 }
