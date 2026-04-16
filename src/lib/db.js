@@ -293,3 +293,66 @@ export async function setUserPrivileges(userId, { isAdmin, unlimitedAccess, spen
   const { error } = await supabase.from('user_profiles').update(updates).eq('user_id', userId)
   if (error) throw error
 }
+
+// ─── Recipes ──────────────────────────────────────────────────────────────────
+
+export async function getRecipes(userId) {
+  if (!supabase) return getLocalFallback('macrolens_recipes', [])
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('*')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+  if (error) throw error
+  return data ?? []
+}
+
+export async function upsertRecipe(userId, recipe) {
+  if (!supabase) {
+    const all = getLocalFallback('macrolens_recipes', [])
+    const idx = all.findIndex(r => r.id === recipe.id)
+    const updated = { ...recipe, user_id: userId, updated_at: new Date().toISOString() }
+    if (!updated.id) updated.id = Date.now().toString()
+    if (idx !== -1) all[idx] = updated; else all.unshift(updated)
+    setLocalFallback('macrolens_recipes', all)
+    return updated
+  }
+  const payload = { user_id: userId, ...recipe, updated_at: new Date().toISOString() }
+  const { data, error } = await supabase
+    .from('recipes')
+    .upsert(payload)
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteRecipe(userId, id) {
+  if (!supabase) {
+    const all = getLocalFallback('macrolens_recipes', [])
+    setLocalFallback('macrolens_recipes', all.filter(r => r.id !== id))
+    return
+  }
+  const { error } = await supabase
+    .from('recipes')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', userId)
+  if (error) throw error
+}
+
+export async function getRecipeByName(userId, name) {
+  if (!supabase) {
+    const all = getLocalFallback('macrolens_recipes', [])
+    return all.find(r => r.name.toLowerCase() === name.toLowerCase()) ?? null
+  }
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('*')
+    .eq('user_id', userId)
+    .ilike('name', name)
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  return data
+}

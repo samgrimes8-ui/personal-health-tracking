@@ -3,10 +3,12 @@ import {
   getGoals, saveGoals as dbSaveGoals,
   getMealLog, addMealEntry, updateMealEntry, deleteMealEntry,
   getPlannerWeek, addPlannerMeal, updatePlannerMeal, deletePlannerMeal,
-  getUsageSummary, getAdminUserOverview, setUserPrivileges
+  getUsageSummary, getAdminUserOverview, setUserPrivileges,
+  getRecipes, upsertRecipe, deleteRecipe, getRecipeByName
 } from '../lib/db.js'
 import {
-  analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription
+  analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
+  extractIngredients, recalculateMacros
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -16,6 +18,7 @@ let state = {
   user: null,
   goals: { calories: 2000, protein: 150, carbs: 200, fat: 65 },
   log: [],
+  recipes: [],
   planner: { meals: Array(7).fill(null).map(() => []) },
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false },
   currentPage: 'log',
@@ -25,12 +28,13 @@ let state = {
   editingEntry: null,
   plannerTarget: null,
   plannerTab: 'history',
-  plannerView: 'meals',   // 'meals' | 'grocery'
-  groceryView: 'full',    // 'full' | 'bymeal'
-  groceryItems: null,     // reset when week changes
+  plannerView: 'meals',
+  groceryView: 'full',
+  groceryItems: null,
   aiPlannerResult: null,
   weekStart: getWeekStart(),
   apiKey: localStorage.getItem('macrolens_apikey') ?? '',
+  editingRecipe: null,  // recipe being edited in modal
 }
 
 function getWeekStart() {
@@ -50,14 +54,16 @@ export async function initApp(user, container) {
 }
 
 async function loadAll() {
-  const [goals, log, usage] = await Promise.all([
+  const [goals, log, usage, recipes] = await Promise.all([
     getGoals(state.user.id),
     getMealLog(state.user.id, { limit: 300 }),
-    getUsageSummary(state.user.id)
+    getUsageSummary(state.user.id),
+    getRecipes(state.user.id)
   ])
   state.goals = { calories: goals.calories ?? 2000, protein: goals.protein ?? 150, carbs: goals.carbs ?? 200, fat: goals.fat ?? 65 }
   state.log = log
   state.usage = usage
+  state.recipes = recipes
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
@@ -88,6 +94,10 @@ function renderShell(container) {
           <div class="nav-item ${state.currentPage === 'goals' ? 'active' : ''}" id="nav-goals" onclick="switchPage('goals')">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
             Goals
+          </div>
+          <div class="nav-item ${state.currentPage === 'recipes' ? 'active' : ''}" id="nav-recipes" onclick="switchPage('recipes')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            Recipes
           </div>
           <div class="nav-item ${state.currentPage === 'account' ? 'active' : ''}" id="nav-account" onclick="switchPage('account')">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -165,6 +175,13 @@ function renderShell(container) {
       </div>
     </div>
 
+    <!-- Recipe modal (persists across pages) -->
+    <div class="modal-overlay" id="recipe-modal">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:0;width:100%;max-width:620px;max-height:90vh;overflow-y:auto;position:relative">
+        <div id="recipe-modal-content"></div>
+      </div>
+    </div>
+
     <div class="toast" id="toast"></div>
   `
   updateSidebar()
@@ -178,6 +195,7 @@ function renderPage() {
     case 'planner':  renderPlanner(main); break
     case 'history':  renderHistory(main); break
     case 'goals':    renderGoalsPage(main); break
+    case 'recipes':  renderRecipesPage(main); break
     case 'account':  renderAccount(main); break
   }
   updateSidebar()
@@ -425,20 +443,38 @@ function renderGroceryList(allMeals, planner) {
 }
 
 function buildGroceryItems(allMeals, planner) {
-  // Build a flat list of items from meal names — one line per meal as a starting point
-  // Users can edit/add/delete freely
   const items = []
   DAYS.forEach((day, di) => {
     const meals = planner.meals[di] || []
     meals.forEach(m => {
-      items.push({
-        id: `${m.id}-${Date.now()}-${Math.random()}`,
-        text: m.meal_name || m.name,
-        checked: false,
-        mealId: m.id,
-        mealName: m.meal_name || m.name,
-        day: di
-      })
+      const mealName = m.meal_name || m.name
+      // Look up saved recipe for this meal to get real ingredients
+      const recipe = state.recipes.find(r =>
+        r.name.toLowerCase() === mealName.toLowerCase()
+      )
+      if (recipe?.ingredients?.length) {
+        // Use actual ingredients from saved recipe
+        recipe.ingredients.forEach(ing => {
+          items.push({
+            id: `${m.id}-${ing.name}-${Math.random()}`,
+            text: `${ing.amount ? ing.amount + ' ' : ''}${ing.unit ? ing.unit + ' ' : ''}${ing.name}`.trim(),
+            checked: false,
+            mealId: m.id,
+            mealName,
+            day: di
+          })
+        })
+      } else {
+        // No ingredients saved — use meal name as a single item
+        items.push({
+          id: `${m.id}-${Date.now()}-${Math.random()}`,
+          text: mealName,
+          checked: false,
+          mealId: m.id,
+          mealName,
+          day: di
+        })
+      }
     })
   })
   return items
@@ -472,20 +508,31 @@ function renderGroceryByMeal(planner) {
         return `
           <div style="margin-bottom:20px">
             <div style="font-size:12px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">${day}</div>
-            ${meals.map(m => `
-              <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
-                <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:6px">${esc(m.meal_name || m.name)}</div>
-                <div style="font-size:11px;color:var(--text3)">${Math.round(m.calories)} kcal · P${Math.round(m.protein)} C${Math.round(m.carbs)} F${Math.round(m.fat)}</div>
-                <div style="margin-top:8px">
-                  <div id="ingredients-${m.id}" style="font-size:12px;color:var(--text2)">
-                    ${(m.ingredients || []).map((ing, ii) => `
-                      <div style="display:flex;align-items:center;gap:8px;padding:3px 0">
-                        <input type="checkbox" style="accent-color:var(--accent);cursor:pointer" />
-                        <span>${esc(ing)}</span>
-                      </div>`).join('') || `<span style="color:var(--text3);font-size:11px">No ingredients listed · </span><button class="clear-btn" style="color:var(--accent);font-size:11px" onclick="addIngredientToMeal('${m.id}',${di})">+ Add ingredients</button>`}
+            ${meals.map(m => {
+              const mealName = m.meal_name || m.name
+              const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
+              const ingredients = recipe?.ingredients || []
+              return `
+                <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(mealName)}</div>
+                    ${!ingredients.length ? `
+                      <button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>
+                    ` : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`}
                   </div>
-                </div>
-              </div>`).join('')}
+                  <div style="font-size:11px;color:var(--text3);margin-bottom:6px">${Math.round(m.calories)} kcal · P${Math.round(m.protein)} C${Math.round(m.carbs)} F${Math.round(m.fat)}</div>
+                  ${ingredients.length ? `
+                    <div style="margin-top:6px">
+                      ${ingredients.map(ing => `
+                        <div style="display:flex;align-items:center;gap:8px;padding:3px 0">
+                          <input type="checkbox" style="accent-color:var(--accent);cursor:pointer;flex-shrink:0" />
+                          <span style="font-size:12px;color:var(--accent)">${esc(ing.amount || '')} ${esc(ing.unit || '')}</span>
+                          <span style="font-size:12px;color:var(--text)">${esc(ing.name)}</span>
+                        </div>`).join('')}
+                    </div>
+                  ` : `<div style="font-size:11px;color:var(--text3)">No ingredients — click AI extract above</div>`}
+                </div>`
+            }).join('')}
           </div>`
       }).join('')}
     </div>
@@ -496,6 +543,190 @@ function formatWeekLabel(weekStart) {
   const d = new Date(weekStart + 'T00:00:00')
   const end = new Date(d); end.setDate(end.getDate() + 6)
   return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+}
+
+// ─── Recipes Page ─────────────────────────────────────────────────────────────
+function renderRecipesPage(container) {
+  const recipes = state.recipes
+  container.innerHTML = `
+    <div class="greeting">Recipes</div>
+    <div class="greeting-sub">Saved recipes with ingredients and macros per serving.</div>
+
+    <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">
+      <button class="analyze-btn" style="width:auto;padding:10px 20px" onclick="openNewRecipeModal()">+ New recipe</button>
+    </div>
+
+    ${!recipes.length ? `
+      <div class="log-card">
+        <div class="log-empty" style="padding:60px">
+          No recipes saved yet.<br>
+          <span style="font-size:12px;color:var(--text3);margin-top:6px;display:block">Analyze a meal and save it as a recipe, or create one manually.</span>
+        </div>
+      </div>
+    ` : `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+        ${recipes.map(r => `
+          <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openRecipeModal('${r.id}')">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+              <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);flex:1;margin-right:12px">${esc(r.name)}</div>
+              <span style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:4px;padding:2px 7px;white-space:nowrap">${r.servings} serving${r.servings !== 1 ? 's' : ''}</span>
+            </div>
+            ${r.description ? `<div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.5">${esc(r.description)}</div>` : ''}
+            <div class="macro-pills" style="margin-bottom:10px">
+              <span class="macro-pill pill-cal">${Math.round(r.calories)} kcal</span>
+              <span class="macro-pill pill-p">${Math.round(r.protein)}g P</span>
+              <span class="macro-pill pill-c">${Math.round(r.carbs)}g C</span>
+              <span class="macro-pill pill-f">${Math.round(r.fat)}g F</span>
+            </div>
+            ${r.ingredients?.length ? `
+              <div style="font-size:11px;color:var(--text3)">${r.ingredients.length} ingredients · <span style="color:var(--text2)">per 1 of ${r.servings} servings</span></div>
+            ` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `}
+  `
+
+  document.getElementById('recipe-modal')?.addEventListener('click', e => {
+    if (e.target.id === 'recipe-modal') closeRecipeModal()
+  })
+}
+
+function renderRecipeModalContent(recipe, mode = 'view') {
+  const isNew = !recipe.id
+  const ingredients = recipe.ingredients || []
+
+  return `
+    <div style="padding:28px;position:relative">
+      <button class="modal-close" onclick="closeRecipeModal()" style="top:14px;right:14px">×</button>
+
+      <!-- Name -->
+      <div style="margin-bottom:20px;margin-right:32px">
+        ${mode === 'edit' || isNew ? `
+          <input type="text" id="recipe-name" value="${esc(recipe.name || '')}"
+            placeholder="Recipe name..."
+            style="width:100%;background:none;border:none;border-bottom:1px solid var(--border2);outline:none;font-family:'DM Serif Display',serif;font-size:24px;color:var(--text);padding-bottom:6px" />
+        ` : `
+          <div style="font-family:'DM Serif Display',serif;font-size:24px;color:var(--text)">${esc(recipe.name)}</div>
+        `}
+      </div>
+
+      <!-- Description -->
+      ${mode === 'edit' || isNew ? `
+        <div class="modal-field">
+          <label>Description (optional)</label>
+          <input type="text" id="recipe-desc" value="${esc(recipe.description || '')}" placeholder="Brief description..." />
+        </div>
+      ` : recipe.description ? `<div style="font-size:13px;color:var(--text2);margin-bottom:16px">${esc(recipe.description)}</div>` : ''}
+
+      <!-- Servings -->
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;background:var(--bg3);border-radius:var(--r)">
+        <span style="font-size:13px;color:var(--text2)">Servings:</span>
+        ${mode === 'edit' || isNew ? `
+          <input type="number" id="recipe-servings" value="${recipe.servings || 4}" min="0.5" step="0.5"
+            style="width:70px;background:var(--bg4);border:1px solid var(--border2);border-radius:var(--r);padding:6px 10px;color:var(--text);font-size:14px;font-family:inherit;outline:none"
+            onchange="updateServingLabel()" />
+          <input type="text" id="recipe-serving-label" value="${esc(recipe.serving_label || 'serving')}"
+            placeholder="serving / slice / cup..."
+            style="flex:1;background:var(--bg4);border:1px solid var(--border2);border-radius:var(--r);padding:6px 10px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+        ` : `
+          <span style="font-size:14px;font-weight:500;color:var(--text)">${recipe.servings} ${recipe.serving_label || 'servings'}</span>
+        `}
+        <span style="font-size:11px;color:var(--text3);margin-left:auto">Macros shown per 1 serving</span>
+      </div>
+
+      <!-- Macros -->
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Macros per serving</div>
+        ${mode === 'edit' || isNew ? `
+          <div class="modal-grid">
+            <div class="modal-field"><label>Calories</label><input type="number" id="r-cal" value="${Math.round(recipe.calories || 0)}" /></div>
+            <div class="modal-field"><label>Protein (g)</label><input type="number" id="r-protein" value="${Math.round(recipe.protein || 0)}" /></div>
+            <div class="modal-field"><label>Carbs (g)</label><input type="number" id="r-carbs" value="${Math.round(recipe.carbs || 0)}" /></div>
+            <div class="modal-field"><label>Fat (g)</label><input type="number" id="r-fat" value="${Math.round(recipe.fat || 0)}" /></div>
+            <div class="modal-field"><label>Fiber (g)</label><input type="number" id="r-fiber" value="${Math.round(recipe.fiber || 0)}" /></div>
+            <div class="modal-field"><label>Sugar (g)</label><input type="number" id="r-sugar" value="${Math.round(recipe.sugar || 0)}" /></div>
+          </div>
+        ` : `
+          <div class="macro-pills">
+            <span class="macro-pill pill-cal">${Math.round(recipe.calories)} kcal</span>
+            <span class="macro-pill pill-p">${Math.round(recipe.protein)}g protein</span>
+            <span class="macro-pill pill-c">${Math.round(recipe.carbs)}g carbs</span>
+            <span class="macro-pill pill-f">${Math.round(recipe.fat)}g fat</span>
+            ${recipe.fiber ? `<span class="macro-pill pill-fiber">${Math.round(recipe.fiber)}g fiber</span>` : ''}
+          </div>
+        `}
+      </div>
+
+      <!-- Ingredients -->
+      <div style="margin-bottom:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">
+            Ingredients ${ingredients.length ? `(${ingredients.length})` : ''}
+          </div>
+          <div style="display:flex;gap:8px">
+            ${mode === 'edit' || isNew ? `<button class="clear-btn" style="color:var(--accent)" onclick="addIngredientRow()">+ Add</button>` : ''}
+            ${!isNew ? `<button class="clear-btn" style="color:var(--carbs)" onclick="fetchIngredients('${recipe.id}')">✨ AI extract</button>` : ''}
+          </div>
+        </div>
+        <div id="ingredient-list" style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+          ${!ingredients.length ? `
+            <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3)">
+              No ingredients yet.
+              ${mode === 'edit' || isNew ? 'Add manually or click <b style="color:var(--carbs)">AI extract</b> to auto-fill.' : ''}
+            </div>
+          ` : ingredients.map((ing, i) => renderIngredientRow(ing, i, mode === 'edit' || isNew)).join('')}
+        </div>
+      </div>
+
+      <!-- Recalculate button (edit mode only, when ingredients exist) -->
+      ${(mode === 'edit' || isNew) && ingredients.length ? `
+        <div style="margin-bottom:20px">
+          <button class="pm-analyze-btn" id="recalc-btn" onclick="recalculateMacrosHandler()">
+            ✨ Recalculate macros from ingredients
+          </button>
+        </div>
+      ` : ''}
+
+      <!-- Actions -->
+      <div class="modal-actions">
+        ${!isNew && mode === 'view' ? `
+          <button class="btn-delete" onclick="deleteRecipeHandler('${recipe.id}')">Delete</button>
+          <button class="btn-cancel" onclick="closeRecipeModal()">Close</button>
+          <button class="btn-save" onclick="openRecipeModal('${recipe.id}', 'edit')">Edit recipe</button>
+        ` : `
+          ${!isNew ? `<button class="btn-delete" onclick="deleteRecipeHandler('${recipe.id}')">Delete</button>` : ''}
+          <button class="btn-cancel" onclick="${isNew ? 'closeRecipeModal()' : `openRecipeModal('${recipe.id}', 'view')`}">Cancel</button>
+          <button class="btn-save" id="recipe-save-btn" onclick="saveRecipeHandler()">Save recipe</button>
+        `}
+      </div>
+    </div>
+  `
+}
+
+function renderIngredientRow(ing, idx, editable) {
+  if (editable) {
+    return `
+      <div style="display:flex;gap:6px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border)" id="ing-row-${idx}">
+        <input type="text" value="${esc(ing.amount || '')}" placeholder="Amt"
+          oninput="updateIngredient(${idx},'amount',this.value)"
+          style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+        <input type="text" value="${esc(ing.unit || '')}" placeholder="unit"
+          oninput="updateIngredient(${idx},'unit',this.value)"
+          style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+        <input type="text" value="${esc(ing.name || '')}" placeholder="Ingredient name"
+          oninput="updateIngredient(${idx},'name',this.value)"
+          style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+        <button onclick="removeIngredientRow(${idx})" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:2px 4px;line-height:1" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'">×</button>
+      </div>
+    `
+  }
+  return `
+    <div style="display:flex;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border)">
+      <span style="font-size:13px;color:var(--accent);min-width:80px">${esc(ing.amount || '')} ${esc(ing.unit || '')}</span>
+      <span style="font-size:13px;color:var(--text)">${esc(ing.name || '')}</span>
+    </div>
+  `
 }
 
 // ─── Goals Page ───────────────────────────────────────────────────────────────
@@ -769,6 +1000,18 @@ function showResult(r) {
   `
   const btn = document.getElementById('log-entry-btn')
   if (btn) { btn.textContent = '+ Log this meal'; btn.className = 'log-btn' }
+  // Add "Save as recipe" button if not already there
+  if (!document.getElementById('save-recipe-btn')) {
+    const recipeBtn = document.createElement('button')
+    recipeBtn.id = 'save-recipe-btn'
+    recipeBtn.className = 'log-btn'
+    recipeBtn.textContent = '⭐ Save as recipe'
+    recipeBtn.onclick = () => window.saveAsRecipeHandler?.()
+    btn?.parentNode?.appendChild(recipeBtn)
+  } else {
+    const rb = document.getElementById('save-recipe-btn')
+    rb.textContent = '⭐ Save as recipe'; rb.disabled = false; rb.style.color = ''
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1160,6 +1403,168 @@ function wireGlobals() {
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
+  // ── Recipe handlers ─────────────────────────────────────────────
+  window.openNewRecipeModal = () => {
+    state.editingRecipe = { name: '', description: '', servings: 4, serving_label: 'serving', calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, ingredients: [] }
+    document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+    document.getElementById('recipe-modal').classList.add('open')
+  }
+
+  window.openRecipeModal = (id, mode = 'view') => {
+    const recipe = state.recipes.find(r => r.id === id)
+    if (!recipe) return
+    state.editingRecipe = JSON.parse(JSON.stringify(recipe))
+    document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, mode)
+    document.getElementById('recipe-modal').classList.add('open')
+  }
+
+  window.closeRecipeModal = () => {
+    document.getElementById('recipe-modal')?.classList.remove('open')
+    state.editingRecipe = null
+  }
+
+  window.updateIngredient = (idx, field, val) => {
+    if (!state.editingRecipe?.ingredients) return
+    state.editingRecipe.ingredients[idx][field] = val
+  }
+
+  window.addIngredientRow = () => {
+    if (!state.editingRecipe) return
+    if (!state.editingRecipe.ingredients) state.editingRecipe.ingredients = []
+    state.editingRecipe.ingredients.push({ name: '', amount: '', unit: '' })
+    document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+  }
+
+  window.removeIngredientRow = (idx) => {
+    if (!state.editingRecipe?.ingredients) return
+    state.editingRecipe.ingredients.splice(idx, 1)
+    document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+  }
+
+  window.fetchAndSaveIngredients = async (mealId, mealName) => {
+    const apiKey = state.apiKey
+    if (!apiKey) { showToast('API key needed — check Account settings', 'error'); return }
+    showToast(`Extracting ingredients for ${mealName}...`, '')
+    try {
+      // Find or create recipe
+      let recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
+      if (!recipe) {
+        recipe = await upsertRecipe(state.user.id, {
+          name: mealName, servings: 4, calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, ingredients: []
+        })
+        state.recipes.unshift(recipe)
+      }
+      const result = await extractIngredients(apiKey, mealName, recipe.description || '', recipe.servings || 4, state.user.id)
+      const updated = await upsertRecipe(state.user.id, { ...recipe, ingredients: result.ingredients || [] })
+      const idx = state.recipes.findIndex(r => r.id === updated.id)
+      if (idx !== -1) state.recipes[idx] = updated
+      state.groceryItems = null // rebuild list
+      renderPage()
+      showToast(`Got ${result.ingredients?.length || 0} ingredients for ${mealName}!`, 'success')
+    } catch (err) { showToast('Failed: ' + err.message, 'error') }
+  }
+
+  window.updateServingLabel = () => {}
+
+  window.saveRecipeHandler = async () => {
+    if (!state.editingRecipe) return
+    const btn = document.getElementById('recipe-save-btn')
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
+    const recipe = {
+      ...state.editingRecipe,
+      name: document.getElementById('recipe-name')?.value.trim() || state.editingRecipe.name,
+      description: document.getElementById('recipe-desc')?.value.trim() || '',
+      servings: parseFloat(document.getElementById('recipe-servings')?.value) || 4,
+      serving_label: document.getElementById('recipe-serving-label')?.value.trim() || 'serving',
+      calories: parseFloat(document.getElementById('r-cal')?.value) || 0,
+      protein: parseFloat(document.getElementById('r-protein')?.value) || 0,
+      carbs: parseFloat(document.getElementById('r-carbs')?.value) || 0,
+      fat: parseFloat(document.getElementById('r-fat')?.value) || 0,
+      fiber: parseFloat(document.getElementById('r-fiber')?.value) || 0,
+      sugar: parseFloat(document.getElementById('r-sugar')?.value) || 0,
+    }
+    if (!recipe.name) { showToast('Recipe needs a name', 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Save recipe' }; return }
+    try {
+      const saved = await upsertRecipe(state.user.id, recipe)
+      const idx = state.recipes.findIndex(r => r.id === saved.id)
+      if (idx !== -1) state.recipes[idx] = saved; else state.recipes.unshift(saved)
+      closeRecipeModal()
+      renderPage()
+      showToast('Recipe saved!', 'success')
+    } catch (err) {
+      showToast('Error saving: ' + err.message, 'error')
+      if (btn) { btn.disabled = false; btn.textContent = 'Save recipe' }
+    }
+  }
+
+  window.deleteRecipeHandler = async (id) => {
+    if (!confirm('Delete this recipe?')) return
+    try {
+      await deleteRecipe(state.user.id, id)
+      state.recipes = state.recipes.filter(r => r.id !== id)
+      closeRecipeModal()
+      renderPage()
+      showToast('Recipe deleted', '')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.fetchIngredients = async (recipeId) => {
+    const recipe = state.recipes.find(r => r.id === recipeId) || state.editingRecipe
+    if (!recipe) return
+    const apiKey = state.apiKey
+    if (!apiKey) { showToast('API key needed — check Account settings', 'error'); return }
+    const btn = document.querySelector('[onclick*="fetchIngredients"]')
+    if (btn) { btn.textContent = '⏳ Extracting...'; btn.disabled = true }
+    try {
+      const result = await extractIngredients(apiKey, recipe.name, recipe.description, recipe.servings, state.user.id)
+      state.editingRecipe = { ...(state.editingRecipe || recipe), ingredients: result.ingredients || [] }
+      document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+      showToast(`Extracted ${result.ingredients?.length || 0} ingredients!`, 'success')
+    } catch (err) {
+      showToast('Failed to extract: ' + err.message, 'error')
+      if (btn) { btn.textContent = '✨ AI extract'; btn.disabled = false }
+    }
+  }
+
+  window.recalculateMacrosHandler = async () => {
+    if (!state.editingRecipe?.ingredients?.length) { showToast('Add ingredients first', 'error'); return }
+    const apiKey = state.apiKey
+    if (!apiKey) { showToast('API key needed — check Account settings', 'error'); return }
+    const btn = document.getElementById('recalc-btn')
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Calculating...' }
+    const servings = parseFloat(document.getElementById('recipe-servings')?.value) || state.editingRecipe.servings || 4
+    try {
+      const macros = await recalculateMacros(apiKey, state.editingRecipe.name, state.editingRecipe.ingredients, servings, state.user.id)
+      const fields = { 'r-cal': macros.calories, 'r-protein': macros.protein, 'r-carbs': macros.carbs, 'r-fat': macros.fat, 'r-fiber': macros.fiber, 'r-sugar': macros.sugar }
+      Object.entries(fields).forEach(([id, val]) => { const el = document.getElementById(id); if (el) el.value = Math.round(val || 0) })
+      state.editingRecipe = { ...state.editingRecipe, ...macros, servings }
+      if (btn) { btn.disabled = false; btn.textContent = '✨ Recalculate macros from ingredients' }
+      showToast(`Macros updated! (${macros.confidence} confidence)`, 'success')
+    } catch (err) {
+      showToast('Failed: ' + err.message, 'error')
+      if (btn) { btn.disabled = false; btn.textContent = '✨ Recalculate macros from ingredients' }
+    }
+  }
+
+  window.saveAsRecipeHandler = async () => {
+    if (!state.currentEntry) return
+    const e = state.currentEntry
+    try {
+      const existing = await getRecipeByName(state.user.id, e.name)
+      if (existing) { showToast('Recipe already saved — find it in Recipes', ''); return }
+      const recipe = await upsertRecipe(state.user.id, {
+        name: e.name, description: e.description || '', servings: e.servings || 1,
+        calories: e.calories, protein: e.protein, carbs: e.carbs,
+        fat: e.fat, fiber: e.fiber || 0, sugar: e.sugar || 0,
+        ingredients: [], source: 'ai_photo', confidence: e.confidence, ai_notes: e.notes || ''
+      })
+      state.recipes.unshift(recipe)
+      showToast(`"${e.name}" saved to Recipes!`, 'success')
+      const btn = document.getElementById('save-recipe-btn')
+      if (btn) { btn.textContent = '✓ Saved'; btn.style.color = 'var(--green)'; btn.disabled = true }
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
   window.refreshAdminPanel = () => loadAdminPanel()
 
   window.toggleUnlimited = async (userId, currentVal) => {
@@ -1192,6 +1597,7 @@ function wireGlobals() {
   // Close modals on backdrop click
   document.getElementById('edit-modal')?.addEventListener('click', e => { if (e.target.id === 'edit-modal') closeEditModal() })
   document.getElementById('planner-modal')?.addEventListener('click', e => { if (e.target.id === 'planner-modal') closePlannerModal() })
+  document.getElementById('recipe-modal')?.addEventListener('click', e => { if (e.target.id === 'recipe-modal') closeRecipeModal() })
 }
 
 function filterPlannerList() {

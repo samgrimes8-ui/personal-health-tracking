@@ -127,6 +127,57 @@ export async function analyzePlannerDescription(apiKey, description, userId) {
   return parseResult(data)
 }
 
+export async function extractIngredients(apiKey, recipeName, description, servings, userId) {
+  const data = await gateAndRecord(userId, ANTHROPIC_MODEL, 'recipe', () =>
+    callAnthropic(apiKey, {
+      model: ANTHROPIC_MODEL,
+      max_tokens: 1500,
+      messages: [{
+        role: 'user',
+        content: `For this recipe: "${recipeName}"${description ? `\n\nContext: ${description}` : ''}
+
+Extract the complete ingredient list needed to cook this recipe for ${servings} serving(s).
+Be specific with amounts (e.g. "3 lbs", "2 cups", "1 tbsp").
+
+Respond ONLY with a JSON object, no markdown:
+{
+  "ingredients": [
+    {"name": "chicken breast", "amount": "3", "unit": "lbs"},
+    {"name": "olive oil", "amount": "2", "unit": "tbsp"},
+    {"name": "garlic cloves", "amount": "4", "unit": ""},
+    ...
+  ],
+  "notes": "any prep notes"
+}`
+      }]
+    })
+  )
+  const text = data.content.map(i => i.text || '').join('').replace(/```json|```/g, '').trim()
+  return JSON.parse(text)
+}
+
+export async function recalculateMacros(apiKey, recipeName, ingredients, servings, userId) {
+  const ingredientList = ingredients.map(i => `${i.amount} ${i.unit} ${i.name}`.trim()).join('\n')
+  const data = await gateAndRecord(userId, ANTHROPIC_MODEL, 'recipe', () =>
+    callAnthropic(apiKey, {
+      model: ANTHROPIC_MODEL,
+      max_tokens: 800,
+      messages: [{
+        role: 'user',
+        content: `Calculate the macros per serving for this recipe (${servings} total servings):
+
+Ingredients:
+${ingredientList}
+
+Respond ONLY with a JSON object, no markdown:
+{"calories": number, "protein": number, "carbs": number, "fat": number, "fiber": number, "sugar": number, "confidence": "low|medium|high", "notes": "any caveats"}`
+      }]
+    })
+  )
+  const text = data.content.map(i => i.text || '').join('').replace(/```json|```/g, '').trim()
+  return JSON.parse(text)
+}
+
 function parseResult(data) {
   const text = data.content.map(i => i.text || '').join('').replace(/```json|```/g, '').trim()
   return JSON.parse(text)
