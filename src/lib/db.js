@@ -216,28 +216,80 @@ export async function deletePlannerMeal(userId, id) {
   if (error) throw error
 }
 
-// ─── Token Usage ─────────────────────────────────────────────────────────────
+// ─── Token Usage + Spend Limits ──────────────────────────────────────────────
 
-export async function recordTokenUsage(userId, { tokensUsed, model, feature }) {
-  if (!supabase) return
-  await supabase.from('token_usage').insert({
-    user_id: userId,
-    tokens_used: tokensUsed,
-    model,
-    feature
-  })
+export async function checkSpendLimit(userId, estimatedCostUsd = 0.01) {
+  if (!supabase) return { allowed: true, unlimited: true }
+  const { data, error } = await supabase
+    .rpc('check_spend_limit', {
+      p_user_id: userId,
+      p_estimated_cost: estimatedCostUsd
+    })
+  if (error) throw error
+  return data
 }
 
-export async function getTokenUsageThisMonth(userId) {
-  if (!supabase) return 0
+export async function recordTokenUsage(userId, { inputTokens, outputTokens, model, feature }) {
+  if (!supabase) return
+  const { error } = await supabase.rpc('record_usage', {
+    p_user_id: userId,
+    p_model: model,
+    p_feature: feature,
+    p_input_tokens: inputTokens ?? 0,
+    p_output_tokens: outputTokens ?? 0
+  })
+  if (error) console.warn('Failed to record usage:', error.message)
+}
+
+export async function getUsageSummary(userId) {
+  if (!supabase) return { spent: 0, limit: 10, remaining: 10, requests: 0 }
   const startOfMonth = new Date()
-  startOfMonth.setDate(1)
-  startOfMonth.setHours(0, 0, 0, 0)
-  const { data, error } = await supabase
-    .from('token_usage')
-    .select('tokens_used')
-    .eq('user_id', userId)
-    .gte('created_at', startOfMonth.toISOString())
+  startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
+
+  const [profileRes, usageRes] = await Promise.all([
+    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status').eq('user_id', userId).single(),
+    supabase.from('token_usage').select('cost_usd, tokens_used, feature').eq('user_id', userId).gte('created_at', startOfMonth.toISOString())
+  ])
+
+  const profile = profileRes.data ?? {}
+  const usage = usageRes.data ?? []
+  const monthSpent = usage.reduce((s, r) => s + (parseFloat(r.cost_usd) || 0), 0)
+  const monthTokens = usage.reduce((s, r) => s + (r.tokens_used || 0), 0)
+  const limit = profile.spending_limit_usd ?? 10
+  const isUnlimited = profile.is_admin || profile.unlimited_access
+
+  return {
+    spent: Math.round(monthSpent * 10000) / 10000,
+    limit: isUnlimited ? null : limit,
+    remaining: isUnlimited ? null : Math.max(0, limit - monthSpent),
+    totalSpent: profile.total_spent_usd ?? 0,
+    tokens: monthTokens,
+    requests: usage.length,
+    isAdmin: profile.is_admin ?? false,
+    isUnlimited: isUnlimited ?? false,
+    accountStatus: profile.account_status ?? 'active',
+    breakdown: usage.reduce((acc, r) => {
+      acc[r.feature] = (acc[r.feature] || 0) + (parseFloat(r.cost_usd) || 0)
+      return acc
+    }, {})
+  }
+}
+
+// Admin only — get all users
+export async function getAdminUserOverview() {
+  if (!supabase) return []
+  const { data, error } = await supabase.from('admin_user_overview').select('*').order('spent_this_month_usd', { ascending: false })
   if (error) throw error
-  return (data ?? []).reduce((sum, r) => sum + (r.tokens_used ?? 0), 0)
+  return data ?? []
+}
+
+export async function setUserPrivileges(userId, { isAdmin, unlimitedAccess, spendingLimitUsd, accountStatus }) {
+  if (!supabase) return
+  const updates = {}
+  if (isAdmin !== undefined) updates.is_admin = isAdmin
+  if (unlimitedAccess !== undefined) updates.unlimited_access = unlimitedAccess
+  if (spendingLimitUsd !== undefined) updates.spending_limit_usd = spendingLimitUsd
+  if (accountStatus !== undefined) updates.account_status = accountStatus
+  const { error } = await supabase.from('user_profiles').update(updates).eq('user_id', userId)
+  if (error) throw error
 }

@@ -3,7 +3,7 @@ import {
   getGoals, saveGoals as dbSaveGoals,
   getMealLog, addMealEntry, updateMealEntry, deleteMealEntry,
   getPlannerWeek, addPlannerMeal, updatePlannerMeal, deletePlannerMeal,
-  getTokenUsageThisMonth
+  getUsageSummary, getAdminUserOverview, setUserPrivileges
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription
@@ -17,17 +17,17 @@ let state = {
   goals: { calories: 2000, protein: 150, carbs: 200, fat: 65 },
   log: [],
   planner: { meals: Array(7).fill(null).map(() => []) },
+  usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false },
   currentPage: 'log',
   currentMode: 'photo',
   imageBase64: null,
   currentEntry: null,
-  editingEntry: null,     // { id, source: 'log' | 'planner', plannerCtx? }
-  plannerTarget: null,    // { dayIdx }
+  editingEntry: null,
+  plannerTarget: null,
   plannerTab: 'history',
   aiPlannerResult: null,
   weekStart: getWeekStart(),
   apiKey: localStorage.getItem('macrolens_apikey') ?? '',
-  tokenUsage: 0,
 }
 
 function getWeekStart() {
@@ -47,14 +47,14 @@ export async function initApp(user, container) {
 }
 
 async function loadAll() {
-  const [goals, log, tokenUsage] = await Promise.all([
+  const [goals, log, usage] = await Promise.all([
     getGoals(state.user.id),
     getMealLog(state.user.id, { limit: 300 }),
-    getTokenUsageThisMonth(state.user.id)
+    getUsageSummary(state.user.id)
   ])
   state.goals = { calories: goals.calories ?? 2000, protein: goals.protein ?? 150, carbs: goals.carbs ?? 200, fat: goals.fat ?? 65 }
   state.log = log
-  state.tokenUsage = tokenUsage
+  state.usage = usage
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
@@ -399,39 +399,148 @@ function renderGoalsPage(container) {
 
 // ─── Account Page ─────────────────────────────────────────────────────────────
 function renderAccount(container) {
-  const monthTokens = state.tokenUsage
-  const monthLimit = 100000
-  const pct = Math.min(100, Math.round((monthTokens / monthLimit) * 100))
-  const hasSupabase = !!localStorage.getItem('macrolens_apikey') === false
+  const u = state.usage
+  const spentPct = u.isUnlimited ? 0 : Math.min(100, Math.round(((u.spent ?? 0) / (u.limit ?? 10)) * 100))
+  const spentColor = spentPct >= 90 ? 'var(--red)' : spentPct >= 70 ? 'var(--fat)' : 'var(--accent)'
 
   container.innerHTML = `
     <div class="greeting">Account</div>
     <div class="greeting-sub">${state.user.email}</div>
 
-    <div class="upload-card" style="max-width:480px;margin-bottom:20px">
-      <div class="section-title">Token usage this month</div>
-      <div style="margin-bottom:8px">
-        <div class="bar-row-label" style="margin-bottom:6px">
-          <span class="bar-label">Used</span>
-          <span class="bar-val">${monthTokens.toLocaleString()} / ${monthLimit.toLocaleString()}</span>
+    <!-- Usage card -->
+    <div class="upload-card" style="max-width:520px;margin-bottom:20px">
+      <div class="section-title">Usage this month</div>
+      ${u.isUnlimited ? `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+          <span style="background:rgba(232,197,71,0.15);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:500">
+            ${u.isAdmin ? '👑 Admin — unlimited access' : '⭐ Unlimited access'}
+          </span>
+        </div>` : ''}
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+        <div class="stat-card" style="padding:12px">
+          <div class="stat-label">Spent</div>
+          <div class="stat-val" style="font-size:20px;color:${spentColor}">$${Number(u.spent ?? 0).toFixed(4)}</div>
+          ${!u.isUnlimited ? `<div class="stat-sub">of $${Number(u.limit ?? 10).toFixed(2)} limit</div>` : '<div class="stat-sub">unlimited</div>'}
         </div>
-        <div class="bar-bg"><div class="bar-fill" style="background:var(--accent);width:${pct}%"></div></div>
+        <div class="stat-card" style="padding:12px">
+          <div class="stat-label">Requests</div>
+          <div class="stat-val" style="font-size:20px;color:var(--carbs)">${u.requests ?? 0}</div>
+          <div class="stat-sub">this month</div>
+        </div>
+        <div class="stat-card" style="padding:12px">
+          <div class="stat-label">Tokens</div>
+          <div class="stat-val" style="font-size:20px;color:var(--protein)">${((u.tokens ?? 0) / 1000).toFixed(1)}k</div>
+          <div class="stat-sub">this month</div>
+        </div>
       </div>
-      <div style="font-size:12px;color:var(--text3);margin-top:8px">Resets on the 1st of each month. Free plan: 100k tokens/month.</div>
+      ${!u.isUnlimited ? `
+      <div>
+        <div class="bar-row-label" style="margin-bottom:6px">
+          <span class="bar-label">Monthly budget</span>
+          <span class="bar-val" style="color:${spentColor}">$${Number(u.spent ?? 0).toFixed(4)} / $${Number(u.limit ?? 10).toFixed(2)}</span>
+        </div>
+        <div class="bar-bg" style="height:10px">
+          <div class="bar-fill" style="background:${spentColor};width:${spentPct}%"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:6px">$${Number(u.remaining ?? 0).toFixed(4)} remaining · Resets 1st of each month</div>
+      </div>` : ''}
+      ${u.breakdown && Object.keys(u.breakdown).length ? `
+      <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">By feature</div>
+        ${Object.entries(u.breakdown).map(([feature, cost]) => `
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
+            <span style="color:var(--text2);text-transform:capitalize">${feature}</span>
+            <span style="color:var(--text)">$${Number(cost).toFixed(4)}</span>
+          </div>`).join('')}
+      </div>` : ''}
     </div>
 
-    <div class="upload-card" style="max-width:480px;margin-bottom:20px">
+    <!-- API Key -->
+    <div class="upload-card" style="max-width:520px;margin-bottom:20px">
       <div class="section-title">API key</div>
-      <p style="font-size:13px;color:var(--text2);margin-bottom:14px;line-height:1.6">Your Anthropic API key is used to power food analysis. In a future update, this will be managed server-side and you won't need to enter it.</p>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:14px;line-height:1.6">Your Anthropic API key powers food analysis. In a future update this will be managed server-side.</p>
       <input class="api-input" type="password" id="account-api-key" placeholder="sk-ant-..." value="${state.apiKey}" style="margin-bottom:10px" />
       <button class="analyze-btn" onclick="saveApiKeyHandler()">Save API key</button>
     </div>
 
-    <div class="upload-card" style="max-width:480px">
+    <!-- Admin panel -->
+    ${u.isAdmin ? `
+    <div class="upload-card" style="max-width:900px;margin-bottom:20px">
+      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>👑 Admin panel — all users</span>
+        <button class="clear-btn" onclick="refreshAdminPanel()" style="color:var(--accent)">Refresh</button>
+      </div>
+      <div id="admin-panel-content">
+        <div style="color:var(--text3);font-size:13px;padding:20px 0">Loading users...</div>
+      </div>
+    </div>` : ''}
+
+    <!-- Sign out -->
+    <div class="upload-card" style="max-width:520px">
       <div class="section-title">Session</div>
       <button class="btn-delete" style="width:100%;padding:12px;font-size:14px" onclick="handleSignOut()">Sign out</button>
     </div>
   `
+
+  if (u.isAdmin) loadAdminPanel()
+}
+
+async function loadAdminPanel() {
+  try {
+    const users = await getAdminUserOverview()
+    const el = document.getElementById('admin-panel-content')
+    if (!el) return
+    if (!users.length) { el.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:20px 0">No users yet.</div>'; return }
+    el.innerHTML = `
+      <div style="overflow-x:auto">
+        <table class="log-table" style="min-width:700px">
+          <thead>
+            <tr>
+              <th>Email</th><th>Plan</th><th>This month</th><th>Total spent</th><th>Status</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${users.map(u => `
+              <tr>
+                <td class="td-name" style="font-size:12px">
+                  ${esc(u.email)}
+                  ${u.is_admin ? '<span style="font-size:10px;background:rgba(232,197,71,0.15);color:var(--accent);border-radius:4px;padding:1px 6px;margin-left:6px">admin</span>' : ''}
+                  ${u.unlimited_access ? '<span style="font-size:10px;background:rgba(126,200,160,0.15);color:var(--protein);border-radius:4px;padding:1px 6px;margin-left:4px">unlimited</span>' : ''}
+                </td>
+                <td style="font-size:12px;color:var(--text2)">${u.plan ?? 'free'}</td>
+                <td style="font-size:12px">
+                  <span style="color:var(--cal)">$${Number(u.spent_this_month_usd ?? 0).toFixed(4)}</span>
+                  <span style="color:var(--text3)"> / $${Number(u.spending_limit_usd ?? 10).toFixed(2)}</span>
+                  <br><span style="color:var(--text3);font-size:10px">${u.requests_this_month ?? 0} requests · ${Math.round((u.tokens_this_month ?? 0)/1000)}k tokens</span>
+                </td>
+                <td style="font-size:12px;color:var(--text2)">$${Number(u.total_spent_usd ?? 0).toFixed(4)}</td>
+                <td>
+                  <span style="font-size:11px;padding:2px 8px;border-radius:999px;${u.account_status === 'active' ? 'background:rgba(90,173,122,0.15);color:var(--green)' : 'background:rgba(217,96,96,0.15);color:var(--red)'}">
+                    ${u.account_status ?? 'active'}
+                  </span>
+                </td>
+                <td style="white-space:nowrap">
+                  <button class="td-act" title="Toggle unlimited" onclick="toggleUnlimited('${u.user_id}', ${u.unlimited_access})">
+                    ${u.unlimited_access ? '🔓' : '🔒'}
+                  </button>
+                  <button class="td-act" title="Toggle admin" onclick="toggleAdmin('${u.user_id}', ${u.is_admin})">
+                    ${u.is_admin ? '👑' : '👤'}
+                  </button>
+                  <button class="td-act" title="${u.account_status === 'active' ? 'Suspend' : 'Activate'}"
+                    onclick="toggleSuspend('${u.user_id}', '${u.account_status}')"
+                    style="color:${u.account_status === 'active' ? 'var(--text3)' : 'var(--green)'}">
+                    ${u.account_status === 'active' ? '⏸' : '▶'}
+                  </button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    `
+  } catch (err) {
+    const el = document.getElementById('admin-panel-content')
+    if (el) el.innerHTML = `<div style="color:var(--red);font-size:13px">Error loading users: ${err.message}</div>`
+  }
 }
 
 // ─── Analyze Food ─────────────────────────────────────────────────────────────
@@ -823,6 +932,35 @@ function wireGlobals() {
       await deletePlannerMeal(state.user.id, id)
       state.planner.meals[d].splice(m, 1)
       renderPage()
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.refreshAdminPanel = () => loadAdminPanel()
+
+  window.toggleUnlimited = async (userId, currentVal) => {
+    try {
+      await setUserPrivileges(userId, { unlimitedAccess: !currentVal })
+      showToast(!currentVal ? 'Unlimited access granted' : 'Unlimited access removed', 'success')
+      loadAdminPanel()
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.toggleAdmin = async (userId, currentVal) => {
+    if (userId === state.user.id && currentVal) { showToast("Can't remove your own admin", 'error'); return }
+    try {
+      await setUserPrivileges(userId, { isAdmin: !currentVal })
+      showToast(!currentVal ? 'Admin granted' : 'Admin removed', 'success')
+      loadAdminPanel()
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.toggleSuspend = async (userId, currentStatus) => {
+    if (userId === state.user.id) { showToast("Can't suspend yourself", 'error'); return }
+    const newStatus = currentStatus === 'active' ? 'suspended' : 'active'
+    try {
+      await setUserPrivileges(userId, { accountStatus: newStatus })
+      showToast(newStatus === 'suspended' ? 'Account suspended' : 'Account activated', newStatus === 'suspended' ? 'error' : 'success')
+      loadAdminPanel()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
