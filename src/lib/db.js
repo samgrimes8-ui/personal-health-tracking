@@ -359,15 +359,25 @@ export async function upsertRecipe(userId, recipe) {
     source: recipe.source || 'manual',
     source_url: recipe.source_url || '',
     notes: recipe.notes || '',
+    instructions: recipe.instructions || null,
   }
   if (recipe.id) payload.id = recipe.id
-  const { data, error } = await supabase
-    .from('recipes')
-    .upsert(payload)
-    .select()
-    .single()
-  if (error) throw error
-  return data
+
+  const tryUpsert = async (p) => {
+    const { data, error } = await supabase.from('recipes').upsert(p).select().single()
+    if (error) throw error
+    return data
+  }
+  try {
+    return await tryUpsert(payload)
+  } catch (err) {
+    // Schema cache lag — strip newer columns and retry
+    if (err.message?.includes('source_url') || err.message?.includes('instructions') || err.message?.includes('notes')) {
+      const { source_url, instructions, notes, ...stripped } = payload
+      return await tryUpsert(stripped)
+    }
+    throw err
+  }
 }
 
 export async function deleteRecipe(userId, id) {
