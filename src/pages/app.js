@@ -1284,8 +1284,8 @@ function renderPlanRecipeModal(recipe) {
       <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:20px" id="plan-day-grid">
         ${DAYS_SHORT.map(d => `<div style="text-align:center;font-size:10px;color:var(--text3);padding:2px 0">${d}</div>`).join('')}
         ${days.map(d => `
-          <button data-date="${d.dateStr}" data-weekstart="${d.weekStart}"
-            onclick="togglePlanDay('${d.dateStr}','${d.weekStart}')"
+          <button data-date="${d.dateStr}"
+            onclick="togglePlanDay('${d.dateStr}')"
             style="aspect-ratio:1;border-radius:6px;border:1px solid var(--border);background:${d.isToday ? 'rgba(232,197,71,0.12)' : 'var(--bg3)'};
               color:${d.isToday ? 'var(--accent)' : 'var(--text2)'};cursor:pointer;font-size:11px;font-family:inherit;
               outline:${d.isToday ? '1px solid var(--accent)' : 'none'};position:relative;padding:0"
@@ -2442,14 +2442,14 @@ function wireGlobals() {
     if (chevron) chevron.textContent = state.planningRecipe.cookOnceOpen ? '▼' : '▶'
   }
 
-  window.togglePlanDay = (dateStr, weekStart) => {
+  window.togglePlanDay = (dateStr) => {
     if (!state.planningRecipe) return
     const days = state.planningRecipe.selectedDays
     const idx = days.findIndex(d => d.dateStr === dateStr)
     if (idx !== -1) {
       days.splice(idx, 1)
     } else {
-      days.push({ dateStr, weekStart })
+      days.push({ dateStr })
       // Sort chronologically
       days.sort((a, b) => a.dateStr.localeCompare(b.dateStr))
     }
@@ -2499,11 +2499,15 @@ function wireGlobals() {
     try {
       // First day = primary (ingredients counted), rest = cook-once leftovers
       for (let i = 0; i < selectedDays.length; i++) {
-        const { dateStr, weekStart } = selectedDays[i]
-        // Parse date parts directly to avoid UTC timezone shift
+        const { dateStr } = selectedDays[i]
+        // Derive everything from dateStr directly — no stored weekStart to trust
         const [yr, mo, dy] = dateStr.split('-').map(Number)
-        const dayOfWeek = new Date(yr, mo - 1, dy).getDay()
-        console.log(`[plan] day ${i}: dateStr=${dateStr} weekStart=${weekStart} dayOfWeek=${dayOfWeek} (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]})`)
+        const d = new Date(yr, mo - 1, dy)
+        const dayOfWeek = d.getDay()
+        // weekStart = the Sunday of this day's week
+        const ws = new Date(yr, mo - 1, dy - dayOfWeek)
+        const weekStart = `${ws.getFullYear()}-${String(ws.getMonth()+1).padStart(2,'0')}-${String(ws.getDate()).padStart(2,'0')}`
+        console.log(`[plan] day ${i}: dateStr=${dateStr} dayOfWeek=${dayOfWeek} (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]}) weekStart=${weekStart}`)
         const mealName = i === 0 || selectedDays.length === 1
           ? recipe.name
           : `${recipe.name} (leftovers)`

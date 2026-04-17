@@ -152,9 +152,18 @@ export async function getPlannerWeek(userId, weekStart) {
     .eq('week_start_date', weekStart)
     .order('day_of_week')
   if (error) throw error
-  // Convert rows to { meals: [[], [], ...] } shape
   const meals = Array.from({ length: 7 }, () => [])
-  ;(data ?? []).forEach(row => meals[row.day_of_week].push(row))
+  ;(data ?? []).forEach(row => {
+    // Use actual_date if available to derive the correct slot — avoids any
+    // timezone ambiguity in day_of_week that was stored by older app versions
+    let slot = row.day_of_week
+    if (row.actual_date) {
+      // actual_date is 'YYYY-MM-DD' from DB — parse directly, no Date constructor
+      const [yr, mo, dy] = row.actual_date.split('-').map(Number)
+      slot = new Date(yr, mo - 1, dy).getDay()
+    }
+    if (slot >= 0 && slot < 7) meals[slot].push(row)
+  })
   return { meals }
 }
 
@@ -165,12 +174,18 @@ export async function addPlannerMeal(userId, weekStart, dayIdx, meal) {
     setLocalFallback('macrolens_planner', planner)
     return { ...meal, id: Date.now() }
   }
+  // Compute actual_date from weekStart + dayIdx using pure date math (no timezone risk)
+  const [wyr, wmo, wdy] = weekStart.split('-').map(Number)
+  const actualDate = new Date(wyr, wmo - 1, wdy + dayIdx)
+  const actualDateStr = `${actualDate.getFullYear()}-${String(actualDate.getMonth()+1).padStart(2,'0')}-${String(actualDate.getDate()).padStart(2,'0')}`
+
   const { data, error } = await supabase
     .from('meal_planner')
     .insert({
       user_id: userId,
       week_start_date: weekStart,
       day_of_week: dayIdx,
+      actual_date: actualDateStr,
       meal_name: meal.name,
       calories: meal.calories ?? 0,
       protein: meal.protein ?? 0,
