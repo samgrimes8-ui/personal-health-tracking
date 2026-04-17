@@ -63,7 +63,7 @@ export default async function handler(req) {
     return json({ error: 'Invalid JSON body' }, 400)
   }
 
-  const { feature, messages, tools, max_tokens = 1500 } = body
+  const { feature, messages, tools, max_tokens = 2000 } = body
 
   if (!feature || !messages) {
     return json({ error: 'Missing required fields: feature, messages' }, 400)

@@ -33,12 +33,33 @@ async function callProxy(feature, messages, options = {}) {
 // ─── Helper: parse JSON from Anthropic response ───────────────────────────────
 
 function parseJSON(data) {
-  const text = data.content
+  const raw = data.content
     .map(i => i.text || '')
     .join('')
-    .replace(/```json|```/g, '')
-    .trim()
-  return JSON.parse(text)
+
+  // 1. Strip markdown code fences
+  let text = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+
+  // 2. Try parsing the whole thing first
+  try { return JSON.parse(text) } catch {}
+
+  // 3. Extract the first {...} block (handles leading/trailing explanation text)
+  const match = text.match(/\{[\s\S]*\}/)
+  if (match) {
+    try { return JSON.parse(match[0]) } catch {}
+  }
+
+  // 4. Try to find and fix common issues — trailing commas, unquoted values
+  if (match) {
+    const fixed = match[0]
+      .replace(/,\s*([}\]])/g, '$1')   // trailing commas
+      .replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3')  // unquoted keys
+    try { return JSON.parse(fixed) } catch {}
+  }
+
+  // 5. Nothing worked — throw a useful error
+  console.error('parseJSON failed. Raw response:', raw.slice(0, 500))
+  throw new Error('AI returned an unexpected format. Please try again.')
 }
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
@@ -91,9 +112,9 @@ export async function analyzePhoto(imageBase64, mealHint) {
     role: 'user',
     content: [
       { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
-      { type: 'text', text: `Analyze this food image${mealHint ? ` (meal: ${mealHint})` : ''} and estimate nutritional content per serving. ${FULL_ANALYSIS_PROMPT}` }
+      { type: 'text', text: `Analyze this image. It may be a food photo, a recipe page, a recipe card, or a screenshot of a recipe. Extract the recipe name, estimate macros per serving, and list all ingredients. ${FULL_ANALYSIS_PROMPT}` + (mealHint ? `\n\nMeal name hint: ${mealHint}` : '') }
     ]
-  }], { max_tokens: 2000 })
+  }], { max_tokens: 3000 })
   return parseJSON(data)
 }
 
