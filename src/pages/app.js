@@ -439,6 +439,16 @@ function renderGroceryList(allMeals, planner) {
 }
 
 // ── Category config ────────────────────────────────────────────────────────────
+// Helper — detect leftover meals (suffix added when created)
+function isLeftover(meal) {
+  const name = (meal.meal_name || meal.name || '').toLowerCase()
+  return name.endsWith('(leftovers)') || meal.is_leftover === true
+}
+
+function originalMealName(meal) {
+  return (meal.meal_name || meal.name || '').replace(/\s*\(leftovers\)\s*$/i, '').trim()
+}
+
 const CATEGORIES = {
   produce:    { label: 'Produce',    emoji: '🥦', color: 'var(--protein)' },
   protein:    { label: 'Protein',    emoji: '🥩', color: 'var(--fat)' },
@@ -503,14 +513,16 @@ function sumIngredients(items) {
 }
 
 function collectAllIngredients(planner) {
-  // Returns flat list of {name, amount, unit, category, mealId, mealName, servings, day}
-  // Respects state.mealServings overrides
+  // Returns flat list of ingredients, skipping leftover entries (already counted on original day)
   const items = []
   if (!state.excludedIngredients) state.excludedIngredients = new Set()
 
   DAYS.forEach((day, di) => {
     const meals = planner.meals[di] || []
     meals.forEach(m => {
+      // Skip leftover entries — ingredients already counted on the original day
+      if (isLeftover(m)) return
+
       const mealName = m.meal_name || m.name
       const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
       const ingredients = recipe?.ingredients || []
@@ -640,44 +652,57 @@ function renderGroceryByMeal(planner) {
 
               return `
                 <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
-                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(mealName)}</div>
-                    ${!ingredients.length
-                      ? `<button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>`
-                      : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`}
-                  </div>
-
-                  <!-- Serving size input -->
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:6px 0;border-bottom:1px solid var(--border)">
-                    <span style="font-size:12px;color:var(--text3)">Servings:</span>
-                    <input type="number" min="1" max="100" step="1"
-                      value="${requestedServings}"
-                      onchange="setMealServings('${m.id}', this.value)"
-                      style="width:60px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none;text-align:center" />
-                    <span style="font-size:12px;color:var(--text3)">people</span>
-                    ${multiplier !== 1 ? `<span style="font-size:11px;color:var(--accent);margin-left:4px">×${+multiplier.toFixed(2)} base recipe</span>` : ''}
-                  </div>
-
-                  ${ingredients.length ? `
-                    <div>
-                      ${ingredients.map(ing => {
-                        const excKey = `${m.id}::${ing.name.toLowerCase()}`
-                        const isExcluded = state.excludedIngredients.has(excKey)
-                        const adjustedAmt = (parseFloat(ing.amount) || 0) * multiplier
-                        const displayAmt = adjustedAmt % 1 === 0 ? adjustedAmt : +adjustedAmt.toFixed(2)
-                        const cat = CATEGORIES[ing.category] || CATEGORIES.other
-                        return `
-                          <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);${isExcluded ? 'opacity:0.4' : ''}">
-                            <button onclick="toggleIngredientExclusion('${m.id}', '${ing.name.replace(/'/g,"\\'")}', ${isExcluded})"
-                              title="${isExcluded ? 'Add back to list' : 'Already have it — exclude from list'}"
-                              style="background:none;border:none;cursor:pointer;font-size:14px;padding:0;line-height:1;flex-shrink:0">${isExcluded ? '➕' : '➖'}</button>
-                            <span style="font-size:11px;padding:1px 6px;border-radius:4px;background:${cat.color}22;color:${cat.color};min-width:52px;text-align:center">${cat.emoji} ${cat.label}</span>
-                            <span style="font-size:12px;font-weight:500;color:var(--text2);min-width:65px">${displayAmt} ${esc(ing.unit || '')}</span>
-                            <span style="font-size:13px;color:var(--text);${isExcluded ? 'text-decoration:line-through' : ''}">${esc(ing.name)}</span>
-                          </div>`
-                      }).join('')}
+                  ${isLeftover(m) ? `
+                    <!-- Leftover meal — ingredients not duplicated -->
+                    <div style="display:flex;align-items:center;gap:10px">
+                      <div style="flex:1">
+                        <div style="font-size:13px;font-weight:500;color:var(--text2)">${esc(mealName)}</div>
+                        <div style="font-size:11px;color:var(--text3);margin-top:3px">
+                          ↩ Leftovers from ${originalMealName(m)} — ingredients already on your list
+                        </div>
+                      </div>
+                      <span style="font-size:11px;padding:3px 8px;background:rgba(122,180,232,0.12);color:var(--carbs);border-radius:4px;border:1px solid rgba(122,180,232,0.25)">no shopping needed</span>
                     </div>
-                  ` : `<div style="font-size:11px;color:var(--text3)">No ingredients yet — click AI extract above</div>`}
+                  ` : `
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                      <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(mealName)}</div>
+                      ${!ingredients.length
+                        ? `<button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>`
+                        : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`}
+                    </div>
+
+                    <!-- Serving size input -->
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+                      <span style="font-size:12px;color:var(--text3)">Servings:</span>
+                      <input type="number" min="1" max="100" step="1"
+                        value="${requestedServings}"
+                        onchange="setMealServings('${m.id}', this.value)"
+                        style="width:60px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none;text-align:center" />
+                      <span style="font-size:12px;color:var(--text3)">people</span>
+                      ${multiplier !== 1 ? `<span style="font-size:11px;color:var(--accent);margin-left:4px">×${+multiplier.toFixed(2)} base recipe</span>` : ''}
+                    </div>
+
+                    ${ingredients.length ? `
+                      <div>
+                        ${ingredients.map(ing => {
+                          const excKey = `${m.id}::${ing.name.toLowerCase()}`
+                          const isExcluded = state.excludedIngredients.has(excKey)
+                          const adjustedAmt = (parseFloat(ing.amount) || 0) * multiplier
+                          const displayAmt = adjustedAmt % 1 === 0 ? adjustedAmt : +adjustedAmt.toFixed(2)
+                          const cat = CATEGORIES[ing.category] || CATEGORIES.other
+                          return `
+                            <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);${isExcluded ? 'opacity:0.4' : ''}">
+                              <button onclick="toggleIngredientExclusion('${m.id}', '${ing.name.replace(/'/g,"\\'")}', ${isExcluded})"
+                                title="${isExcluded ? 'Add back to list' : 'Already have it — exclude from list'}"
+                                style="background:none;border:none;cursor:pointer;font-size:14px;padding:0;line-height:1;flex-shrink:0">${isExcluded ? '➕' : '➖'}</button>
+                              <span style="font-size:11px;padding:1px 6px;border-radius:4px;background:${cat.color}22;color:${cat.color};min-width:52px;text-align:center">${cat.emoji} ${cat.label}</span>
+                              <span style="font-size:12px;font-weight:500;color:var(--text2);min-width:65px">${displayAmt} ${esc(ing.unit || '')}</span>
+                              <span style="font-size:13px;color:var(--text);${isExcluded ? 'text-decoration:line-through' : ''}">${esc(ing.name)}</span>
+                            </div>`
+                        }).join('')}
+                      </div>
+                    ` : `<div style="font-size:11px;color:var(--text3)">No ingredients yet — click AI extract above</div>`}
+                  `}
                 </div>`
             }).join('')}
           </div>`
