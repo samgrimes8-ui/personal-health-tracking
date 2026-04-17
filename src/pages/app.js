@@ -481,6 +481,7 @@ function renderLogTable(entries, isToday) {
 // ─── Planner ──────────────────────────────────────────────────────────────────
 async function renderPlanner(container) {
   if (typeof container === 'undefined') container = document.getElementById('main-content')
+  console.log('[planner] rendering weekStart:', state.weekStart)
   const planner = await getPlannerWeek(state.user.id, state.weekStart)
   state.planner = planner
 
@@ -2502,6 +2503,7 @@ function wireGlobals() {
         // Parse date parts directly to avoid UTC timezone shift
         const [yr, mo, dy] = dateStr.split('-').map(Number)
         const dayOfWeek = new Date(yr, mo - 1, dy).getDay()
+        console.log(`[plan] day ${i}: dateStr=${dateStr} weekStart=${weekStart} dayOfWeek=${dayOfWeek} (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]})`)
         const mealName = i === 0 || selectedDays.length === 1
           ? recipe.name
           : `${recipe.name} (leftovers)`
