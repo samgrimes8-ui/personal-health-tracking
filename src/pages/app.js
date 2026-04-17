@@ -150,8 +150,9 @@ function renderShell(container) {
         <button class="modal-close" onclick="closePlannerModal()">×</button>
         <h3 id="planner-modal-title">Add meal</h3>
         <div class="pm-tabs">
-          <button class="pm-tab active" id="pm-tab-history" onclick="switchPlannerTab('history')">📋 From history</button>
-          <button class="pm-tab" id="pm-tab-ai" onclick="switchPlannerTab('ai')">✨ Describe meal</button>
+          <button class="pm-tab active" id="pm-tab-history" onclick="switchPlannerTab('history')">📋 History</button>
+          <button class="pm-tab" id="pm-tab-ai" onclick="switchPlannerTab('ai')">✨ Describe</button>
+          <button class="pm-tab" id="pm-tab-photo" onclick="switchPlannerTab('photo')">📸 Photo</button>
         </div>
         <div class="pm-panel active" id="pm-panel-history">
           <input class="planner-search" id="planner-search" placeholder="Search meals from history..." oninput="filterPlannerList()" />
@@ -164,6 +165,22 @@ function renderShell(container) {
             <div class="pm-result-name" id="pm-result-name"></div>
             <div class="pm-result-pills" id="pm-result-pills"></div>
             <button class="pm-add-btn" onclick="addAiMealToPlannerHandler()">+ Add to planner</button>
+          </div>
+        </div>
+        <div class="pm-panel" id="pm-panel-photo">
+          <div class="pm-upload-area" id="pm-upload-area" onclick="document.getElementById('pm-file-input').click()">
+            <div id="pm-upload-inner">
+              <div style="font-size:28px;margin-bottom:6px">📸</div>
+              <div style="font-size:13px;color:var(--text2)">Tap to upload a photo or screenshot</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:3px">recipe card, screenshot, food photo</div>
+            </div>
+          </div>
+          <input type="file" id="pm-file-input" accept="image/*" style="display:none" />
+          <button class="pm-analyze-btn" id="pm-photo-analyze-btn" onclick="analyzePlannerPhotoHandler()" style="display:none">Analyze photo with AI</button>
+          <div class="pm-result" id="pm-photo-result">
+            <div class="pm-result-name" id="pm-photo-result-name"></div>
+            <div class="pm-result-pills" id="pm-photo-result-pills"></div>
+            <button class="pm-add-btn" onclick="addPhotoMealToPlannerHandler()">+ Add to planner</button>
           </div>
         </div>
         <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
@@ -1528,6 +1545,7 @@ function wireGlobals() {
   window.openPlannerModal = (dayIdx) => {
     state.plannerTarget = { dayIdx }
     state.aiPlannerResult = null
+    state.plannerImageBase64 = null
     const nextDay = (dayIdx + 1) % 7
     document.getElementById('planner-modal-title').textContent = `Add meal — ${DAYS[dayIdx]}`
     document.getElementById('planner-search').value = ''
@@ -1538,6 +1556,13 @@ function wireGlobals() {
     document.getElementById('pm-result').style.display = 'none'
     document.getElementById('pm-analyze-btn').disabled = false
     document.getElementById('pm-analyze-btn').textContent = 'Analyze with AI'
+    // Reset photo panel
+    const inner = document.getElementById('pm-upload-inner')
+    if (inner) inner.innerHTML = '<div style="font-size:28px;margin-bottom:6px">📸</div><div style="font-size:13px;color:var(--text2)">Tap to upload a photo or screenshot</div><div style="font-size:11px;color:var(--text3);margin-top:3px">recipe card, screenshot, food photo</div>'
+    const photoBtn = document.getElementById('pm-photo-analyze-btn')
+    if (photoBtn) { photoBtn.style.display = 'none'; photoBtn.disabled = false; photoBtn.textContent = 'Analyze photo with AI' }
+    const photoResult = document.getElementById('pm-photo-result')
+    if (photoResult) photoResult.style.display = 'none'
     window.switchPlannerTab('history')
     filterPlannerList()
     document.getElementById('planner-modal').classList.add('open')
@@ -1546,14 +1571,100 @@ function wireGlobals() {
   window.closePlannerModal = () => {
     document.getElementById('planner-modal').classList.remove('open')
     state.plannerTarget = null
+    state.plannerImageBase64 = null
+  }
+
+  // ── Planner photo tab ──────────────────────────────────────────
+  function wirePlannerFileInput() {
+    const fi = document.getElementById('pm-file-input')
+    const ua = document.getElementById('pm-upload-area')
+    if (!fi || !ua || ua._wired) return
+    ua._wired = true
+    fi.addEventListener('change', e => { const f = e.target.files[0]; if (f) handlePlannerFile(f) })
+    ua.addEventListener('dragover', e => { e.preventDefault(); ua.style.borderColor = 'var(--accent)' })
+    ua.addEventListener('dragleave', () => { ua.style.borderColor = '' })
+    ua.addEventListener('drop', e => { e.preventDefault(); ua.style.borderColor = ''; const f = e.dataTransfer.files[0]; if (f) handlePlannerFile(f) })
+  }
+
+  function handlePlannerFile(file) {
+    const reader = new FileReader()
+    reader.onload = ev => {
+      state.plannerImageBase64 = ev.target.result.split(',')[1]
+      const inner = document.getElementById('pm-upload-inner')
+      if (inner) inner.innerHTML = '<img src="' + ev.target.result + '" style="width:100%;border-radius:var(--r);max-height:160px;object-fit:cover" alt="preview">'
+      const btn = document.getElementById('pm-photo-analyze-btn')
+      if (btn) btn.style.display = 'block'
+      const result = document.getElementById('pm-photo-result')
+      if (result) result.style.display = 'none'
+    }
+    reader.readAsDataURL(file)
+  }
+
+  window.analyzePlannerPhotoHandler = async () => {
+    if (!state.plannerImageBase64) { showToast('Please upload a photo first', 'error'); return }
+    const btn = document.getElementById('pm-photo-analyze-btn')
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="analyzing-spinner"></span> Analyzing...' }
+    document.getElementById('pm-photo-result').style.display = 'none'
+    try {
+      const r = await analyzePhoto(state.plannerImageBase64, '')
+      state.aiPlannerResult = r
+      document.getElementById('pm-photo-result-name').textContent = r.name
+      document.getElementById('pm-photo-result-pills').innerHTML =
+        '<span class="pm-pill pill-cal">' + Math.round(r.calories) + ' kcal</span>' +
+        '<span class="pm-pill pill-p">' + Math.round(r.protein) + 'g P</span>' +
+        '<span class="pm-pill pill-c">' + Math.round(r.carbs) + 'g C</span>' +
+        '<span class="pm-pill pill-f">' + Math.round(r.fat) + 'g F</span>' +
+        (r.ingredients && r.ingredients.length ? '<span class="pm-pill" style="background:rgba(126,200,160,0.1);color:var(--protein);border-color:rgba(126,200,160,0.25)">' + r.ingredients.length + ' ingredients</span>' : '')
+      document.getElementById('pm-photo-result').style.display = 'block'
+    } catch (err) { showToast('Analysis failed: ' + err.message, 'error') }
+    if (btn) { btn.disabled = false; btn.textContent = 'Analyze photo with AI' }
+  }
+
+  window.addPhotoMealToPlannerHandler = async () => {
+    if (!state.plannerTarget || !state.aiPlannerResult) return
+    const r = state.aiPlannerResult
+    const addAsLeftover = document.getElementById('leftover-check').checked
+    const dayIdx = state.plannerTarget.dayIdx
+    try {
+      const meal = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, { ...r })
+      state.planner.meals[dayIdx].push(meal)
+      if (r.ingredients && r.ingredients.length) {
+        getRecipeByName(state.user.id, r.name).then(existing => {
+          if (!existing) upsertRecipe(state.user.id, {
+            name: r.name, description: r.description || '', servings: r.servings || 1,
+            calories: r.calories, protein: r.protein, carbs: r.carbs, fat: r.fat,
+            fiber: r.fiber || 0, sugar: r.sugar || 0, ingredients: r.ingredients,
+            source: 'ai_photo', confidence: r.confidence
+          }).then(recipe => state.recipes.unshift(recipe)).catch(() => {})
+        }).catch(() => {})
+      }
+      if (addAsLeftover) {
+        const nextDay = (dayIdx + 1) % 7
+        const leftover = await addPlannerMeal(state.user.id, state.weekStart, nextDay, {
+          ...r, name: r.name + ' (leftovers)'
+        })
+        state.planner.meals[nextDay].push(leftover)
+        showToast(r.name + ' added to ' + DAYS[dayIdx] + ' + ' + DAYS[nextDay] + ' lunch!', 'success')
+      } else {
+        showToast(r.name + ' added to ' + DAYS[dayIdx] + '!', 'success')
+      }
+      state.plannerImageBase64 = null
+      state.groceryItems = null
+      closePlannerModal()
+      renderPage()
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
   window.switchPlannerTab = (tab) => {
     state.plannerTab = tab
     document.getElementById('pm-tab-history').classList.toggle('active', tab === 'history')
     document.getElementById('pm-tab-ai').classList.toggle('active', tab === 'ai')
+    document.getElementById('pm-tab-photo').classList.toggle('active', tab === 'photo')
     document.getElementById('pm-panel-history').classList.toggle('active', tab === 'history')
     document.getElementById('pm-panel-ai').classList.toggle('active', tab === 'ai')
+    document.getElementById('pm-panel-photo').classList.toggle('active', tab === 'photo')
+    // Wire up file input when photo tab is shown
+    if (tab === 'photo') wirePlannerFileInput()
   }
 
   window.filterPlannerList = filterPlannerList

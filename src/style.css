@@ -248,3 +248,18 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 @media (max-width: 480px) {
   .planner-grid { grid-template-columns: 1fr; }
 }
+
+/* Planner modal photo upload area */
+.pm-upload-area {
+  border: 1.5px dashed var(--border2);
+  border-radius: var(--r);
+  padding: 24px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 8px;
+}
+.pm-upload-area:hover {
+  border-color: var(--accent2);
+  background: rgba(232,197,71,0.03);
+}
