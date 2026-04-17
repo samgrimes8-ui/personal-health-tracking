@@ -5,7 +5,7 @@ import {
   getPlannerWeek, addPlannerMeal, updatePlannerMeal, deletePlannerMeal,
   getUsageSummary, getAdminUserOverview, setUserPrivileges,
   getRecipes, upsertRecipe, deleteRecipe, getRecipeByName,
-  getWeeksWithMeals
+  getWeeksWithMeals, getPlannerRange
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -37,6 +37,8 @@ let state = {
   groceryView: 'full',
   groceryItems: null,
   groceryCustomItems: [],
+  groceryFromDate: null,  // null = today
+  groceryToDate: null,    // null = end of furthest planned week
   mealServings: {},
   excludedIngredients: new Set(),
   aiPlannerResult: null,
@@ -494,7 +496,6 @@ async function renderPlanner(container) {
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
       <button class="td-act" onclick="shiftWeek(-1)" style="font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)">‹</button>
 
-      <!-- Week label — click to open calendar -->
       <button onclick="toggleCalendar()" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px 14px;color:var(--text);font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
         <span style="font-size:14px;font-weight:500">${formatWeekLabel(state.weekStart)}</span>
         <span style="font-size:11px;color:var(--text3)">${isCurrentWeek ? 'This week' : ''} 📅</span>
@@ -514,8 +515,15 @@ async function renderPlanner(container) {
       <button class="mode-tab ${state.plannerView === 'grocery' ? 'active' : ''}" onclick="setPlannerView('grocery')" style="flex:0 0 auto;padding:8px 18px">🛒 Grocery list</button>
     </div>
 
-    ${state.plannerView === 'grocery' ? renderGroceryList(allMeals, planner) : renderMealPlanView(planner)}
+    ${state.plannerView === 'grocery' ? '<div id="grocery-placeholder"><div class="log-empty">Loading grocery list...</div></div>' : renderMealPlanView(planner)}
   `
+
+  // Async: inject grocery list after shell renders
+  if (state.plannerView === 'grocery') {
+    const groceryEl = await renderGroceryList(allMeals, planner)
+    const placeholder = document.getElementById('grocery-placeholder')
+    if (placeholder) placeholder.replaceWith(groceryEl)
+  }
 }
 
 function renderCalendarPicker() {
@@ -665,24 +673,86 @@ function renderMealPlanView(planner) {
   `
 }
 
-function renderGroceryList(allMeals, planner) {
+async function renderGroceryList(allMeals, planner) {
   const view = state.groceryView || 'full'
-  return `
-    <div class="log-card" style="margin-bottom:20px">
-      <div class="log-header">
-        <span class="log-header-title">🛒 Grocery list</span>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="clear-btn" onclick="addGroceryItem()" style="color:var(--accent)">+ Add item</button>
-          <button class="clear-btn" onclick="resetExclusions()" style="color:var(--text3)">Reset exclusions</button>
+  const today = new Date().toISOString().split('T')[0]
+
+  // Compute effective date range
+  const fromDate = state.groceryFromDate || today
+  const toDate = state.groceryToDate || (() => {
+    // Default: end of the furthest planned week
+    const weeks = state.weeksWithMeals.length
+      ? [...state.weeksWithMeals].sort()
+      : [state.weekStart]
+    const lastWeek = weeks[weeks.length - 1]
+    const d = new Date(lastWeek + 'T00:00:00')
+    d.setDate(d.getDate() + 6)
+    return d.toISOString().split('T')[0]
+  })()
+
+  // Fetch meals across the range (may span multiple weeks)
+  let rangeMeals
+  try {
+    const result = await getPlannerRange(state.user.id, fromDate, toDate)
+    rangeMeals = result.meals
+  } catch {
+    rangeMeals = planner.meals.flat()
+  }
+
+  // Format date labels
+  const fmtDate = d => new Date(d + 'T00:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' })
+  const isAutoFrom = !state.groceryFromDate
+  const isAutoTo = !state.groceryToDate
+  const pastDaysExcluded = isAutoFrom && fromDate > (() => {
+    // Check if current week has past days
+    const ws = new Date(state.weekStart + 'T00:00:00')
+    return ws.toISOString().split('T')[0]
+  })()
+
+  const container = document.createElement('div')
+  container.className = 'log-card'
+  container.style.marginBottom = '20px'
+  container.innerHTML = `
+    <div class="log-header">
+      <span class="log-header-title">🛒 Grocery list</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="clear-btn" onclick="addGroceryItem()" style="color:var(--accent)">+ Add item</button>
+        <button class="clear-btn" onclick="resetExclusions()" style="color:var(--text3)">Reset</button>
+      </div>
+    </div>
+
+    <!-- Date range bar -->
+    <div style="padding:10px 16px;background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:12px;color:var(--text3)">Shopping for:</span>
+      <div style="display:flex;align-items:center;gap:6px;flex:1;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:4px">
+          <input type="date" id="grocery-from" value="${fromDate}"
+            onchange="setGroceryDateRange(this.value, null)"
+            style="background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:12px;font-family:inherit;outline:none" />
         </div>
+        <span style="font-size:12px;color:var(--text3)">→</span>
+        <div style="display:flex;align-items:center;gap:4px">
+          <input type="date" id="grocery-to" value="${toDate}"
+            onchange="setGroceryDateRange(null, this.value)"
+            style="background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:12px;font-family:inherit;outline:none" />
+        </div>
+        ${(!isAutoFrom || !isAutoTo) ? `<button onclick="resetGroceryDates()" style="font-size:11px;color:var(--accent);background:none;border:none;cursor:pointer;font-family:inherit;padding:0">Reset to today</button>` : ''}
       </div>
-      <div style="display:flex;gap:4px;padding:12px 16px;border-bottom:1px solid var(--border)">
-        <button class="mode-tab ${view === 'full' ? 'active' : ''}" onclick="setGroceryView('full')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">Full list</button>
-        <button class="mode-tab ${view === 'bymeal' ? 'active' : ''}" onclick="setGroceryView('bymeal')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">By meal</button>
-      </div>
-      ${view === 'full' ? renderGroceryFull(planner) : renderGroceryByMeal(planner)}
+      ${isAutoFrom ? `<span style="font-size:11px;color:var(--protein);white-space:nowrap">✓ Past days excluded</span>` : ''}
+    </div>
+
+    <!-- View tabs -->
+    <div style="display:flex;gap:4px;padding:10px 16px;border-bottom:1px solid var(--border)">
+      <button class="mode-tab ${view === 'full' ? 'active' : ''}" onclick="setGroceryView('full')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">Full list</button>
+      <button class="mode-tab ${view === 'bymeal' ? 'active' : ''}" onclick="setGroceryView('bymeal')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">By meal</button>
+      <span style="margin-left:auto;font-size:11px;color:var(--text3);align-self:center">${rangeMeals.filter(m => !isLeftover(m)).length} meals · ${fmtDate(fromDate)} – ${fmtDate(toDate)}</span>
+    </div>
+
+    <div id="grocery-body">
+      ${view === 'full' ? renderGroceryFull(null, rangeMeals) : renderGroceryByMeal(null, rangeMeals)}
     </div>
   `
+  return container
 }
 
 // ── Category config ────────────────────────────────────────────────────────────
@@ -759,63 +829,59 @@ function sumIngredients(items) {
   return Object.values(grouped)
 }
 
-function collectAllIngredients(planner) {
-  // Returns flat list of ingredients, skipping leftover entries (already counted on original day)
+function collectAllIngredients(planner, rangeMeals) {
+  // Use rangeMeals if provided (cross-week), else fall back to current week planner
   const items = []
   if (!state.excludedIngredients) state.excludedIngredients = new Set()
 
-  DAYS.forEach((day, di) => {
-    const meals = planner.meals[di] || []
-    meals.forEach(m => {
-      // Skip leftover entries — ingredients already counted on the original day
-      if (isLeftover(m)) return
+  const meals = rangeMeals || planner?.meals?.flat() || []
 
-      const mealName = m.meal_name || m.name
-      const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
-      const ingredients = recipe?.ingredients || []
-      const baseServings = recipe?.servings || 1
-      const requestedServings = state.mealServings?.[m.id] || baseServings
-      const multiplier = requestedServings / baseServings
+  meals.forEach(m => {
+    if (isLeftover(m)) return
 
-      ingredients.forEach(ing => {
-        const excKey = `${m.id}::${ing.name.toLowerCase()}`
-        items.push({
-          name: ing.name,
-          amount: (parseFloat(ing.amount) || 0) * multiplier,
-          unit: ing.unit || '',
-          category: ing.category || 'other',
-          excluded: state.excludedIngredients.has(excKey),
-          excKey,
-          mealId: m.id,
-          mealName,
-          day: di,
-          requestedServings,
-          baseServings
-        })
+    const mealName = m.meal_name || m.name
+    const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
+    const ingredients = recipe?.ingredients || []
+    const baseServings = recipe?.servings || 1
+    const requestedServings = state.mealServings?.[m.id] || baseServings
+    const multiplier = requestedServings / baseServings
+    const dayLabel = m.actualDate
+      ? new Date(m.actualDate + 'T00:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+      : (DAYS[m.day_of_week] || '')
+
+    ingredients.forEach(ing => {
+      const excKey = `${m.id}::${ing.name.toLowerCase()}`
+      items.push({
+        name: ing.name,
+        amount: (parseFloat(ing.amount) || 0) * multiplier,
+        unit: ing.unit || '',
+        category: ing.category || 'other',
+        excluded: state.excludedIngredients.has(excKey),
+        excKey,
+        mealId: m.id,
+        mealName,
+        day: m.day_of_week,
+        dayLabel,
+        requestedServings,
+        baseServings
       })
-
-      if (!ingredients.length) {
-        const excKey = `${m.id}::${mealName.toLowerCase()}`
-        items.push({
-          name: mealName,
-          amount: null,
-          unit: '',
-          category: 'other',
-          excluded: state.excludedIngredients.has(excKey),
-          excKey,
-          mealId: m.id,
-          mealName,
-          day: di,
-          noIngredients: true
-        })
-      }
     })
+
+    if (!ingredients.length) {
+      const excKey = `${m.id}::${mealName.toLowerCase()}`
+      items.push({
+        name: mealName, amount: null, unit: '', category: 'other',
+        excluded: state.excludedIngredients.has(excKey),
+        excKey, mealId: m.id, mealName, day: m.day_of_week,
+        dayLabel, noIngredients: true
+      })
+    }
   })
   return items
 }
 
-function renderGroceryFull(planner) {
-  const allItems = collectAllIngredients(planner)
+function renderGroceryFull(planner, rangeMeals) {
+  const allItems = collectAllIngredients(planner, rangeMeals)
   const active = allItems.filter(i => !i.excluded)
 
   if (!allItems.length) return `<div class="log-empty">No meals planned yet. Add meals to the planner to generate a grocery list.</div>`
@@ -854,8 +920,7 @@ function renderGroceryFull(planner) {
                   ${item.totalAmount ? `${item.totalAmount % 1 === 0 ? item.totalAmount : +item.totalAmount.toFixed(2)} ${item.unit}` : '—'}
                 </span>
                 <span style="flex:1;font-size:14px;color:var(--text)">${esc(item.name)}</span>
-                <span style="font-size:11px;color:var(--text3)">${item.meals?.join(', ') || ''}</span>
-              </div>`).join('')}
+                <span style="font-size:11px;color:var(--text3)">${item.meals?.join(', ') || ''}</span>              </div>`).join('')}
           </div>`
       }).join('')}
 
@@ -875,21 +940,30 @@ function renderGroceryFull(planner) {
   `
 }
 
-function renderGroceryByMeal(planner) {
-  const hasMeals = planner.meals.some(d => d.length > 0)
-  if (!hasMeals) return `<div class="log-empty">No meals planned yet.</div>`
+function renderGroceryByMeal(planner, rangeMeals) {
+  const meals = rangeMeals || planner?.meals?.flat() || []
+  const hasMeals = meals.length > 0
+  if (!hasMeals) return `<div class="log-empty">No meals in this date range.</div>`
   if (!state.mealServings) state.mealServings = {}
   if (!state.excludedIngredients) state.excludedIngredients = new Set()
 
+  // Group by day label for display
+  const grouped = {}
+  meals.forEach(m => {
+    const label = m.actualDate
+      ? new Date(m.actualDate + 'T00:00:00').toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+      : (DAYS[m.day_of_week] || 'Unknown')
+    if (!grouped[label]) grouped[label] = []
+    grouped[label].push(m)
+  })
+
   return `
     <div style="padding:12px 20px">
-      ${DAYS.map((day, di) => {
-        const meals = planner.meals[di] || []
-        if (!meals.length) return ''
+      ${Object.entries(grouped).map(([dayLabel, dayMeals]) => {
         return `
           <div style="margin-bottom:20px">
-            <div style="font-size:12px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">${day}</div>
-            ${meals.map(m => {
+            <div style="font-size:12px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">${dayLabel}</div>
+            ${dayMeals.map(m => {
               const mealName = m.meal_name || m.name
               const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
               const ingredients = recipe?.ingredients || []
@@ -2026,12 +2100,26 @@ function wireGlobals() {
     state.calendarMonth = null
     state.mealServings = {}
     state.excludedIngredients = new Set()
+    state.groceryFromDate = null
+    state.groceryToDate = null
     renderPage()
   }
 
   // ── Grocery list handlers ───────────────────────────────────────
   window.setGroceryView = (view) => {
     state.groceryView = view
+    renderPage()
+  }
+
+  window.setGroceryDateRange = (from, to) => {
+    if (from !== null) state.groceryFromDate = from
+    if (to !== null) state.groceryToDate = to
+    renderPage()
+  }
+
+  window.resetGroceryDates = () => {
+    state.groceryFromDate = null
+    state.groceryToDate = null
     renderPage()
   }
 

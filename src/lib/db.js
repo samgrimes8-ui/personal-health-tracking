@@ -373,3 +373,46 @@ export async function getWeeksWithMeals(userId) {
     seen.add(r.week_start_date); return true
   }).map(r => r.week_start_date)
 }
+
+export async function getPlannerRange(userId, fromDate, toDate) {
+  // Fetch all planner meals between two dates (inclusive)
+  // fromDate / toDate are 'YYYY-MM-DD' strings
+  if (!supabase) return { meals: [] }
+
+  // Get all week_starts that overlap the range
+  const from = new Date(fromDate + 'T00:00:00')
+  const to = new Date(toDate + 'T00:00:00')
+
+  // Collect week starts for the range
+  const weekStarts = []
+  const cursor = new Date(from)
+  cursor.setDate(cursor.getDate() - cursor.getDay()) // snap to Sunday
+  while (cursor <= to) {
+    weekStarts.push(cursor.toISOString().split('T')[0])
+    cursor.setDate(cursor.getDate() + 7)
+  }
+
+  const { data, error } = await supabase
+    .from('meal_planner')
+    .select('*')
+    .eq('user_id', userId)
+    .in('week_start_date', weekStarts)
+    .order('week_start_date')
+    .order('day_of_week')
+  if (error) throw error
+
+  // Filter to only days within fromDate..toDate
+  const meals = (data ?? []).filter(row => {
+    const d = new Date(row.week_start_date + 'T00:00:00')
+    d.setDate(d.getDate() + row.day_of_week)
+    const ds = d.toISOString().split('T')[0]
+    return ds >= fromDate && ds <= toDate
+  }).map(row => {
+    // Attach the actual date for display
+    const d = new Date(row.week_start_date + 'T00:00:00')
+    d.setDate(d.getDate() + row.day_of_week)
+    return { ...row, actualDate: d.toISOString().split('T')[0] }
+  })
+
+  return { meals }
+}
