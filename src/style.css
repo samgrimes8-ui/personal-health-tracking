@@ -263,3 +263,26 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   border-color: var(--accent2);
   background: rgba(232,197,71,0.03);
 }
+
+/* Food mode sub-buttons */
+.food-sub-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 8px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text3);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  min-height: 68px;
+}
+.food-sub-btn:hover { background: var(--bg4); color: var(--text2); }
+.food-sub-btn.active {
+  background: var(--bg4);
+  border-color: rgba(232,197,71,0.35);
+  color: var(--accent);
+}

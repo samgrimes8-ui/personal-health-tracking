@@ -9,7 +9,7 @@ import {
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
-  extractIngredients, recalculateMacros
+  extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -24,7 +24,9 @@ let state = {
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false },
   currentPage: 'log',
   currentMode: 'recipe',
+  foodMode: 'barcode',    // 'barcode' | 'label' | 'search'
   imageBase64: null,
+  labelImageBase64: null,
   currentEntry: null,
   editingEntry: null,
   editingBaseMacros: null,
@@ -276,6 +278,7 @@ function renderDashboard(container) {
           <button class="mode-tab ${state.currentMode === 'recipe' ? 'active' : ''}" onclick="switchMode('recipe')">📝 Recipe</button>
           <button class="mode-tab ${state.currentMode === 'photo' ? 'active' : ''}" onclick="switchMode('photo')">📸 Photo</button>
           <button class="mode-tab ${state.currentMode === 'link' ? 'active' : ''}" onclick="switchMode('link')">🔍 Search</button>
+          <button class="mode-tab ${state.currentMode === 'food' ? 'active' : ''}" onclick="switchMode('food')">🍎 Food</button>
         </div>
         <div class="mode-panel ${state.currentMode === 'recipe' ? 'active' : ''}" id="mode-recipe">
           <textarea class="recipe-textarea" id="recipe-input" placeholder="Describe your recipe or paste ingredients...&#10;&#10;e.g. Grilled chicken breast 200g, brown rice 1 cup, olive oil 1 tbsp"></textarea>
@@ -290,6 +293,62 @@ function renderDashboard(container) {
           <input class="link-input" type="url" id="link-input" placeholder="Paste URL (optional)..." style="margin-bottom:8px" />
           <textarea class="recipe-textarea" id="dish-name-input" rows="2" placeholder="What's the dish? (required)&#10;e.g. Skillet chicken cacciatore..."></textarea>
           <div class="link-note">Instagram/TikTok are private — AI searches the web for the recipe by dish name.</div>
+        </div>
+        <div class="mode-panel ${state.currentMode === 'food' ? 'active' : ''}" id="mode-food">
+          <!-- Three sub-options for single food items -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+            <button class="food-sub-btn ${state.foodMode !== 'label' && state.foodMode !== 'search' ? 'active' : ''}"
+              onclick="setFoodMode('barcode')" id="food-btn-barcode">
+              <span style="font-size:20px;display:block;margin-bottom:3px">📷</span>
+              <span style="font-size:11px">Scan barcode</span>
+            </button>
+            <button class="food-sub-btn ${state.foodMode === 'label' ? 'active' : ''}"
+              onclick="setFoodMode('label')" id="food-btn-label">
+              <span style="font-size:20px;display:block;margin-bottom:3px">🏷️</span>
+              <span style="font-size:11px">Snap label</span>
+            </button>
+            <button class="food-sub-btn ${state.foodMode === 'search' ? 'active' : ''}"
+              onclick="setFoodMode('search')" id="food-btn-search">
+              <span style="font-size:20px;display:block;margin-bottom:3px">🔤</span>
+              <span style="font-size:11px">Describe food</span>
+            </button>
+          </div>
+
+          <!-- Barcode scanner -->
+          <div id="food-panel-barcode" style="${state.foodMode === 'label' || state.foodMode === 'search' ? 'display:none' : ''}">
+            <div id="barcode-scanner-area" style="border:1.5px dashed var(--border2);border-radius:var(--r);overflow:hidden;position:relative;background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;cursor:pointer" onclick="startBarcodeScanner()">
+              <div id="barcode-scanner-inner" style="text-align:center;padding:20px">
+                <div style="font-size:28px;margin-bottom:6px">📷</div>
+                <div style="font-size:13px;color:var(--text2)">Tap to scan barcode</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:3px">UPC, EAN, QR — any packaged food</div>
+              </div>
+              <video id="barcode-video" style="display:none;width:100%;border-radius:var(--r)" autoplay playsinline muted></video>
+              <canvas id="barcode-canvas" style="display:none"></canvas>
+            </div>
+            <div id="barcode-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center"></div>
+            <input id="barcode-manual-input" class="link-input" placeholder="Or type barcode number manually..." style="margin-top:8px"
+              onkeydown="if(event.key==='Enter')lookupBarcode(this.value)" />
+          </div>
+
+          <!-- Label photo -->
+          <div id="food-panel-label" style="${state.foodMode === 'label' ? '' : 'display:none'}">
+            <div class="upload-area" id="label-upload-area" onclick="document.getElementById('label-file-input').click()">
+              <div id="label-upload-inner">
+                <div class="upload-icon">🏷️</div>
+                <div class="upload-text">Snap or upload nutrition label</div>
+                <div class="upload-hint">the white nutrition facts panel</div>
+              </div>
+            </div>
+            <input type="file" id="label-file-input" accept="image/*" style="display:none" />
+          </div>
+
+          <!-- Manual food search -->
+          <div id="food-panel-search" style="${state.foodMode === 'search' ? '' : 'display:none'}">
+            <input class="link-input" id="food-search-input"
+              placeholder="e.g. RXBAR Chocolate Sea Salt, greek yogurt 150g, Quest bar..."
+              style="margin-bottom:6px" />
+            <div style="font-size:11px;color:var(--text3)">AI looks up the exact nutrition facts for the product or food you describe</div>
+          </div>
         </div>
         <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px">
           <textarea id="meal-name-input" placeholder="Meal name (optional)..." rows="1" style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:'DM Sans',sans-serif;resize:none;outline:none;"></textarea>
@@ -346,6 +405,10 @@ function renderDashboard(container) {
 
   updateStats()
   wireFileInput()
+  if (state.currentMode === 'food') {
+    if (state.foodMode === 'label') wireLabelFileInput()
+    if (state.foodMode === 'barcode') wireBarcodeInput()
+  }
 
   // Restore image preview if exists
   if (state.imageBase64) {
@@ -1259,6 +1322,17 @@ async function doAnalyze() {
     const link = document.getElementById('link-input')?.value.trim()
     if (!dishName) { showToast('Please enter the dish name', 'error'); return null }
     return await analyzeDishBySearch(dishName, link)
+  } else if (state.currentMode === 'food') {
+    if (state.foodMode === 'search') {
+      const desc = document.getElementById('food-search-input')?.value.trim()
+      if (!desc) { showToast('Please describe the food first', 'error'); return null }
+      return await analyzeFoodItem(desc)
+    } else if (state.foodMode === 'label') {
+      if (!state.labelImageBase64) { showToast('Please upload a nutrition label photo first', 'error'); return null }
+      return await analyzeNutritionLabel(state.labelImageBase64)
+    } else {
+      showToast('Use the scan or manual barcode entry above', 'error'); return null
+    }
   }
   return null
 }
@@ -1358,7 +1432,10 @@ function showResult(r) {
     </div>` : ''
 
   document.getElementById('res-detail').innerHTML = `
+    ${r.brand ? `<span style="color:var(--text3)">Brand: </span><span>${esc(r.brand)}</span>&nbsp;&nbsp;` : ''}
+    ${r.serving_size ? `<span style="color:var(--text3)">Serving: </span><span>${esc(r.serving_size)}</span>&nbsp;&nbsp;` : ''}
     <span style="color:var(--text3)">Sugar: </span><span>${Math.round(r.sugar || 0)}g</span>
+    ${r.sodium ? `&nbsp;&nbsp;<span style="color:var(--text3)">Sodium: </span><span>${Math.round(r.sodium)}mg</span>` : ''}
     &nbsp;&nbsp;<span style="color:var(--text3)">Confidence: </span><span>${r.confidence}</span>
     ${r.notes ? `<br><span style="color:var(--text3)">Note: </span><span>${r.notes}</span>` : ''}
     ${ingredientHTML}
@@ -1449,7 +1526,125 @@ function wireGlobals() {
   window.switchMode = (mode) => {
     state.currentMode = mode
     if (mode !== 'photo') state.imageBase64 = null
+    if (mode !== 'food') state.labelImageBase64 = null
     renderPage()
+  }
+
+  window.setFoodMode = (mode) => {
+    state.foodMode = mode
+    // Show/hide panels without full re-render
+    ;['barcode','label','search'].forEach(m => {
+      const el = document.getElementById(`food-panel-${m}`)
+      if (el) el.style.display = m === mode ? '' : 'none'
+      const btn = document.getElementById(`food-btn-${m}`)
+      if (btn) btn.classList.toggle('active', m === mode)
+    })
+    if (mode === 'label') wireLabelFileInput()
+    if (mode === 'barcode') wireBarcodeInput()
+  }
+
+  // ── Barcode scanner ─────────────────────────────────────────────
+  window.startBarcodeScanner = async () => {
+    const video = document.getElementById('barcode-video')
+    const inner = document.getElementById('barcode-scanner-inner')
+    const status = document.getElementById('barcode-status')
+    if (!video) return
+
+    // Try native BarcodeDetector first (Chrome/Safari iOS 17+)
+    if ('BarcodeDetector' in window) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 } }
+        })
+        video.style.display = 'block'
+        if (inner) inner.style.display = 'none'
+        video.srcObject = stream
+        if (status) status.textContent = 'Point camera at barcode...'
+
+        const detector = new window.BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code'] })
+        state._barcodeStream = stream
+        state._barcodeInterval = setInterval(async () => {
+          try {
+            const codes = await detector.detect(video)
+            if (codes.length > 0) {
+              clearInterval(state._barcodeInterval)
+              stream.getTracks().forEach(t => t.stop())
+              video.style.display = 'none'
+              if (inner) inner.style.display = 'block'
+              const code = codes[0].rawValue
+              if (status) status.textContent = `Found: ${code} — looking up...`
+              await lookupBarcode(code)
+            }
+          } catch {}
+        }, 300)
+        return
+      } catch (err) {
+        if (status) status.textContent = 'Camera not available — type barcode below'
+        return
+      }
+    }
+    // Fallback: focus manual input
+    if (status) status.textContent = 'Barcode scanning not supported — type barcode below'
+    document.getElementById('barcode-manual-input')?.focus()
+  }
+
+  window.stopBarcodeScanner = () => {
+    clearInterval(state._barcodeInterval)
+    state._barcodeStream?.getTracks().forEach(t => t.stop())
+  }
+
+  window.lookupBarcode = async (code) => {
+    code = String(code).replace(/\D/g, '')
+    if (!code) return
+    const status = document.getElementById('barcode-status')
+    if (status) status.textContent = `Looking up ${code}...`
+    const btn = document.getElementById('analyze-btn')
+    try {
+      const res = await fetch(`/api/barcode?upc=${code}`)
+      const data = await res.json()
+      if (!data.found) {
+        if (status) status.textContent = `Not in database — try "Describe food" tab`
+        showToast('Product not found — try describing it instead', 'error')
+        return
+      }
+      if (status) status.textContent = `✓ Found: ${data.name}`
+      state.currentEntry = { ...data, ingredients: [] }
+      showResult(state.currentEntry)
+    } catch (err) {
+      if (status) status.textContent = 'Lookup failed'
+      showToast('Lookup failed: ' + err.message, 'error')
+    }
+  }
+
+  function wireBarcodeInput() {
+    const input = document.getElementById('barcode-manual-input')
+    if (!input || input._wired) return
+    input._wired = true
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') lookupBarcode(input.value)
+    })
+  }
+
+  // ── Nutrition label photo ───────────────────────────────────────
+  function wireLabelFileInput() {
+    const fi = document.getElementById('label-file-input')
+    const ua = document.getElementById('label-upload-area')
+    if (!fi || !ua || ua._wired) return
+    ua._wired = true
+    fi.addEventListener('change', e => { const f = e.target.files[0]; if (f) handleLabelFile(f) })
+    ua.addEventListener('dragover', e => { e.preventDefault(); ua.style.borderColor = 'var(--accent)' })
+    ua.addEventListener('dragleave', () => { ua.style.borderColor = '' })
+    ua.addEventListener('drop', e => { e.preventDefault(); ua.style.borderColor = ''; const f = e.dataTransfer.files[0]; if (f) handleLabelFile(f) })
+  }
+
+  function handleLabelFile(file) {
+    const reader = new FileReader()
+    reader.onload = ev => {
+      state.labelImageBase64 = ev.target.result.split(',')[1]
+      const inner = document.getElementById('label-upload-inner')
+      if (inner) inner.innerHTML = `<img src="${ev.target.result}" style="width:100%;border-radius:var(--r);max-height:180px;object-fit:contain" alt="label">`
+    }
+    reader.readAsDataURL(file)
   }
 
   window.toggleSidebar = () => {

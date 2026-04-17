@@ -205,3 +205,58 @@ Respond ONLY with a JSON object, no markdown:
   }], { max_tokens: 800 })
   return parseJSON(data)
 }
+
+export async function analyzeFoodItem(description) {
+  // For single food items — returns compact nutrition facts, no ingredient list needed
+  const data = await callProxy('food', [{
+    role: 'user',
+    content: `Nutrition facts for this single food item: "${description}"
+
+If this is a specific branded product, look up its actual nutrition label values.
+If it's a generic food, use standard USDA values.
+
+Respond ONLY with a JSON object, no markdown:
+{
+  "name": "exact product/food name",
+  "brand": "brand name or empty string",
+  "serving_size": "e.g. 1 bar (40g), 1 cup (240ml)",
+  "calories": number,
+  "protein": number,
+  "carbs": number,
+  "fat": number,
+  "fiber": number,
+  "sugar": number,
+  "sodium": number,
+  "confidence": "low|medium|high",
+  "notes": "any caveats or empty string"
+}`
+  }], { max_tokens: 600 })
+  return parseJSON(data)
+}
+
+export async function analyzeNutritionLabel(imageBase64) {
+  // Reads a nutrition facts panel photo
+  const data = await callProxy('food', [{
+    role: 'user',
+    content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
+      { type: 'text', text: `Read the nutrition facts label in this image and extract the values exactly as printed. 
+Respond ONLY with a JSON object, no markdown:
+{
+  "name": "product name if visible, else 'Food Item'",
+  "brand": "brand name if visible or empty string",
+  "serving_size": "serving size as printed",
+  "calories": number,
+  "protein": number,
+  "carbs": number,
+  "fat": number,
+  "fiber": number,
+  "sugar": number,
+  "sodium": number,
+  "confidence": "high",
+  "notes": "any values that were unclear"
+}` }
+    ]
+  }], { max_tokens: 600 })
+  return parseJSON(data)
+}
