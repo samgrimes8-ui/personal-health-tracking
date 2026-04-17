@@ -17,8 +17,8 @@ export async function getProfile(userId) {
     .from('user_profiles')
     .select('*')
     .eq('user_id', userId)
-    .single()
-  if (error && error.code !== 'PGRST116') throw error
+    .maybeSingle()
+  if (error) throw error
   return data
 }
 
@@ -41,8 +41,8 @@ export async function getGoals(userId) {
     .from('goals')
     .select('*')
     .eq('user_id', userId)
-    .single()
-  if (error && error.code !== 'PGRST116') throw error
+    .maybeSingle()
+  if (error) throw error
   return data ?? { calories: 2000, protein: 150, carbs: 200, fat: 65 }
 }
 
@@ -247,7 +247,7 @@ export async function getUsageSummary(userId) {
   startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
 
   const [profileRes, usageRes] = await Promise.all([
-    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status').eq('user_id', userId).single(),
+    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status').eq('user_id', userId).maybeSingle(),
     supabase.from('token_usage').select('cost_usd, tokens_used, feature').eq('user_id', userId).gte('created_at', startOfMonth.toISOString())
   ])
 
