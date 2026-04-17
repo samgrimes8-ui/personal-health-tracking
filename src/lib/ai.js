@@ -260,3 +260,29 @@ Respond ONLY with a JSON object, no markdown:
   }], { max_tokens: 600 })
   return parseJSON(data)
 }
+
+export async function generateRecipeInstructions(recipe) {
+  const ingredientList = (recipe.ingredients || [])
+    .map(i => `${i.amount || ''} ${i.unit || ''} ${i.name}`.trim())
+    .join('\n')
+
+  const data = await callProxy('recipe', [{
+    role: 'user',
+    content: `Write clear, step-by-step cooking instructions for this recipe.
+
+Recipe: ${recipe.name}
+${recipe.description ? `Description: ${recipe.description}` : ''}
+Servings: ${recipe.servings || 4}
+${ingredientList ? `\nIngredients:\n${ingredientList}` : ''}
+${recipe.source_url ? `\nSource: ${recipe.source_url}` : ''}
+
+Write numbered steps that are concise and easy to follow on a phone while cooking.
+Include timing, temperatures, and visual cues (e.g. "until golden brown").
+If no ingredients are provided, estimate based on the recipe name.
+
+Return ONLY the steps as a JSON array:
+{"steps": ["Step 1 text", "Step 2 text", ...], "prep_time": "X mins", "cook_time": "X mins", "tips": ["optional tip 1", ...]}`
+  }], { max_tokens: 1500 })
+
+  return parseJSON(data)
+}

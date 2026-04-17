@@ -10,7 +10,8 @@ import {
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
-  extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel
+  extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
+  generateRecipeInstructions
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -53,7 +54,8 @@ let state = {
   showCalendar: false,
   calendarMonth: null,
   // apiKey moved server-side — no longer needed in client
-  editingRecipe: null,  // recipe being edited in modal
+  editingRecipe: null,
+  recipeTab: 'ingredients', // 'ingredients' | 'instructions'  // recipe being edited in modal
 }
 
 // Safe local date string — avoids UTC timezone shift from toISOString()
@@ -1480,28 +1482,95 @@ function renderRecipeModalContent(recipe, mode = 'view') {
           </div>
         ` : ''}
 
-        <!-- Ingredients -->
+        <!-- Ingredients / Instructions toggle (view mode only) -->
+        <div style="margin-bottom:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div style="display:flex;gap:0;background:var(--bg3);border-radius:var(--r);padding:3px;border:1px solid var(--border)">
+              <button onclick="setRecipeTab('ingredients')" id="rtab-ingredients"
+                class="${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? '' : 'active'}"
+                style="padding:5px 14px;border:none;border-radius:calc(var(--r) - 2px);font-size:12px;font-family:inherit;cursor:pointer;font-weight:500;
+                  background:${(!recipe.instructions?.steps?.length || state.recipeTab !== 'instructions') ? 'var(--bg2)' : 'none'};
+                  color:${(!recipe.instructions?.steps?.length || state.recipeTab !== 'instructions') ? 'var(--text)' : 'var(--text3)'}">
+                📋 Ingredients
+              </button>
+              <button onclick="setRecipeTab('instructions')" id="rtab-instructions"
+                style="padding:5px 14px;border:none;border-radius:calc(var(--r) - 2px);font-size:12px;font-family:inherit;cursor:pointer;font-weight:500;
+                  background:${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? 'var(--bg2)' : 'none'};
+                  color:${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? 'var(--text)' : 'var(--text3)'}">
+                👨‍🍳 Instructions
+              </button>
+            </div>
+            ${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? `
+              <button onclick="downloadRecipeInstructions('${recipe.id}')"
+                style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:12px;color:var(--text2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px"
+                onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+                ⬇ Download
+              </button>` : ''}
+          </div>
+
+          ${state.recipeTab === 'instructions' ? `
+            ${!recipe.instructions?.steps?.length ? `
+              <div style="padding:20px;text-align:center;background:var(--bg3);border-radius:var(--r);border:1px dashed var(--border2)">
+                <div style="font-size:13px;color:var(--text2);margin-bottom:12px">No instructions yet</div>
+                <button onclick="generateInstructionsHandler('${recipe.id}')" id="gen-instr-btn"
+                  class="pm-analyze-btn" style="margin:0">
+                  ✨ Generate cooking instructions with AI
+                </button>
+              </div>
+            ` : `
+              ${recipe.instructions.prep_time || recipe.instructions.cook_time ? `
+                <div style="display:flex;gap:16px;margin-bottom:14px;font-size:13px;color:var(--text2)">
+                  ${recipe.instructions.prep_time ? `<span>⏱ Prep: <strong>${recipe.instructions.prep_time}</strong></span>` : ''}
+                  ${recipe.instructions.cook_time ? `<span>🔥 Cook: <strong>${recipe.instructions.cook_time}</strong></span>` : ''}
+                </div>` : ''}
+              <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:12px">
+                ${(recipe.instructions.steps || []).map((step, i) => `
+                  <li style="font-size:14px;color:var(--text);line-height:1.55;padding-left:4px">${esc(step)}</li>
+                `).join('')}
+              </ol>
+              ${recipe.instructions.tips?.length ? `
+                <div style="margin-top:16px;padding:12px;background:rgba(232,197,71,0.06);border-radius:var(--r);border:1px solid rgba(232,197,71,0.15)">
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:8px">Tips</div>
+                  ${recipe.instructions.tips.map(t => `<div style="font-size:13px;color:var(--text2);margin-bottom:4px">• ${esc(t)}</div>`).join('')}
+                </div>` : ''}
+              <button onclick="generateInstructionsHandler('${recipe.id}')" id="gen-instr-btn"
+                style="margin-top:14px;background:none;border:1px solid var(--border);border-radius:var(--r);padding:6px 12px;font-size:12px;color:var(--text3);cursor:pointer;font-family:inherit;width:100%"
+                onmouseover="this.style.color='var(--carbs)'" onmouseout="this.style.color='var(--text3)'">
+                ✨ Regenerate instructions
+              </button>
+            `}
+          ` : `
+            <div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+              ${!ingredients.length ? `
+                <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3)">
+                  No ingredients yet.
+                </div>
+              ` : ingredients.map((ing, i) => renderIngredientRow(ing, i, false)).join('')}
+            </div>
+          `}
+        </div>
+
+        <!-- Ingredients (edit mode) -->
+        ${mode === 'edit' || isNew ? `
         <div style="margin-bottom:20px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
             <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">
               Ingredients ${ingredients.length ? `(${ingredients.length})` : ''}
             </div>
             <div style="display:flex;gap:8px">
-              ${mode === 'edit' || isNew ? `<button class="clear-btn" style="color:var(--accent)" onclick="addIngredientRow()">+ Add</button>` : ''}
+              <button class="clear-btn" style="color:var(--accent)" onclick="addIngredientRow()">+ Add</button>
               <button class="clear-btn" style="color:var(--carbs)" onclick="fetchIngredients('${recipe.id || ''}')">✨ AI extract</button>
             </div>
           </div>
           <div id="ingredient-list" style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
             ${!ingredients.length ? `
               <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3)">
-                No ingredients yet.
-                ${mode === 'edit' || isNew ? 'Add manually or click <b style="color:var(--carbs)">AI extract</b> to auto-fill.' : ''}
+                No ingredients yet. Add manually or click <b style="color:var(--carbs)">AI extract</b> to auto-fill.
               </div>
-            ` : ingredients.map((ing, i) => renderIngredientRow(ing, i, mode === 'edit' || isNew)).join('')}
+            ` : ingredients.map((ing, i) => renderIngredientRow(ing, i, true)).join('')}
           </div>
         </div>
-
-        <!-- Recalculate (edit only) -->
+        ` : ''}
         ${(mode === 'edit' || isNew) && ingredients.length ? `
           <div style="margin-bottom:20px">
             <button class="pm-analyze-btn" id="recalc-btn" onclick="recalculateMacrosHandler()">
@@ -2799,7 +2868,108 @@ function wireGlobals() {
     document.getElementById('recipe-modal').classList.add('open')
   }
 
+  window.setRecipeTab = (tab) => {
+    state.recipeTab = tab
+    const content = document.getElementById('recipe-modal-content')
+    if (content && state.editingRecipe) {
+      content.innerHTML = renderRecipeModalContent(state.editingRecipe, 'view')
+    }
+  }
+
+  window.generateInstructionsHandler = async (recipeId) => {
+    const btn = document.getElementById('gen-instr-btn')
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="analyzing-spinner"></span> Generating...' }
+    try {
+      const recipe = state.recipes.find(r => r.id === recipeId)
+      if (!recipe) return
+      const result = await generateRecipeInstructions(recipe)
+      // Save to recipe
+      recipe.instructions = result
+      state.editingRecipe = { ...state.editingRecipe, instructions: result }
+      await upsertRecipe(state.user.id, { ...recipe, instructions: result })
+      state.recipeTab = 'instructions'
+      document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'view')
+      showToast('Instructions generated!', 'success')
+    } catch (err) {
+      showToast('Failed: ' + err.message, 'error')
+      if (btn) { btn.disabled = false; btn.textContent = '✨ Generate cooking instructions with AI' }
+    }
+  }
+
+  window.downloadRecipeInstructions = (recipeId) => {
+    const recipe = state.recipes.find(r => r.id === recipeId)
+    if (!recipe?.instructions?.steps?.length) return
+
+    const ingredients = (recipe.ingredients || [])
+      .map(i => `<li>${i.amount || ''} ${i.unit || ''} ${i.name}`.trim() + '</li>')
+      .join('')
+
+    const steps = recipe.instructions.steps
+      .map((s, i) => `<li><strong>${i + 1}.</strong> ${s}</li>`)
+      .join('')
+
+    const tips = recipe.instructions.tips?.length
+      ? `<div class="tips"><h3>💡 Tips</h3><ul>${recipe.instructions.tips.map(t => `<li>${t}</li>`).join('')}</ul></div>`
+      : ''
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${recipe.name}</title>
+<style>
+  body { font-family: Georgia, serif; max-width: 680px; margin: 40px auto; padding: 0 24px; color: #222; line-height: 1.6; }
+  h1 { font-size: 28px; margin-bottom: 4px; }
+  .desc { color: #666; font-style: italic; margin-bottom: 16px; }
+  .meta { display: flex; gap: 24px; background: #f9f9f9; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; font-size: 14px; }
+  .meta span { color: #555; }
+  .meta strong { color: #222; }
+  .macros { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .macro { background: #f0f0f0; border-radius: 20px; padding: 4px 14px; font-size: 13px; font-weight: 600; }
+  h2 { font-size: 18px; border-bottom: 2px solid #eee; padding-bottom: 6px; margin-top: 28px; }
+  ul, ol { padding-left: 20px; }
+  li { margin-bottom: 8px; font-size: 15px; }
+  ol li { margin-bottom: 14px; line-height: 1.65; }
+  .tips { background: #fffbeb; border: 1px solid #f0d060; border-radius: 8px; padding: 14px 18px; margin-top: 24px; }
+  .tips h3 { margin: 0 0 8px; font-size: 15px; }
+  .source { margin-top: 28px; font-size: 13px; color: #888; }
+  a { color: #b8860b; }
+  @media print { body { margin: 20px; } }
+</style>
+</head>
+<body>
+  <h1>${recipe.name}</h1>
+  ${recipe.description ? `<div class="desc">${recipe.description}</div>` : ''}
+  <div class="meta">
+    <span><strong>${recipe.servings || 1}</strong> servings</span>
+    ${recipe.instructions.prep_time ? `<span>⏱ Prep: <strong>${recipe.instructions.prep_time}</strong></span>` : ''}
+    ${recipe.instructions.cook_time ? `<span>🔥 Cook: <strong>${recipe.instructions.cook_time}</strong></span>` : ''}
+  </div>
+  <div class="macros">
+    <span class="macro">${Math.round(recipe.calories)} kcal</span>
+    <span class="macro">${Math.round(recipe.protein)}g protein</span>
+    <span class="macro">${Math.round(recipe.carbs)}g carbs</span>
+    <span class="macro">${Math.round(recipe.fat)}g fat</span>
+  </div>
+  ${ingredients ? `<h2>Ingredients</h2><ul>${ingredients}</ul>` : ''}
+  <h2>Instructions</h2>
+  <ol>${steps}</ol>
+  ${tips}
+  ${recipe.source_url ? `<div class="source">Source: <a href="${recipe.source_url}">${recipe.source_url}</a></div>` : ''}
+</body>
+</html>`
+
+    const blob = new Blob([html], { type: 'text/html' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${recipe.name.replace(/[^a-z0-9]/gi, '_')}_recipe.html`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    showToast('Recipe downloaded — open in browser and Print → Save as PDF', 'success')
+  }
+
   window.openRecipeModal = (id, mode = 'view') => {
+    state.recipeTab = 'ingredients'
     const recipe = state.recipes.find(r => r.id === id)
     if (!recipe) return
     state.editingRecipe = JSON.parse(JSON.stringify(recipe))
