@@ -286,7 +286,7 @@ function renderDashboard(container) {
         </div>
       </div>
 
-      <div class="result-card" id="result-card">
+      <div class="result-card" id="result-card" style="${state.currentEntry ? '' : 'display:none'}">
         <div id="result-content" style="display:flex;flex-direction:column;gap:14px">
           <div class="result-name" id="res-name" style="color:var(--text3);font-family:inherit;font-size:15px">Results will appear here after analysis</div>
           <div class="result-desc" id="res-desc"></div>
@@ -1312,8 +1312,10 @@ function updateStats() {
 }
 
 function showResult(r) {
+  const card = document.getElementById('result-card')
   const content = document.getElementById('result-content')
   if (!content) return
+  if (card) card.style.display = ''
   content.style.display = 'flex'
   document.getElementById('res-name').textContent = r.name
   document.getElementById('res-name').style.color = 'var(--text)'
