@@ -55,6 +55,1578 @@ let state = {
   calendarMonth: null,
   // apiKey moved server-side — no longer needed in client
   editingRecipe: null,
+  recipeTab: 'ingredients',
+  recipeServings: null,
+}
+
+// Safe local date string — avoids UTC timezone shift from toISOString()
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+function getWeekStart() {
+  const d = new Date()
+  d.setDate(d.getDate() - d.getDay())
+  return localDateStr(d)
+}
+
+let _appInitialized = false
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+export async function initApp(user, container) {
+  state.user = user
+  try {
+    await Promise.race([
+      loadAll(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Load timeout')), 12000))
+    ])
+  } catch (err) {
+    console.warn('loadAll failed or timed out:', err.message)
+    // Set safe defaults so the app still renders
+    state.goals = state.goals || { calories: 2000, protein: 150, carbs: 200, fat: 65 }
+    state.log = state.log || []
+    state.recipes = state.recipes || []
+    state.foodItems = state.foodItems || []
+    state.weeksWithMeals = state.weeksWithMeals || []
+  }
+  if (!_appInitialized) {
+    renderShell(container)
+    wireGlobals()
+    _appInitialized = true
+  }
+  renderPage()
+}
+
+async function loadAll() {
+  const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
+
+  const [goals, log, usage, recipes, weeksWithMeals, foodItems] = await Promise.all([
+    safe(() => getGoals(state.user.id)),
+    safe(() => getMealLog(state.user.id, { limit: 300 })),
+    safe(() => getUsageSummary(state.user.id)),
+    safe(() => getRecipes(state.user.id)),
+    safe(() => getWeeksWithMeals(state.user.id)),
+    safe(() => getFoodItems(state.user.id))
+  ])
+  state.goals = { calories: goals?.calories ?? 2000, protein: goals?.protein ?? 150, carbs: goals?.carbs ?? 200, fat: goals?.fat ?? 65 }
+  state.log = log ?? []
+  state.usage = usage
+  state.recipes = recipes ?? []
+  state.weeksWithMeals = weeksWithMeals ?? []
+  state.foodItems = foodItems ?? []
+}
+
+// ─── Shell HTML ──────────────────────────────────────────────────────────────
+function renderShell(container) {
+  container.innerHTML = `
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+    <button class="hamburger" onclick="toggleSidebar()"><span></span><span></span><span></span></button>
+
+    <div class="app">
+      <aside class="sidebar" id="sidebar">
+        <div class="logo">
+          <div class="logo-text">MacroLens</div>
+          <div class="logo-sub">AI nutrition tracker</div>
+        </div>
+        <nav class="nav">
+          <div class="nav-item ${state.currentPage === 'log' ? 'active' : ''}" id="nav-log" onclick="switchPage('log')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            Dashboard
+          </div>
+          <div class="nav-item ${state.currentPage === 'planner' ? 'active' : ''}" id="nav-planner" onclick="switchPage('planner')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Meal Planner
+          </div>
+          <div class="nav-item ${state.currentPage === 'history' ? 'active' : ''}" id="nav-history" onclick="switchPage('history')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            History
+          </div>
+          <div class="nav-item ${state.currentPage === 'goals' ? 'active' : ''}" id="nav-goals" onclick="switchPage('goals')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            Goals
+          </div>
+          <div class="nav-item ${state.currentPage === 'recipes' ? 'active' : ''}" id="nav-recipes" onclick="switchPage('recipes')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            Recipes
+          </div>
+          <div class="nav-item ${state.currentPage === 'foods' ? 'active' : ''}" id="nav-foods" onclick="switchPage('foods')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            Foods
+          </div>
+          <div class="nav-item ${state.currentPage === 'account' ? 'active' : ''}" id="nav-account" onclick="switchPage('account')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            Account
+          </div>
+        </nav>
+        <div class="goal-widget">
+          <div class="goal-title">Today's progress</div>
+          <div class="goal-row"><span class="goal-label">Calories</span><span class="goal-nums" id="sb-cal">—</span></div>
+          <div class="goal-bar"><div class="goal-fill" id="sb-cal-bar" style="background:var(--cal);width:0%"></div></div>
+          <div class="goal-row"><span class="goal-label">Protein</span><span class="goal-nums" id="sb-p">—</span></div>
+          <div class="goal-bar"><div class="goal-fill" id="sb-p-bar" style="background:var(--protein);width:0%"></div></div>
+          <div class="goal-row"><span class="goal-label">Carbs</span><span class="goal-nums" id="sb-c">—</span></div>
+          <div class="goal-bar"><div class="goal-fill" id="sb-c-bar" style="background:var(--carbs);width:0%"></div></div>
+          <div class="goal-row"><span class="goal-label">Fat</span><span class="goal-nums" id="sb-f">—</span></div>
+          <div class="goal-bar"><div class="goal-fill" id="sb-f-bar" style="background:var(--fat);width:0%"></div></div>
+        </div>
+      </aside>
+
+      <main class="main" id="main-content"></main>
+    </div>
+
+    <!-- Modals -->
+    <div class="modal-overlay" id="edit-modal">
+      <div class="modal-box">
+        <button class="modal-close" onclick="closeEditModal()">×</button>
+        <h3>Edit meal</h3>
+        <div class="modal-field"><label>Meal name</label><input type="text" id="edit-name" /></div>
+
+        <!-- Servings multiplier -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
+          <label style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;white-space:nowrap">Servings eaten</label>
+          <input type="number" id="edit-servings" min="0.25" max="20" step="0.25" value="1"
+            oninput="applyServingsMultiplier()"
+            style="width:70px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:6px 10px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;text-align:center" />
+          <span style="font-size:12px;color:var(--text3)">Macros below update automatically</span>
+        </div>
+
+        <div class="modal-grid">
+          <div class="modal-field"><label>Calories</label><input type="number" id="edit-cal" /></div>
+          <div class="modal-field"><label>Protein (g)</label><input type="number" id="edit-protein" /></div>
+          <div class="modal-field"><label>Carbs (g)</label><input type="number" id="edit-carbs" /></div>
+          <div class="modal-field"><label>Fat (g)</label><input type="number" id="edit-fat" /></div>
+          <div class="modal-field"><label>Fiber (g)</label><input type="number" id="edit-fiber" /></div>
+          <div class="modal-field"><label>Sugar (g)</label><input type="number" id="edit-sugar" /></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-delete" onclick="deleteEditEntry()">Delete</button>
+          <button class="btn-cancel" onclick="closeEditModal()">Cancel</button>
+          <button class="btn-save" onclick="saveEditEntry()">Save changes</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="planner-modal">
+      <div class="planner-modal">
+        <button class="modal-close" onclick="closePlannerModal()">×</button>
+        <h3 id="planner-modal-title">Add meal</h3>
+        <div class="pm-tabs">
+          <button class="pm-tab active" id="pm-tab-history" onclick="switchPlannerTab('history')">📋 History</button>
+          <button class="pm-tab" id="pm-tab-ai" onclick="switchPlannerTab('ai')">✨ Describe</button>
+          <button class="pm-tab" id="pm-tab-photo" onclick="switchPlannerTab('photo')">📸 Photo</button>
+        </div>
+        <div class="pm-panel active" id="pm-panel-history">
+          <input class="planner-search" id="planner-search" placeholder="Search recipes and meal history..." oninput="filterPlannerList()" />
+          <div class="history-pick-list" id="history-pick-list"></div>
+        </div>
+        <div class="pm-panel" id="pm-panel-ai">
+          <textarea class="pm-textarea" id="pm-ai-input" placeholder="Describe the meal or recipe...&#10;&#10;e.g. Skillet chicken cacciatore with pasta&#10;e.g. 200g grilled salmon, 1 cup quinoa, roasted broccoli"></textarea>
+          <button class="pm-analyze-btn" id="pm-analyze-btn" onclick="analyzePlannerMealHandler()">Analyze with AI</button>
+          <div class="pm-result" id="pm-result">
+            <div class="pm-result-name" id="pm-result-name"></div>
+            <div class="pm-result-pills" id="pm-result-pills"></div>
+            <button class="pm-add-btn" onclick="addAiMealToPlannerHandler()">+ Add to planner</button>
+          </div>
+        </div>
+        <div class="pm-panel" id="pm-panel-photo">
+          <div class="pm-upload-area" id="pm-upload-area" onclick="document.getElementById('pm-file-input').click()">
+            <div id="pm-upload-inner">
+              <div style="font-size:28px;margin-bottom:6px">📸</div>
+              <div style="font-size:13px;color:var(--text2)">Tap to upload a photo or screenshot</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:3px">recipe card, screenshot, food photo</div>
+            </div>
+          </div>
+          <input type="file" id="pm-file-input" accept="image/*" style="display:none" />
+          <button class="pm-analyze-btn" id="pm-photo-analyze-btn" onclick="analyzePlannerPhotoHandler()" style="display:none">Analyze photo with AI</button>
+          <div class="pm-result" id="pm-photo-result">
+            <div class="pm-result-name" id="pm-photo-result-name"></div>
+            <div class="pm-result-pills" id="pm-photo-result-pills"></div>
+            <button class="pm-add-btn" onclick="addPhotoMealToPlannerHandler()">+ Add to planner</button>
+          </div>
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <label class="leftover-toggle">
+            <input type="checkbox" id="leftover-check" onchange="toggleLeftoverPreview(this.checked)" />
+            Also add as next-day lunch (leftovers)
+          </label>
+          <div id="leftover-preview" style="display:none;margin-top:8px;font-size:12px;color:var(--carbs);padding:6px 10px;background:rgba(122,180,232,0.08);border-radius:var(--r);border:1px solid rgba(122,180,232,0.2)">
+            Will also be added to <span id="leftover-day-label">Monday</span> as lunch
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Food item modal -->
+    <div class="modal-overlay" id="food-item-modal">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);width:100%;max-width:520px;max-height:90vh;overflow-y:auto;position:relative">
+        <div id="food-item-modal-content"></div>
+      </div>
+    </div>
+
+    <!-- Plan recipe modal -->
+    <div class="modal-overlay" id="plan-recipe-modal">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:0;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;position:relative">
+        <div id="plan-recipe-modal-content"></div>
+      </div>
+    </div>
+
+    <!-- Recipe modal (persists across pages) -->
+    <div class="modal-overlay" id="recipe-modal">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:0;width:100%;max-width:620px;max-height:90vh;overflow-y:auto;position:relative">
+        <div id="recipe-modal-content"></div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  `
+  updateSidebar()
+}
+
+// ─── Page Routing ─────────────────────────────────────────────────────────────
+function renderPage() {
+  const main = document.getElementById('main-content')
+  switch (state.currentPage) {
+    case 'log':      renderDashboard(main); break
+    case 'planner':  renderPlanner(main); break
+    case 'history':  renderHistory(main); break
+    case 'goals':    renderGoalsPage(main); break
+    case 'recipes':  renderRecipesPage(main); break
+    case 'foods':    renderFoodsPage(main); break
+    case 'account':  renderAccount(main); break
+  }
+  updateSidebar()
+}
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+function renderDashboard(container) {
+  const h = new Date().getHours()
+  const greeting = h < 12 ? 'Good morning.' : h < 17 ? 'Good afternoon.' : 'Good evening.'
+  const todayLog = getTodayLog()
+
+  container.innerHTML = `
+    <div class="greeting">${greeting}</div>
+    <div class="greeting-sub">Log your meals and track your macros.</div>
+
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-label">Calories</div><div class="stat-val" style="color:var(--cal)" id="stat-cal">0</div><div class="stat-sub">of <span id="stat-cal-goal">${state.goals.calories}</span> kcal</div></div>
+      <div class="stat-card"><div class="stat-label">Protein</div><div class="stat-val" style="color:var(--protein)" id="stat-p">0g</div><div class="stat-sub">of <span id="stat-p-goal">${state.goals.protein}</span>g</div></div>
+      <div class="stat-card"><div class="stat-label">Carbs</div><div class="stat-val" style="color:var(--carbs)" id="stat-c">0g</div><div class="stat-sub">of <span id="stat-c-goal">${state.goals.carbs}</span>g</div></div>
+      <div class="stat-card"><div class="stat-label">Fat</div><div class="stat-val" style="color:var(--fat)" id="stat-f">0g</div><div class="stat-sub">of <span id="stat-f-goal">${state.goals.fat}</span>g</div></div>
+    </div>
+
+    <!-- Quick log — above analyze -->
+    <div class="log-card" style="margin-bottom:16px">
+      <div class="log-header">
+        <span class="log-header-title">Quick log</span>
+        <span style="font-size:11px;color:var(--text3)">from recipes & history</span>
+      </div>
+      <div style="padding:12px 16px">
+        <input class="planner-search" id="quick-log-search" placeholder="Search meals and recipes to log..."
+          oninput="filterQuickLog()" style="margin-bottom:8px" />
+        <div id="quick-log-list"></div>
+      </div>
+    </div>
+
+    <!-- Analyze food -->
+    <div class="two-col">
+      <div class="upload-card">
+        <div class="section-title">Analyze food</div>
+        <div class="mode-tabs">
+          <button class="mode-tab ${state.currentMode === 'food' ? 'active' : ''}" data-mode="food" onclick="switchMode('food')">🍎 Food</button>
+          <button class="mode-tab ${state.currentMode === 'recipe' ? 'active' : ''}" data-mode="recipe" onclick="switchMode('recipe')">📝 Recipe</button>
+          <button class="mode-tab ${state.currentMode === 'photo' ? 'active' : ''}" data-mode="photo" onclick="switchMode('photo')">📸 Photo</button>
+          <button class="mode-tab ${state.currentMode === 'link' ? 'active' : ''}" data-mode="link" onclick="switchMode('link')">🔍 Search</button>
+        </div>
+        <div class="mode-panel ${state.currentMode === 'recipe' ? 'active' : ''}" id="mode-recipe">
+          <textarea class="recipe-textarea" id="recipe-input" placeholder="Describe your recipe or paste ingredients...&#10;&#10;e.g. Grilled chicken breast 200g, brown rice 1 cup, olive oil 1 tbsp"></textarea>
+        </div>
+        <div class="mode-panel ${state.currentMode === 'photo' ? 'active' : ''}" id="mode-photo">
+          <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
+            <div id="upload-inner"><div class="upload-icon">📸</div><div class="upload-text">Drop a photo of your food</div><div class="upload-hint">supports jpg, png, webp</div></div>
+          </div>
+          <input type="file" id="file-input" accept="image/*" style="display:none" />
+        </div>
+        <div class="mode-panel ${state.currentMode === 'link' ? 'active' : ''}" id="mode-link">
+          <input class="link-input" type="url" id="link-input" placeholder="Paste URL (optional)..." style="margin-bottom:8px" />
+          <textarea class="recipe-textarea" id="dish-name-input" rows="2" placeholder="What's the dish? (required)&#10;e.g. Skillet chicken cacciatore..."></textarea>
+          <div class="link-note">Instagram/TikTok are private — AI searches the web for the recipe by dish name.</div>
+        </div>
+        <div class="mode-panel ${state.currentMode === 'food' ? 'active' : ''}" id="mode-food">
+          <!-- Three sub-options for single food items -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+            <button class="food-sub-btn ${state.foodMode === 'barcode' ? 'active' : ''}"
+              onclick="setFoodMode('barcode')" id="food-btn-barcode">
+              <span style="font-size:20px;display:block;margin-bottom:3px">📷</span>
+              <span style="font-size:11px">Scan barcode</span>
+            </button>
+            <button class="food-sub-btn ${state.foodMode === 'label' ? 'active' : ''}"
+              onclick="setFoodMode('label')" id="food-btn-label">
+              <span style="font-size:20px;display:block;margin-bottom:3px">🏷️</span>
+              <span style="font-size:11px">Snap label</span>
+            </button>
+            <button class="food-sub-btn ${state.foodMode === 'search' ? 'active' : ''}"
+              onclick="setFoodMode('search')" id="food-btn-search">
+              <span style="font-size:20px;display:block;margin-bottom:3px">🔤</span>
+              <span style="font-size:11px">Describe food</span>
+            </button>
+          </div>
+
+          <!-- Barcode scanner -->
+          <div id="food-panel-barcode" style="${state.foodMode !== 'barcode' ? 'display:none' : ''}">
+            <!-- Tap area opens camera on iOS via file input capture -->
+            <div id="barcode-scanner-area" style="border:1.5px dashed var(--border2);border-radius:var(--r);overflow:hidden;position:relative;background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;cursor:pointer"
+              onclick="document.getElementById('barcode-file-input').click()">
+              <div id="barcode-scanner-inner" style="text-align:center;padding:20px">
+                <div style="font-size:28px;margin-bottom:6px">📷</div>
+                <div style="font-size:13px;color:var(--text2)">Tap to scan barcode</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:3px">Opens camera — point at barcode</div>
+              </div>
+              <video id="barcode-video" style="display:none;width:100%;border-radius:var(--r)" autoplay playsinline muted></video>
+            </div>
+            <input type="file" id="barcode-file-input" accept="image/*" capture="environment" style="display:none"
+              onchange="handleBarcodeImage(this.files[0])" />
+            <div id="barcode-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center;min-height:18px"></div>
+            <input id="barcode-manual-input" class="link-input" placeholder="Or type barcode number..." style="margin-top:6px"
+              onkeydown="if(event.key==='Enter')lookupBarcode(this.value)" />
+          </div>
+
+          <!-- Label photo -->
+          <div id="food-panel-label" style="${state.foodMode === 'label' ? '' : 'display:none'}">
+            <div class="upload-area" id="label-upload-area" onclick="document.getElementById('label-file-input').click()">
+              <div id="label-upload-inner">
+                <div class="upload-icon">🏷️</div>
+                <div class="upload-text">Snap or upload nutrition label</div>
+                <div class="upload-hint">the white nutrition facts panel</div>
+              </div>
+            </div>
+            <input type="file" id="label-file-input" accept="image/*" style="display:none" />
+          </div>
+
+          <!-- Manual food search -->
+          <div id="food-panel-search" style="${state.foodMode === 'search' ? '' : 'display:none'}">
+            <input class="link-input" id="food-search-input"
+              placeholder="e.g. RXBAR Chocolate Sea Salt, greek yogurt 150g, Quest bar..."
+              style="margin-bottom:6px" />
+            <div style="font-size:11px;color:var(--text3)">AI looks up the exact nutrition facts for the product or food you describe</div>
+          </div>
+        </div>
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px">
+          <textarea id="meal-name-input" placeholder="Meal name (optional)..." rows="1" style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:'DM Sans',sans-serif;resize:none;outline:none;"></textarea>
+          <button class="analyze-btn" id="analyze-btn" onclick="analyzeFoodHandler()">Analyze with AI</button>
+        </div>
+      </div>
+
+      <div class="result-card" id="result-card" style="${state.currentEntry ? '' : 'display:none'}">
+        <div id="result-content" style="display:flex;flex-direction:column;gap:14px">
+          <div class="result-name" id="res-name" style="color:var(--text3);font-family:inherit;font-size:15px">Results will appear here after analysis</div>
+          <div class="result-desc" id="res-desc"></div>
+          <div class="macro-pills" id="res-pills"></div>
+          <div class="nutrition-detail" id="res-detail"></div>
+          <button class="log-btn" id="log-entry-btn" onclick="logCurrentEntryHandler()" style="display:none">+ Log this meal</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-row">
+      <div class="chart-card">
+        <div class="chart-title">Macro breakdown today</div>
+        <div class="donut-wrap">
+          <svg width="120" height="120" viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="50" fill="none" stroke="var(--bg4)" stroke-width="18"/>
+            <circle id="d-protein" cx="60" cy="60" r="50" fill="none" stroke="var(--protein)" stroke-width="18" stroke-dasharray="0 314" stroke-linecap="round" transform="rotate(-90 60 60)" style="transition:stroke-dasharray 0.7s"/>
+            <circle id="d-carbs" cx="60" cy="60" r="50" fill="none" stroke="var(--carbs)" stroke-width="18" stroke-dasharray="0 314" stroke-linecap="round" transform="rotate(-90 60 60)" style="transition:stroke-dasharray 0.7s"/>
+            <circle id="d-fat" cx="60" cy="60" r="50" fill="none" stroke="var(--fat)" stroke-width="18" stroke-dasharray="0 314" stroke-linecap="round" transform="rotate(-90 60 60)" style="transition:stroke-dasharray 0.7s"/>
+            <text x="60" y="56" text-anchor="middle" font-size="14" font-weight="600" fill="var(--text)" id="donut-cal">0</text>
+            <text x="60" y="70" text-anchor="middle" font-size="10" fill="var(--text3)">kcal</text>
+          </svg>
+          <div class="donut-legend">
+            <div class="legend-row"><div class="legend-dot" style="background:var(--protein)"></div><span class="legend-label">Protein</span><span class="legend-pct" id="leg-p">0%</span></div>
+            <div class="legend-row"><div class="legend-dot" style="background:var(--carbs)"></div><span class="legend-label">Carbs</span><span class="legend-pct" id="leg-c">0%</span></div>
+            <div class="legend-row"><div class="legend-dot" style="background:var(--fat)"></div><span class="legend-label">Fat</span><span class="legend-pct" id="leg-f">0%</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Goal progress</div>
+        <div class="bar-chart">
+          <div><div class="bar-row-label"><span class="bar-label">Calories</span><span class="bar-val" id="bar-cal-val">—</span></div><div class="bar-bg"><div class="bar-fill" id="bar-cal" style="background:var(--cal);width:0%"></div></div></div>
+          <div><div class="bar-row-label"><span class="bar-label">Protein</span><span class="bar-val" id="bar-p-val">—</span></div><div class="bar-bg"><div class="bar-fill" id="bar-p" style="background:var(--protein);width:0%"></div></div></div>
+          <div><div class="bar-row-label"><span class="bar-label">Carbs</span><span class="bar-val" id="bar-c-val">—</span></div><div class="bar-bg"><div class="bar-fill" id="bar-c" style="background:var(--carbs);width:0%"></div></div></div>
+          <div><div class="bar-row-label"><span class="bar-label">Fat</span><span class="bar-val" id="bar-f-val">—</span></div><div class="bar-bg"><div class="bar-fill" id="bar-f" style="background:var(--fat);width:0%"></div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="log-card">
+      <div class="log-header"><span class="log-header-title">Today's log</span><button class="clear-btn" onclick="clearTodayLog()">Clear today</button></div>
+      <div id="today-log-body">${renderLogTable(todayLog, true)}</div>
+    </div>
+  `
+
+  updateStats()
+  wireFileInput()
+  if (state.currentMode === 'food') {
+    if (state.foodMode === 'label') wireLabelFileInput()
+    if (state.foodMode === 'barcode') wireBarcodeInput()
+  }
+
+  // Restore image preview if exists
+  if (state.imageBase64) {
+    const inner = document.getElementById('upload-inner')
+    if (inner) inner.innerHTML = `<img src="data:image/jpeg;base64,${state.imageBase64}" class="preview-img" alt="preview">`
+  }
+  // Restore result if exists
+  if (state.currentEntry) {
+    showResult(state.currentEntry)
+  }
+}
+
+// ─── History ──────────────────────────────────────────────────────────────────
+function renderHistory(container) {
+  container.innerHTML = `
+    <div class="greeting">History</div>
+    <div class="greeting-sub">All logged meals. Click any row to edit.</div>
+    <div class="log-card">
+      <div class="log-header"><span class="log-header-title">All entries</span></div>
+      ${renderLogTable(state.log, false)}
+    </div>
+  `
+}
+
+function renderLogTable(entries, isToday) {
+  if (!entries.length) return `<div class="log-empty">${isToday ? 'No entries yet. Analyze a meal to get started.' : 'No history yet.'}</div>`
+  return `
+    <table class="log-table">
+      <thead><tr><th>Meal</th><th>${isToday ? 'Time' : 'Date'}</th><th>Calories</th><th>Protein</th><th>Carbs</th><th>Fat</th><th></th></tr></thead>
+      <tbody>
+        ${entries.map(e => {
+          const d = new Date(e.logged_at || e.timestamp)
+          const timeStr = isToday
+            ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+          return `<tr style="cursor:pointer" onclick="openEditModal('${e.id}', 'log')">
+            <td class="td-name">${esc(e.name)}${e.servings_consumed && e.servings_consumed != 1 ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">×${e.servings_consumed}</span>` : ''}</td>
+            <td class="td-time">${timeStr}</td>
+            <td class="td-cal">${Math.round(e.calories)}</td>
+            <td class="td-p">${Math.round(e.protein)}g</td>
+            <td class="td-c">${Math.round(e.carbs)}g</td>
+            <td class="td-f">${Math.round(e.fat)}g</td>
+            <td><button class="td-act" title="Edit" onclick="openEditModal('${e.id}', 'log');event.stopPropagation()">✎</button></td>
+          </tr>`
+        }).join('')}
+      </tbody>
+    </table>
+  `
+}
+
+// ─── Planner ──────────────────────────────────────────────────────────────────
+async function renderPlanner(container) {
+  if (typeof container === 'undefined') container = document.getElementById('main-content')
+  console.log('[planner] rendering weekStart:', state.weekStart)
+  const planner = await getPlannerWeek(state.user.id, state.weekStart)
+  state.planner = planner
+
+  // Ensure current week is in the weeksWithMeals list if it has meals
+  const hasMealsThisWeek = planner.meals.some(d => d.length > 0)
+  if (hasMealsThisWeek && !state.weeksWithMeals.includes(state.weekStart)) {
+    state.weeksWithMeals = [state.weekStart, ...state.weeksWithMeals].sort().reverse()
+  }
+
+  const allMeals = planner.meals.flat()
+  const isCurrentWeek = state.weekStart === getWeekStart()
+
+  container.innerHTML = `
+    <div class="greeting">Meal Planner</div>
+
+    <!-- Week navigation bar -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+      <button class="td-act" onclick="shiftWeek(-1)" style="font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)">‹</button>
+
+      <button onclick="toggleCalendar()" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px 14px;color:var(--text);font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+        <span style="font-size:14px;font-weight:500">${formatWeekLabel(state.weekStart)}</span>
+        <span style="font-size:11px;color:var(--text3)">${isCurrentWeek ? 'This week' : ''} 📅</span>
+      </button>
+
+      <button class="td-act" onclick="shiftWeek(1)" style="font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)">›</button>
+
+      ${!isCurrentWeek ? `<button onclick="jumpToToday()" style="background:rgba(232,197,71,0.12);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:6px 12px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap">Today</button>` : ''}
+    </div>
+
+    <!-- Calendar picker -->
+    ${state.showCalendar ? renderCalendarPicker() : ''}
+
+    <!-- Planner / Grocery tabs -->
+    <div style="display:flex;gap:4px;margin-bottom:20px;margin-top:16px">
+      <button class="mode-tab ${state.plannerView !== 'grocery' ? 'active' : ''}" onclick="setPlannerView('meals')" style="flex:0 0 auto;padding:8px 18px">📅 Meal plan</button>
+      <button class="mode-tab ${state.plannerView === 'grocery' ? 'active' : ''}" onclick="setPlannerView('grocery')" style="flex:0 0 auto;padding:8px 18px">🛒 Grocery list</button>
+    </div>
+
+    ${state.plannerView === 'grocery' ? '<div id="grocery-placeholder"><div class="log-empty">Loading grocery list...</div></div>' : renderMealPlanView(planner)}
+  `
+
+  // Async: inject grocery list after shell renders
+  if (state.plannerView === 'grocery') {
+    const groceryEl = await renderGroceryList(allMeals, planner)
+    const placeholder = document.getElementById('grocery-placeholder')
+    if (placeholder) placeholder.replaceWith(groceryEl)
+  }
+}
+
+function renderCalendarPicker() {
+  // Build a mini month calendar + quick-jump list of weeks with meals
+  const today = new Date()
+  const currentWeekStart = state.weekStart
+
+  // Use state.calendarMonth if set, otherwise use the month of the current weekStart
+  if (!state.calendarMonth) {
+    const d = new Date(currentWeekStart + 'T00:00:00')
+    state.calendarMonth = { year: d.getFullYear(), month: d.getMonth() }
+  }
+  const { year, month } = state.calendarMonth
+
+  const monthName = new Date(year, month, 1).toLocaleDateString([], { month: 'long', year: 'numeric' })
+
+  // Build calendar days
+  const firstDay = new Date(year, month, 1)
+  const startOffset = firstDay.getDay() // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+
+  // Get all weeks in this month
+  const weeksSet = new Set(state.weeksWithMeals)
+
+  function getWeekStartForDate(dateStr) {
+    const [yr, mo, dy] = dateStr.split('-').map(Number)
+    const d = new Date(yr, mo - 1, dy)
+    d.setDate(d.getDate() - d.getDay())
+    return localDateStr(d)
+  }
+
+  const cells = []
+  // Empty cells for offset
+  for (let i = 0; i < startOffset; i++) cells.push(null)
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d)
+
+  // Quick-jump: last 10 weeks with meals (most recent first)
+  const recentWeeks = state.weeksWithMeals.slice(0, 10)
+
+  return `
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);overflow:hidden;margin-bottom:4px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid var(--border)">
+
+        <!-- Mini calendar -->
+        <div style="padding:16px;border-right:1px solid var(--border)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <button onclick="shiftCalMonth(-1)" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:16px;padding:2px 8px;font-family:inherit">‹</button>
+            <span style="font-size:13px;font-weight:500;color:var(--text)">${monthName}</span>
+            <button onclick="shiftCalMonth(1)" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:16px;padding:2px 8px;font-family:inherit">›</button>
+          </div>
+          <!-- Day headers -->
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">
+            ${['S','M','T','W','T','F','S'].map(d => `<div style="text-align:center;font-size:10px;color:var(--text3);padding:2px 0">${d}</div>`).join('')}
+          </div>
+          <!-- Day cells -->
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
+            ${cells.map(day => {
+              if (!day) return `<div></div>`
+              const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+              const wk = getWeekStartForDate(dateStr)
+              const isSelected = wk === currentWeekStart
+              const hasMeals = weeksSet.has(wk)
+              const isToday = dateStr === localDateStr(today)
+              return `<button onclick="jumpToWeek('${wk}')"
+                style="aspect-ratio:1;border-radius:50%;border:none;cursor:pointer;font-size:11px;font-family:inherit;position:relative;
+                  background:${isSelected ? 'var(--accent)' : 'none'};
+                  color:${isSelected ? '#1a1500' : isToday ? 'var(--accent)' : 'var(--text)'};
+                  font-weight:${isToday || isSelected ? '600' : '400'};
+                  outline:${isToday && !isSelected ? '1px solid var(--accent)' : 'none'}"
+                onmouseover="if(!${isSelected})this.style.background='var(--bg3)'"
+                onmouseout="if(!${isSelected})this.style.background='none'"
+              >${day}${hasMeals && !isSelected ? `<span style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);width:4px;height:4px;background:var(--accent);border-radius:50%;opacity:0.6"></span>` : ''}</button>`
+            }).join('')}
+          </div>
+        </div>
+
+        <!-- Recent weeks with meals -->
+        <div style="padding:16px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Weeks with meals</div>
+          ${!recentWeeks.length
+            ? `<div style="font-size:12px;color:var(--text3)">No planned weeks yet</div>`
+            : recentWeeks.map(wk => {
+                const isSelected = wk === currentWeekStart
+                const [wyr,wmo,wdy] = wk.split('-').map(Number)
+                const d = new Date(wyr, wmo-1, wdy)
+                const end = new Date(wyr, wmo-1, wdy+6)
+                const label = `${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})}`
+                const isThisWeek = wk === getWeekStart()
+                return `<button onclick="jumpToWeek('${wk}')"
+                  style="width:100%;text-align:left;background:${isSelected ? 'rgba(232,197,71,0.12)' : 'none'};
+                    border:1px solid ${isSelected ? 'rgba(232,197,71,0.3)' : 'transparent'};
+                    border-radius:var(--r);padding:7px 10px;margin-bottom:4px;
+                    color:${isSelected ? 'var(--accent)' : 'var(--text2)'};
+                    font-size:12px;font-family:inherit;cursor:pointer;display:flex;justify-content:space-between;align-items:center"
+                  onmouseover="if(!${isSelected})this.style.background='var(--bg3)'"
+                  onmouseout="if(!${isSelected})this.style.background='none'"
+                >
+                  <span>${label}</span>
+                  ${isThisWeek ? `<span style="font-size:10px;color:var(--accent)">this week</span>` : ''}
+                </button>`
+              }).join('')}
+          ${state.weeksWithMeals.length > 10 ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">+ ${state.weeksWithMeals.length - 10} more — use calendar to navigate</div>` : ''}
+        </div>
+      </div>
+      <button onclick="toggleCalendar()" style="width:100%;background:none;border:none;color:var(--text3);font-size:12px;padding:8px;cursor:pointer;font-family:inherit">Close ✕</button>
+    </div>
+  `
+}
+
+function renderMealPlanView(planner) {
+  return `
+    <div class="planner-summary">
+      <div class="planner-summary-title">Weekly calorie overview</div>
+      <div class="planner-summary-grid">
+        ${DAYS.map((day, di) => {
+          const meals = planner.meals[di] || []
+          const cal = meals.reduce((a, m) => a + (m.calories || 0), 0)
+          const p = meals.reduce((a, m) => a + (m.protein || 0), 0)
+          const c = meals.reduce((a, m) => a + (m.carbs || 0), 0)
+          const f = meals.reduce((a, m) => a + (m.fat || 0), 0)
+          return `<div class="planner-day-summary">
+            <div class="pds-name">${day}</div>
+            <div class="pds-cal">${Math.round(cal)}</div>
+            <div class="pds-macros">P${Math.round(p)} C${Math.round(c)} F${Math.round(f)}</div>
+          </div>`
+        }).join('')}
+      </div>
+    </div>
+    <div class="planner-grid">
+      ${DAYS.map((day, di) => {
+        const meals = planner.meals[di] || []
+        const cal = meals.reduce((a, m) => a + (m.calories || 0), 0)
+        const mealItems = meals.map((m, mi) => `
+          <div class="planner-meal" onclick="openEditModal('${m.id}', 'planner', {d:${di},m:${mi}})">
+            <div class="planner-meal-name">${esc(m.meal_name || m.name)}</div>
+            <div class="planner-meal-cals">${Math.round(m.calories)} kcal</div>
+            <button class="planner-meal-del" onclick="deletePlannerMealHandler('${m.id}',${di},${mi});event.stopPropagation()">×</button>
+          </div>`).join('')
+        return `<div class="planner-day">
+          <div class="planner-day-header">
+            <span class="planner-day-name">${day}</span>
+            <span class="planner-day-cals">${Math.round(cal)} kcal</span>
+          </div>
+          <div class="planner-meals">${mealItems}</div>
+          <button class="planner-add-btn" onclick="openPlannerModal(${di})">+ Add meal</button>
+        </div>`
+      }).join('')}
+    </div>
+  `
+}
+
+async function renderGroceryList(allMeals, planner) {
+  const view = state.groceryView || 'full'
+  const today = localDateStr(new Date())
+
+  // Compute effective date range
+  const fromDate = state.groceryFromDate || today
+  const toDate = state.groceryToDate || (() => {
+    // Default: end of the furthest planned week
+    const weeks = state.weeksWithMeals.length
+      ? [...state.weeksWithMeals].sort()
+      : [state.weekStart]
+    const lastWeek = weeks[weeks.length - 1]
+    const [yr, mo, dy] = lastWeek.split('-').map(Number)
+    const d = new Date(yr, mo - 1, dy + 6)
+    return localDateStr(d)
+  })()
+
+  // Fetch meals across the range (may span multiple weeks)
+  let rangeMeals
+  try {
+    const result = await getPlannerRange(state.user.id, fromDate, toDate)
+    rangeMeals = result.meals
+  } catch {
+    rangeMeals = planner.meals.flat()
+  }
+
+  // Format date labels
+  const fmtDate = d => new Date(d + 'T00:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' })
+  const isAutoFrom = !state.groceryFromDate
+  const isAutoTo = !state.groceryToDate
+  const pastDaysExcluded = isAutoFrom && fromDate > (() => {
+    // Check if current week has past days
+    return state.weekStart
+  })()
+
+  const container = document.createElement('div')
+  container.className = 'log-card'
+  container.style.marginBottom = '20px'
+  container.innerHTML = `
+    <div class="log-header">
+      <span class="log-header-title">🛒 Grocery list</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="clear-btn" onclick="addGroceryItem()" style="color:var(--accent)">+ Add item</button>
+        <button class="clear-btn" onclick="resetExclusions()" style="color:var(--text3)">Reset</button>
+      </div>
+    </div>
+
+    <!-- Date range bar -->
+    <div style="padding:10px 16px;background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:12px;color:var(--text3)">Shopping for:</span>
+      <div style="display:flex;align-items:center;gap:6px;flex:1;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:4px">
+          <input type="date" id="grocery-from" value="${fromDate}"
+            onchange="setGroceryDateRange(this.value, null)"
+            style="background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:12px;font-family:inherit;outline:none" />
+        </div>
+        <span style="font-size:12px;color:var(--text3)">→</span>
+        <div style="display:flex;align-items:center;gap:4px">
+          <input type="date" id="grocery-to" value="${toDate}"
+            onchange="setGroceryDateRange(null, this.value)"
+            style="background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:12px;font-family:inherit;outline:none" />
+        </div>
+        ${(!isAutoFrom || !isAutoTo) ? `<button onclick="resetGroceryDates()" style="font-size:11px;color:var(--accent);background:none;border:none;cursor:pointer;font-family:inherit;padding:0">Reset to today</button>` : ''}
+      </div>
+      ${isAutoFrom ? `<span style="font-size:11px;color:var(--protein);white-space:nowrap">✓ Past days excluded</span>` : ''}
+    </div>
+
+    <!-- View tabs -->
+    <div style="display:flex;gap:4px;padding:10px 16px;border-bottom:1px solid var(--border)">
+      <button class="mode-tab ${view === 'full' ? 'active' : ''}" onclick="setGroceryView('full')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">Full list</button>
+      <button class="mode-tab ${view === 'bymeal' ? 'active' : ''}" onclick="setGroceryView('bymeal')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">By meal</button>
+      <span style="margin-left:auto;font-size:11px;color:var(--text3);align-self:center">${rangeMeals.filter(m => !isLeftover(m)).length} meals · ${fmtDate(fromDate)} – ${fmtDate(toDate)}</span>
+    </div>
+
+    <div id="grocery-body">
+      ${view === 'full' ? renderGroceryFull(null, rangeMeals) : renderGroceryByMeal(null, rangeMeals)}
+    </div>
+  `
+  return container
+}
+
+// ── Category config ────────────────────────────────────────────────────────────
+// Helper — detect leftover meals (suffix added when created)
+function isLeftover(meal) {
+  const name = (meal.meal_name || meal.name || '').toLowerCase()
+  return name.endsWith('(leftovers)') || meal.is_leftover === true
+}
+
+function originalMealName(meal) {
+  return (meal.meal_name || meal.name || '').replace(/\s*\(leftovers\)\s*$/i, '').trim()
+}
+
+const CATEGORIES = {
+  produce:    { label: 'Produce',    emoji: '🥦', color: 'var(--protein)' },
+  protein:    { label: 'Protein',    emoji: '🥩', color: 'var(--fat)' },
+  dairy:      { label: 'Dairy',      emoji: '🧀', color: 'var(--carbs)' },
+  pantry:     { label: 'Pantry',     emoji: '🥫', color: 'var(--text2)' },
+  spices:     { label: 'Spices',     emoji: '🧂', color: '#c4a8f0' },
+  grains:     { label: 'Grains',     emoji: '🌾', color: 'var(--cal)' },
+  frozen:     { label: 'Frozen',     emoji: '🧊', color: 'var(--carbs)' },
+  bakery:     { label: 'Bakery',     emoji: '🍞', color: 'var(--fat)' },
+  beverages:  { label: 'Beverages',  emoji: '🧃', color: 'var(--text2)' },
+  other:      { label: 'Other',      emoji: '📦', color: 'var(--text3)' },
+}
+const CATEGORY_ORDER = ['produce','protein','dairy','grains','pantry','spices','frozen','bakery','beverages','other']
+
+// ── Unit conversion helpers ────────────────────────────────────────────────────
+const UNIT_TO_OZ = { lbs: 16, lb: 16, oz: 1, g: 0.03527, kg: 35.27 }
+const OZ_CONVERSIONS = ['lbs','lb','oz','g','kg']
+
+function toOz(amount, unit) {
+  const factor = UNIT_TO_OZ[unit?.toLowerCase()]
+  return factor ? amount * factor : null
+}
+
+function formatAmount(oz, preferUnit) {
+  if (oz === null) return null
+  if (oz >= 16) return { amount: +(oz / 16).toFixed(2), unit: 'lbs' }
+  return { amount: +oz.toFixed(2), unit: 'oz' }
+}
+
+function sumIngredients(items) {
+  // items: [{name, amount (number), unit, category, excluded, mealName}]
+  // Group by name+unit where possible, summing amounts
+  const grouped = {}
+  items.forEach(item => {
+    if (item.excluded) return
+    const key = item.name.toLowerCase().trim()
+    if (!grouped[key]) {
+      grouped[key] = { ...item, totalAmount: parseFloat(item.amount) || 0, meals: [item.mealName] }
+    } else {
+      const existing = grouped[key]
+      // Try to convert to oz for summing
+      const existOz = toOz(existing.totalAmount, existing.unit)
+      const newOz = toOz(parseFloat(item.amount) || 0, item.unit)
+      if (existOz !== null && newOz !== null) {
+        const totalOz = existOz + newOz
+        const fmt = formatAmount(totalOz)
+        existing.totalAmount = fmt.amount
+        existing.unit = fmt.unit
+      } else if (existing.unit === item.unit) {
+        existing.totalAmount += parseFloat(item.amount) || 0
+      } else {
+        // Different units that can't convert — add separate entry
+        const altKey = `${key}_${item.unit}`
+        if (!grouped[altKey]) grouped[altKey] = { ...item, totalAmount: parseFloat(item.amount) || 0, meals: [item.mealName] }
+        else { grouped[altKey].totalAmount += parseFloat(item.amount) || 0; grouped[altKey].meals.push(item.mealName) }
+        return
+      }
+      if (!existing.meals.includes(item.mealName)) existing.meals.push(item.mealName)
+    }
+  })
+  return Object.values(grouped)
+}
+
+function collectAllIngredients(planner, rangeMeals) {
+  // Use rangeMeals if provided (cross-week), else fall back to current week planner
+  const items = []
+  if (!state.excludedIngredients) state.excludedIngredients = new Set()
+
+  const meals = rangeMeals || planner?.meals?.flat() || []
+
+  meals.forEach(m => {
+    if (isLeftover(m)) return
+
+    const mealName = m.meal_name || m.name
+    const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
+    const ingredients = recipe?.ingredients || []
+    const baseServings = recipe?.servings || 1
+    const requestedServings = state.mealServings?.[m.id] || baseServings
+    const multiplier = requestedServings / baseServings
+    const dayLabel = m.actualDate
+      ? new Date(m.actualDate + 'T00:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+      : (DAYS[m.day_of_week] || '')
+
+    ingredients.forEach(ing => {
+      const excKey = `${m.id}::${ing.name.toLowerCase()}`
+      items.push({
+        name: ing.name,
+        amount: (parseFloat(ing.amount) || 0) * multiplier,
+        unit: ing.unit || '',
+        category: ing.category || 'other',
+        excluded: state.excludedIngredients.has(excKey),
+        excKey,
+        mealId: m.id,
+        mealName,
+        day: m.day_of_week,
+        dayLabel,
+        requestedServings,
+        baseServings
+      })
+    })
+
+    if (!ingredients.length) {
+      const excKey = `${m.id}::${mealName.toLowerCase()}`
+      items.push({
+        name: mealName, amount: null, unit: '', category: 'other',
+        excluded: state.excludedIngredients.has(excKey),
+        excKey, mealId: m.id, mealName, day: m.day_of_week,
+        dayLabel, noIngredients: true
+      })
+    }
+  })
+  return items
+}
+
+function renderGroceryFull(planner, rangeMeals) {
+  const allItems = collectAllIngredients(planner, rangeMeals)
+  const active = allItems.filter(i => !i.excluded)
+
+  if (!allItems.length) return `<div class="log-empty">No meals planned yet. Add meals to the planner to generate a grocery list.</div>`
+
+  // Sum by ingredient name
+  const summed = sumIngredients(active)
+
+  // Group by category
+  const byCategory = {}
+  summed.forEach(item => {
+    const cat = item.category || 'other'
+    if (!byCategory[cat]) byCategory[cat] = []
+    byCategory[cat].push(item)
+  })
+
+  // Custom items
+  const customItems = state.groceryCustomItems || []
+
+  const excludedCount = allItems.filter(i => i.excluded).length
+
+  return `
+    <div style="padding:0">
+      ${excludedCount ? `<div style="padding:8px 20px;font-size:12px;color:var(--text3);background:var(--bg3);border-bottom:1px solid var(--border)">${excludedCount} item${excludedCount !== 1 ? 's' : ''} excluded — <button class="clear-btn" style="color:var(--accent);font-size:12px" onclick="resetExclusions()">Show all</button></div>` : ''}
+
+      ${CATEGORY_ORDER.filter(cat => byCategory[cat]?.length).map(cat => {
+        const cfg = CATEGORIES[cat]
+        const items = byCategory[cat]
+        return `
+          <div>
+            <div style="padding:10px 20px 6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:${cfg.color};background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px">
+              <span>${cfg.emoji}</span><span>${cfg.label}</span><span style="color:var(--text3);font-weight:400">(${items.length})</span>
+            </div>
+            ${items.map(item => `
+              <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)">
+                <span style="font-weight:600;color:${cfg.color};min-width:80px;font-size:13px">
+                  ${item.totalAmount ? `${item.totalAmount % 1 === 0 ? item.totalAmount : +item.totalAmount.toFixed(2)} ${item.unit}` : '—'}
+                </span>
+                <span style="flex:1;font-size:14px;color:var(--text)">${esc(item.name)}</span>
+                <span style="font-size:11px;color:var(--text3)">${item.meals?.join(', ') || ''}</span>              </div>`).join('')}
+          </div>`
+      }).join('')}
+
+      ${customItems.length ? `
+        <div>
+          <div style="padding:10px 20px 6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3);background:var(--bg3);border-bottom:1px solid var(--border)">📝 Custom items</div>
+          ${customItems.map((item, i) => `
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)">
+              <input type="text" value="${esc(item.text)}" onchange="editCustomGroceryItem(${i}, this.value)"
+                style="flex:1;background:none;border:none;outline:none;color:var(--text);font-size:14px;font-family:inherit" />
+              <button class="td-act" onclick="removeCustomGroceryItem(${i})" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'" style="font-size:16px">×</button>
+            </div>`).join('')}
+        </div>` : ''}
+
+      ${!summed.length && !customItems.length ? `<div class="log-empty">All items excluded. <button class="clear-btn" style="color:var(--accent)" onclick="resetExclusions()">Reset</button></div>` : ''}
+    </div>
+  `
+}
+
+function renderGroceryByMeal(planner, rangeMeals) {
+  const meals = rangeMeals || planner?.meals?.flat() || []
+  const hasMeals = meals.length > 0
+  if (!hasMeals) return `<div class="log-empty">No meals in this date range.</div>`
+  if (!state.mealServings) state.mealServings = {}
+  if (!state.excludedIngredients) state.excludedIngredients = new Set()
+
+  // Group by day label for display
+  const grouped = {}
+  meals.forEach(m => {
+    const label = m.actualDate
+      ? new Date(m.actualDate + 'T00:00:00').toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+      : (DAYS[m.day_of_week] || 'Unknown')
+    if (!grouped[label]) grouped[label] = []
+    grouped[label].push(m)
+  })
+
+  return `
+    <div style="padding:12px 20px">
+      ${Object.entries(grouped).map(([dayLabel, dayMeals]) => {
+        return `
+          <div style="margin-bottom:20px">
+            <div style="font-size:12px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">${dayLabel}</div>
+            ${dayMeals.map(m => {
+              const mealName = m.meal_name || m.name
+              const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
+              const ingredients = recipe?.ingredients || []
+              const baseServings = recipe?.servings || 1
+              const requestedServings = state.mealServings[m.id] || baseServings
+              const multiplier = requestedServings / baseServings
+
+              return `
+                <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
+                  ${isLeftover(m) ? `
+                    <!-- Leftover meal — ingredients not duplicated -->
+                    <div style="display:flex;align-items:center;gap:10px">
+                      <div style="flex:1">
+                        <div style="font-size:13px;font-weight:500;color:var(--text2)">${esc(mealName)}</div>
+                        <div style="font-size:11px;color:var(--text3);margin-top:3px">
+                          ↩ Leftovers from ${originalMealName(m)} — ingredients already on your list
+                        </div>
+                      </div>
+                      <span style="font-size:11px;padding:3px 8px;background:rgba(122,180,232,0.12);color:var(--carbs);border-radius:4px;border:1px solid rgba(122,180,232,0.25)">no shopping needed</span>
+                    </div>
+                  ` : `
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                      <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(mealName)}</div>
+                      ${!ingredients.length
+                        ? `<button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>`
+                        : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`}
+                    </div>
+
+                    <!-- Serving size input -->
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+                      <span style="font-size:12px;color:var(--text3)">Servings:</span>
+                      <input type="number" min="1" max="100" step="1"
+                        value="${requestedServings}"
+                        onchange="setMealServings('${m.id}', this.value)"
+                        style="width:60px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none;text-align:center" />
+                      <span style="font-size:12px;color:var(--text3)">people</span>
+                      ${multiplier !== 1 ? `<span style="font-size:11px;color:var(--accent);margin-left:4px">×${+multiplier.toFixed(2)} base recipe</span>` : ''}
+                    </div>
+
+                    ${ingredients.length ? `
+                      <div>
+                        ${ingredients.map(ing => {
+                          const excKey = `${m.id}::${ing.name.toLowerCase()}`
+                          const isExcluded = state.excludedIngredients.has(excKey)
+                          const adjustedAmt = (parseFloat(ing.amount) || 0) * multiplier
+                          const displayAmt = adjustedAmt % 1 === 0 ? adjustedAmt : +adjustedAmt.toFixed(2)
+                          const cat = CATEGORIES[ing.category] || CATEGORIES.other
+                          return `
+                            <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);${isExcluded ? 'opacity:0.4' : ''}">
+                              <button onclick="toggleIngredientExclusion('${m.id}', '${ing.name.replace(/'/g,"\\'")}', ${isExcluded})"
+                                title="${isExcluded ? 'Add back to list' : 'Already have it — exclude from list'}"
+                                style="background:none;border:none;cursor:pointer;font-size:14px;padding:0;line-height:1;flex-shrink:0">${isExcluded ? '➕' : '➖'}</button>
+                              <span style="font-size:11px;padding:1px 6px;border-radius:4px;background:${cat.color}22;color:${cat.color};min-width:52px;text-align:center">${cat.emoji} ${cat.label}</span>
+                              <span style="font-size:12px;font-weight:500;color:var(--text2);min-width:65px">${displayAmt} ${esc(ing.unit || '')}</span>
+                              <span style="font-size:13px;color:var(--text);${isExcluded ? 'text-decoration:line-through' : ''}">${esc(ing.name)}</span>
+                            </div>`
+                        }).join('')}
+                      </div>
+                    ` : `<div style="font-size:11px;color:var(--text3)">No ingredients yet — click AI extract above</div>`}
+                  `}
+                </div>`
+            }).join('')}
+          </div>`
+      }).join('')}
+    </div>
+  `
+}
+
+
+
+function formatWeekLabel(weekStart) {
+  const [yr, mo, dy] = weekStart.split('-').map(Number)
+  const d = new Date(yr, mo - 1, dy)
+  const end = new Date(yr, mo - 1, dy + 6)
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+}
+
+// ─── Foods Page ───────────────────────────────────────────────────────────────
+function renderFoodsPage(container) {
+  const items = state.foodItems
+  const q = state.foodSearch || ''
+  const filtered = q ? items.filter(f => f.name.toLowerCase().includes(q.toLowerCase()) || (f.brand||'').toLowerCase().includes(q.toLowerCase())) : items
+
+  container.innerHTML = `
+    <div class="greeting">My Foods</div>
+    <div class="greeting-sub">Saved food items — single foods, combos, protein shakes.</div>
+
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <input class="planner-search" placeholder="Search foods..." value="${esc(q)}"
+        oninput="state.foodSearch=this.value;renderPage()" style="flex:1;min-width:180px" />
+      <button class="analyze-btn" style="width:auto;padding:10px 20px;flex-shrink:0" onclick="openFoodItemModal()">+ New food</button>
+    </div>
+
+    ${!filtered.length ? `
+      <div class="log-card">
+        <div class="log-empty" style="padding:60px">
+          ${items.length ? 'No matches.' : 'No saved foods yet.'}<br>
+          <span style="font-size:12px;color:var(--text3);margin-top:6px;display:block">
+            Save packaged foods from barcode scan, or build combos like protein shakes.
+          </span>
+        </div>
+      </div>
+    ` : `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
+        ${filtered.map(f => `
+          <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s"
+            onmouseover="this.style.borderColor='var(--border2)'"
+            onmouseout="this.style.borderColor='var(--border)'"
+            onclick="openFoodItemModal('${f.id}')">
+            <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:600;font-size:15px;color:var(--text);margin-bottom:2px">${esc(f.name)}</div>
+                ${f.brand ? `<div style="font-size:12px;color:var(--text3)">${esc(f.brand)}</div>` : ''}
+              </div>
+              <div style="font-size:11px;color:var(--text3);flex-shrink:0;margin-left:8px;text-align:right">
+                ${f.serving_size || '1 serving'}<br>
+                ${f.components?.length ? `<span style="color:var(--carbs)">${f.components.length} components</span>` : ''}
+              </div>
+            </div>
+            <div class="macro-pills" style="margin-bottom:10px">
+              <span class="macro-pill pill-cal" style="font-size:11px;padding:2px 8px">${Math.round(f.calories)} kcal</span>
+              <span class="macro-pill pill-p" style="font-size:11px;padding:2px 8px">${Math.round(f.protein)}g P</span>
+              <span class="macro-pill pill-c" style="font-size:11px;padding:2px 8px">${Math.round(f.carbs)}g C</span>
+              <span class="macro-pill pill-f" style="font-size:11px;padding:2px 8px">${Math.round(f.fat)}g F</span>
+            </div>
+            <button onclick="quickLogFoodItem('${f.id}');event.stopPropagation()"
+              style="width:100%;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.25);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+              + Log this
+            </button>
+          </div>`).join('')}
+      </div>
+    `}
+  `
+}
+
+function renderFoodItemModal(item, editingComponents) {
+  const isNew = !item?.id
+  const components = editingComponents || item?.components || []
+  const totals = components.reduce((acc, c) => ({
+    calories: acc.calories + (c.calories || 0),
+    protein:  acc.protein  + (c.protein  || 0),
+    carbs:    acc.carbs    + (c.carbs    || 0),
+    fat:      acc.fat      + (c.fat      || 0),
+    fiber:    acc.fiber    + (c.fiber    || 0),
+    sugar:    acc.sugar    + (c.sugar    || 0),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0 })
+
+  const hasComponents = components.length > 0
+
+  return `
+    <div style="padding:20px">
+      <button class="modal-close" onclick="closeFoodItemModal()">×</button>
+      <h3 style="margin:0 0 16px;font-size:18px">${isNew ? 'New food item' : 'Edit food item'}</h3>
+
+      <!-- Name + Brand -->
+      <div class="modal-field">
+        <label>Food name</label>
+        <input type="text" id="fi-name" value="${esc(item?.name || '')}" placeholder="Morning Protein Shake, Greek Yogurt Bowl..." />
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="modal-field" style="margin-bottom:0">
+          <label>Brand (optional)</label>
+          <input type="text" id="fi-brand" value="${esc(item?.brand || '')}" placeholder="Brand name..." />
+        </div>
+        <div class="modal-field" style="margin-bottom:0">
+          <label>Serving size</label>
+          <input type="text" id="fi-serving" value="${esc(item?.serving_size || '1 serving')}" placeholder="1 shake, 1 cup..." />
+        </div>
+      </div>
+
+      <!-- Components section -->
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">
+            Components ${components.length ? `(${components.length})` : ''}
+          </div>
+          <button onclick="openAddComponentModal()" class="clear-btn" style="color:var(--accent)">+ Add component</button>
+        </div>
+
+        ${!components.length ? `
+          <div style="padding:16px;text-align:center;font-size:13px;color:var(--text3);background:var(--bg3);border-radius:var(--r);border:1px dashed var(--border2)">
+            Add components to auto-calculate macros<br>
+            <span style="font-size:11px">e.g. 2 cups milk, 1 scoop protein powder</span>
+          </div>
+        ` : `
+          <div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+            ${components.map((c, i) => `
+              <div style="padding:9px 12px;border-bottom:1px solid var(--border)">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:13px;color:var(--text)">
+                    ${c.qty && c.qty !== 1 ? `<span style="color:var(--accent);font-weight:500">${c.qty} ${esc(c.unit||'serving')} </span>` : (c.unit && c.unit !== 'serving' ? `<span style="color:var(--accent);font-weight:500">${esc(c.unit)} </span>` : '')}${esc(c.name)}
+                  </div>
+                    <div style="font-size:11px;color:var(--text3)">${Math.round(c.calories)} kcal · P${Math.round(c.protein)} C${Math.round(c.carbs)} F${Math.round(c.fat)}</div>
+                  </div>
+                  <button onclick="toggleComponentEdit(${i})" style="background:none;border:none;color:var(--text3);font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;border:1px solid var(--border)"
+                    onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text3)'">Edit</button>
+                  <button onclick="removeFoodComponent(${i})" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0;flex-shrink:0"
+                    onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'">×</button>
+                </div>
+                <!-- Inline edit panel -->
+                <div id="comp-edit-${i}" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+                  <div style="font-size:11px;color:var(--text3);margin-bottom:6px">Adjust serving size — macros scale automatically</div>
+                  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                    <input type="number" min="0.1" step="0.25" value="${c.qty || 1}"
+                      id="comp-qty-${i}"
+                      oninput="updateComponentQty(${i})"
+                      style="width:70px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;color:var(--text);font-size:14px;font-family:inherit;outline:none;text-align:center" />
+                    <input type="text" value="${esc(c.unit || 'serving')}"
+                      id="comp-unit-${i}"
+                      oninput="updateComponentUnit(${i})"
+                      placeholder="serving, cup, scoop..."
+                      style="flex:1;min-width:90px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+                    <span style="font-size:11px;color:var(--text3);white-space:nowrap">= ${Math.round(c.calories)} kcal</span>
+                  </div>
+                </div>
+              </div>`).join('')}
+            <!-- Totals row -->
+            <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg3)">
+              <div style="flex:1">
+                <div style="font-size:12px;font-weight:600;color:var(--text2)">Total</div>
+              </div>
+              <div style="font-size:12px;color:var(--text2);font-weight:500">
+                ${Math.round(totals.calories)} kcal · P${Math.round(totals.protein)} C${Math.round(totals.carbs)} F${Math.round(totals.fat)}
+              </div>
+            </div>
+          </div>
+        `}
+      </div>
+
+      <!-- Manual macros (shown when no components, or as override) -->
+      <div id="fi-manual-section">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">
+            ${hasComponents ? 'Macros (auto-calculated)' : 'Macros per serving'}
+          </div>
+        </div>
+        <div class="modal-grid">
+          <div class="modal-field"><label>Calories</label><input type="number" id="fi-cal" value="${Math.round(hasComponents ? totals.calories : (item?.calories||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Protein (g)</label><input type="number" id="fi-protein" value="${Math.round(hasComponents ? totals.protein : (item?.protein||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Carbs (g)</label><input type="number" id="fi-carbs" value="${Math.round(hasComponents ? totals.carbs : (item?.carbs||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Fat (g)</label><input type="number" id="fi-fat" value="${Math.round(hasComponents ? totals.fat : (item?.fat||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Fiber (g)</label><input type="number" id="fi-fiber" value="${Math.round(hasComponents ? totals.fiber : (item?.fiber||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Sugar (g)</label><input type="number" id="fi-sugar" value="${Math.round(hasComponents ? totals.sugar : (item?.sugar||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        ${!isNew ? `<button class="btn-delete" onclick="deleteFoodItemHandler('${item.id}')">Delete</button>` : ''}
+        <button class="btn-cancel" onclick="closeFoodItemModal()">Cancel</button>
+        <button class="btn-save" onclick="saveFoodItemHandler()">Save food</button>
+      </div>
+    </div>
+
+    <!-- Add component sub-panel (hidden by default) -->
+    <div id="add-component-panel" style="display:none;border-top:1px solid var(--border);padding:20px;background:var(--bg3)">
+      <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:12px">Add a component</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+        <button class="food-sub-btn active" id="comp-btn-describe" onclick="setCompMode('describe')">
+          <span style="font-size:18px;display:block;margin-bottom:2px">🔤</span>
+          <span style="font-size:11px">Describe</span>
+        </button>
+        <button class="food-sub-btn" id="comp-btn-barcode" onclick="setCompMode('barcode')">
+          <span style="font-size:18px;display:block;margin-bottom:2px">📷</span>
+          <span style="font-size:11px">Scan</span>
+        </button>
+        <button class="food-sub-btn" id="comp-btn-label" onclick="setCompMode('label')">
+          <span style="font-size:18px;display:block;margin-bottom:2px">🏷️</span>
+          <span style="font-size:11px">Label</span>
+        </button>
+        <button class="food-sub-btn" id="comp-btn-saved" onclick="setCompMode('saved')">
+          <span style="font-size:18px;display:block;margin-bottom:2px">⭐</span>
+          <span style="font-size:11px">Saved</span>
+        </button>
+      </div>
+
+      <div id="comp-panel-describe">
+        <input class="link-input" id="comp-describe-input" placeholder="e.g. 2 cups whole milk, 1 scoop vanilla whey..." />
+      </div>
+      <div id="comp-panel-barcode" style="display:none">
+        <input type="file" id="comp-barcode-file" accept="image/*" capture="environment" style="display:none"
+          onchange="handleComponentBarcode(this.files[0])" />
+        <button onclick="document.getElementById('comp-barcode-file').click()"
+          style="width:100%;padding:12px;background:var(--bg4);border:1.5px dashed var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;cursor:pointer;font-family:inherit">
+          📷 Open camera to scan barcode
+        </button>
+        <input class="link-input" id="comp-barcode-manual" placeholder="Or type barcode number..." style="margin-top:8px" />
+        <div id="comp-barcode-status" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
+      </div>
+      <div id="comp-panel-label" style="display:none">
+        <input type="file" id="comp-label-file" accept="image/*" capture="environment" style="display:none"
+          onchange="handleComponentLabel(this.files[0])" />
+        <button onclick="document.getElementById('comp-label-file').click()"
+          style="width:100%;padding:12px;background:var(--bg4);border:1.5px dashed var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;cursor:pointer;font-family:inherit">
+          🏷️ Snap nutrition label
+        </button>
+        <div id="comp-label-status" style="font-size:11px;color:var(--text3);margin-top:6px;text-align:center"></div>
+      </div>
+      <div id="comp-panel-saved" style="display:none">
+        <input class="link-input" id="comp-saved-search" placeholder="Search saved foods and recipes..."
+          oninput="filterCompSavedSearch(this.value)" />
+        <div id="comp-saved-results" style="margin-top:8px;max-height:180px;overflow-y:auto"></div>
+      </div>
+
+      <div id="comp-result" style="display:none;margin-top:10px;padding:10px 12px;background:var(--bg4);border-radius:var(--r);border:1px solid var(--border2)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div style="font-size:13px;font-weight:500;color:var(--text)" id="comp-result-name"></div>
+          <div style="font-size:11px;color:var(--text3)" id="comp-result-macros"></div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span style="font-size:12px;color:var(--text3)">Qty:</span>
+          <input type="number" min="0.1" step="0.25" value="1" id="comp-result-qty"
+            oninput="updatePendingQty()"
+            style="width:65px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none;text-align:center" />
+          <input type="text" value="serving" id="comp-result-unit" placeholder="serving, cup, scoop..."
+            oninput="updatePendingUnit()"
+            style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button onclick="cancelAddComponent()" class="btn-cancel" style="flex:0 0 auto">Cancel</button>
+        <button onclick="analyzeComponentHandler()" class="pm-analyze-btn" style="flex:1;margin:0" id="comp-analyze-btn">✨ Look up</button>
+        <button onclick="confirmAddComponent()" class="btn-save" style="flex:0 0 auto;opacity:0.5" id="comp-add-btn">Add ✓</button>
+      </div>
+    </div>
+  `
+}
+
+// ─── Recipes Page ─────────────────────────────────────────────────────────────
+function renderRecipesPage(container) {
+  const recipes = state.recipes
+  container.innerHTML = `
+    <div class="greeting">Recipes</div>
+    <div class="greeting-sub">Saved recipes with ingredients and macros per serving.</div>
+
+    <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">
+      <button class="analyze-btn" style="width:auto;padding:10px 20px" onclick="openNewRecipeModal()">+ New recipe</button>
+    </div>
+
+    ${!recipes.length ? `
+      <div class="log-card">
+        <div class="log-empty" style="padding:60px">
+          No recipes saved yet.<br>
+          <span style="font-size:12px;color:var(--text3);margin-top:6px;display:block">Analyze a meal and save it as a recipe, or create one manually.</span>
+        </div>
+      </div>
+    ` : `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+        ${recipes.map(r => `
+          <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openRecipeModal('${r.id}')">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+              <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);flex:1;margin-right:12px">${esc(r.name)}</div>
+              <span style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:4px;padding:2px 7px;white-space:nowrap">${r.servings} serving${r.servings !== 1 ? 's' : ''}</span>
+            </div>
+            ${r.description ? `<div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.5">${esc(r.description)}</div>` : ''}
+            <div class="macro-pills" style="margin-bottom:10px">
+              <span class="macro-pill pill-cal">${Math.round(r.calories)} kcal</span>
+              <span class="macro-pill pill-p">${Math.round(r.protein)}g P</span>
+              <span class="macro-pill pill-c">${Math.round(r.carbs)}g C</span>
+              <span class="macro-pill pill-f">${Math.round(r.fat)}g F</span>
+            </div>
+            ${r.ingredients?.length ? `
+              <div style="font-size:11px;color:var(--text3)">${r.ingredients.length} ingredients · <span style="color:var(--text2)">per 1 of ${r.servings} servings</span></div>
+            ` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `}
+  `
+
+  document.getElementById('recipe-modal')?.addEventListener('click', e => {
+    if (e.target.id === 'recipe-modal') closeRecipeModal()
+  })
+}
+
+function renderRecipeModalContent(recipe, mode = 'view') {
+  const isNew = !recipe.id
+  const ingredients = recipe.ingredients || []
+  const isView = mode === 'view' && !isNew
+
+  return `
+    <div style="position:relative">
+
+      <!-- Sticky header: name + plan button -->
+      <div style="position:sticky;top:0;z-index:10;background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 16px 10px">
+        <button class="modal-close" onclick="closeRecipeModal()" style="top:10px;right:12px">×</button>
+
+        ${mode === 'edit' || isNew ? `
+          <input type="text" id="recipe-name" value="${esc(recipe.name || '')}"
+            placeholder="Recipe name..."
+            style="width:100%;background:none;border:none;border-bottom:1px solid var(--border2);outline:none;font-family:'DM Serif Display',serif;font-size:20px;color:var(--text);padding-bottom:4px;margin-right:32px;display:block" />
+        ` : `
+          <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);margin-right:36px;line-height:1.2;margin-bottom:8px">${esc(recipe.name)}</div>
+        `}
+
+        ${isView ? `
+          <div style="display:flex;align-items:center;gap:6px">
+            <div style="display:flex;gap:4px;flex-wrap:nowrap;flex:1;overflow:hidden;min-width:0">
+              <span class="macro-pill pill-cal" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.calories)} kcal</span>
+              <span class="macro-pill pill-p" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.protein)}g P</span>
+              <span class="macro-pill pill-c" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.carbs)}g C</span>
+              <span class="macro-pill pill-f" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.fat)}g F</span>
+            </div>
+            <button onclick="openPlanRecipeModal('${recipe.id}')"
+              style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:7px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
+              📅 Plan
+            </button>
+          </div>
+        ` : ''}
+      </div>
+
+      <!-- Scrollable body -->
+      <div style="padding:20px 20px 28px">
+
+        <!-- Description -->
+        ${mode === 'edit' || isNew ? `
+          <div class="modal-field">
+            <label>Description (optional)</label>
+            <input type="text" id="recipe-desc" value="${esc(recipe.description || '')}" placeholder="Brief description..." />
+          </div>
+        ` : recipe.description ? `<div style="font-size:13px;color:var(--text2);margin-bottom:16px">${esc(recipe.description)}</div>` : ''}
+
+        <!-- Source URL -->
+        ${mode === 'edit' || isNew ? `
+          <div class="modal-field">
+            <label>Source URL (optional)</label>
+            <input type="url" id="recipe-source-url" value="${esc(recipe.source_url || '')}"
+              placeholder="https://... Instagram, YouTube, website..." />
+          </div>
+        ` : recipe.source_url ? `
+          <div style="margin-bottom:16px">
+            <a href="${esc(recipe.source_url)}" target="_blank" rel="noopener"
+              style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--accent);text-decoration:none;padding:8px 12px;background:rgba(232,197,71,0.08);border:1px solid rgba(232,197,71,0.2);border-radius:var(--r)">
+              <span>🔗</span>
+              <span>View original recipe</span>
+              <span style="font-size:11px;opacity:0.7">↗</span>
+            </a>
+          </div>
+        ` : ''}
+
+        <!-- Servings -->
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;background:var(--bg3);border-radius:var(--r)">
+          <span style="font-size:13px;color:var(--text2)">Servings:</span>
+          ${mode === 'edit' || isNew ? `
+            <input type="number" id="recipe-servings" value="${recipe.servings || 4}" min="0.5" step="0.5"
+              style="width:70px;background:var(--bg4);border:1px solid var(--border2);border-radius:var(--r);padding:6px 10px;color:var(--text);font-size:14px;font-family:inherit;outline:none"
+              onchange="updateServingLabel()" />
+            <input type="text" id="recipe-serving-label" value="${esc(recipe.serving_label || 'serving')}"
+              placeholder="serving / slice / cup..."
+              style="flex:1;background:var(--bg4);border:1px solid var(--border2);border-radius:var(--r);padding:6px 10px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+          ` : `
+            <span style="font-size:14px;font-weight:500;color:var(--text)">${recipe.servings} ${recipe.serving_label || 'servings'}</span>
+          `}
+          <span style="font-size:11px;color:var(--text3);margin-left:auto">per serving</span>
+        </div>
+
+        <!-- Macros (edit mode only — view mode shows in sticky header) -->
+        ${mode === 'edit' || isNew ? `
+          <div style="margin-bottom:20px">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Macros per serving</div>
+            <div class="modal-grid">
+              <div class="modal-field"><label>Calories</label><input type="number" id="r-cal" value="${Math.round(recipe.calories || 0)}" /></div>
+              <div class="modal-field"><label>Protein (g)</label><input type="number" id="r-protein" value="${Math.round(recipe.protein || 0)}" /></div>
+              <div class="modal-field"><label>Carbs (g)</label><input type="number" id="r-carbs" value="${Math.round(recipe.carbs || 0)}" /></div>
+              <div class="modal-field"><label>Fat (g)</label><input type="number" id="r-fat" value="${Math.round(recipe.fat || 0)}" /></div>
+              <div class="modal-field"><label>Fiber (g)</label><input type="number" id="r-fiber" value="${Math.round(recipe.fiber || 0)}" /></div>
+              <div class="modal-field"><label>Sugar (g)</label><input type="number" id="r-sugar" value="${Math.round(recipe.sugar || 0)}" /></div>
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Ingredients / Instructions toggle (view mode only) -->
+        <div style="margin-bottom:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div style="display:flex;gap:0;background:var(--bg3);border-radius:var(--r);padding:3px;border:1px solid var(--border)">
+              <button onclick="setRecipeTab('ingredients')" id="rtab-ingredients"
+                class="${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? '' : 'active'}"
+                style="padding:5px 14px;border:none;border-radius:calc(var(--r) - 2px);font-size:12px;font-family:inherit;cursor:pointer;font-weight:500;
+                  background:${(!recipe.instructions?.steps?.length || state.recipeTab !== 'instructions') ? 'var(--bg2)' : 'none'};
+                  color:${(!recipe.instructions?.steps?.length || state.recipeTab !== 'instructions') ? 'var(--text)' : 'var(--text3)'}">
+                📋 Ingredients
+              </button>
+              <button onclick="setRecipeTab('instructions')" id="rtab-instructions"
+                style="padding:5px 14px;border:none;border-radius:calc(var(--r) - 2px);font-size:12px;font-family:inherit;cursor:pointer;font-weight:500;
+                  background:${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? 'var(--bg2)' : 'none'};
+                  color:${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? 'var(--text)' : 'var(--text3)'}">
+                👨‍🍳 Instructions
+              </button>
+            </div>
+            ${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? `
+              <button onclick="downloadRecipeInstructions('${recipe.id}')"
+                style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:12px;color:var(--text2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px"
+                onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+                ⬇ Download
+              </button>` : ''}
+          </div>
+
+          ${state.recipeTab === 'instructions' ? `
+            <!-- Servings scaler for instructions -->
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
+              <span style="font-size:12px;color:var(--text3)">Base recipe:</span>
+              <span style="font-size:13px;font-weight:600;color:var(--text)">${recipe.servings || 1} ${recipe.serving_label || 'servings'}</span>
+              <span style="font-size:12px;color:var(--text3)">→ Making:</span>
+              <input type="number" id="instr-servings" min="0.5" step="0.5"
+                value="${state.recipeServings != null ? state.recipeServings : (recipe.servings || 1)}"
+                oninput="setRecipeServings(this.value, '${recipe.id}')"
+                style="width:60px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:14px;font-weight:600;font-family:inherit;outline:none;text-align:center" />
+              <span style="font-size:12px;color:var(--text3)">${recipe.serving_label || 'servings'}</span>
+              ${(state.recipeServings != null && state.recipeServings != (recipe.servings||1)) ? `<span style="font-size:11px;color:var(--accent)">×${+(state.recipeServings / (recipe.servings||1)).toFixed(2)}</span>` : ''}
+            </div>
+            ${!recipe.instructions?.steps?.length ? `
+              <div style="padding:20px;text-align:center;background:var(--bg3);border-radius:var(--r);border:1px dashed var(--border2)">
+                <div style="font-size:13px;color:var(--text2);margin-bottom:12px">No instructions yet</div>
+                <button onclick="generateInstructionsHandler('${recipe.id}')" id="gen-instr-btn"
+                  class="pm-analyze-btn" style="margin:0">
+                  ✨ Generate cooking instructions with AI
+                </button>
+              </div>
+            ` : `
+              ${recipe.instructions.prep_time || recipe.instructions.cook_time ? `
+                <div style="display:flex;gap:16px;margin-bottom:14px;font-size:13px;color:var(--text2)">
+                  ${recipe.instructions.prep_time ? `<span>⏱ Prep: <strong>${recipe.instructions.prep_time}</strong></span>` : ''}
+                  ${recipe.instructions.cook_time ? `<span>🔥 Cook: <strong>${recipe.instructions.cook_time}</strong></span>` : ''}
+                </div>` : ''}
+              <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:12px">
+                ${(recipe.instructions.steps || []).map((step, i) => `
+                  <li style="font-size:14px;color:var(--text);line-height:1.55;padding-left:4px">${esc(scaleStepText(step, recipe.servings || 1, state.recipeServings != null ? state.recipeServings : (recipe.servings || 1)))}</li>
+                `).join('')}
+              </ol>
+              ${recipe.instructions.tips?.length ? `
+                <div style="margin-top:16px;padding:12px;background:rgba(232,197,71,0.06);border-radius:var(--r);border:1px solid rgba(232,197,71,0.15)">
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:8px">Tips</div>
+                  ${recipe.instructions.tips.map(t => `<div style="font-size:13px;color:var(--text2);margin-bottom:4px">• ${esc(t)}</div>`).join('')}
+                </div>` : ''}
+              <button onclick="generateInstructionsHandler('${recipe.id}')" id="gen-instr-btn"
+                style="margin-top:14px;background:none;border:1px solid var(--border);border-radius:var(--r);padding:6px 12px;font-size:12px;color:var(--text3);cursor:pointer;font-family:inherit;width:100%"
+                onmouseover="this.style.color='var(--carbs)'" onmouseout="this.style.color='var(--text3)'">
+                ✨ Regenerate instructions
+              </button>
+            `}
+          ` : `
+            <!-- Ingredients tab with scaler -->
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:8px 12px;background:var(--bg3);border-radius:var(--r)">
+              <span style="font-size:12px;color:var(--text3)">Base:</span>
+              <span style="font-size:13px;font-weight:600;color:var(--text)">${recipe.servings || 1} ${recipe.serving_label || 'servings'}</span>
+              <span style="font-size:12px;color:var(--text3)">→ Scale to:</span>
+              <input type="number" id="ing-servings" min="0.5" step="0.5"
+                value="${state.recipeServings != null ? state.recipeServings : (recipe.servings || 1)}"
+                oninput="setRecipeServings(this.value, '${recipe.id}')"
+                style="width:60px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:14px;font-weight:600;font-family:inherit;outline:none;text-align:center" />
+              <span style="font-size:12px;color:var(--text3)">${recipe.serving_label || 'servings'}</span>
+              ${(state.recipeServings != null && state.recipeServings != (recipe.servings||1)) ? `<span style="font-size:11px;color:var(--accent)">×${+(state.recipeServings / (recipe.servings||1)).toFixed(2)}</span>` : ''}
+            </div>
+            <div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+              ${!ingredients.length ? `
+                <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3)">No ingredients yet.</div>
+              ` : ingredients.map((ing, i) => renderIngredientRow(ing, i, false, state.recipeServings != null ? state.recipeServings : (recipe.servings||1), recipe.servings||1)).join('')}
+            </div>
+          `}
+        </div>
+
+        <!-- Ingredients (edit mode) -->g, addMealEntry, updateMealEntry, deleteMealEntry,
+  getPlannerWeek, addPlannerMeal, updatePlannerMeal, deletePlannerMeal,
+  getUsageSummary, getAdminUserOverview, setUserPrivileges,
+  getRecipes, upsertRecipe, deleteRecipe, getRecipeByName,
+  getWeeksWithMeals, getPlannerRange,
+  getFoodItems, upsertFoodItem, deleteFoodItem
+} from '../lib/db.js'
+import {
+  analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
+  extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
+  generateRecipeInstructions
+} from '../lib/ai.js'
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let state = {
+  user: null,
+  goals: { calories: 2000, protein: 150, carbs: 200, fat: 65 },
+  log: [],
+  recipes: [],
+  foodItems: [],
+  editingFoodItem: null,
+  editingComponents: null,
+  pendingComponent: null,
+  foodSearch: '',
+  planner: { meals: Array(7).fill(null).map(() => []) },
+  usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false },
+  currentPage: 'log',
+  currentMode: 'food',
+  foodMode: 'barcode',    // 'barcode' | 'label' | 'search'
+  imageBase64: null,
+  labelImageBase64: null,
+  currentEntry: null,
+  editingEntry: null,
+  editingBaseMacros: null,
+  planningRecipe: null,
+  plannerTarget: null,
+  plannerTab: 'history',
+  plannerView: 'meals',
+  groceryView: 'full',
+  groceryItems: null,
+  groceryCustomItems: [],
+  groceryFromDate: null,  // null = today
+  groceryToDate: null,    // null = end of furthest planned week
+  mealServings: {},
+  excludedIngredients: new Set(),
+  aiPlannerResult: null,
+  weekStart: getWeekStart(),
+  weeksWithMeals: [],
+  showCalendar: false,
+  calendarMonth: null,
+  // apiKey moved server-side — no longer needed in client
+  editingRecipe: null,
   recipeTab: 'ingredients', // 'ingredients' | 'instructions'  // recipe being edited in modal
 }
 
@@ -1691,7 +3263,36 @@ function renderPlanRecipeModal(recipe) {
   `
 }
 
-function renderIngredientRow(ing, idx, editable) {
+// Scale quantities mentioned in a recipe step by a multiplier
+// e.g. "Add 2 cups flour" with multiplier 1.5 → "Add 3 cups flour"
+function scaleStepText(step, baseServings, targetServings) {
+  if (!baseServings || !targetServings || baseServings === targetServings) return step
+  const multiplier = targetServings / baseServings
+  if (Math.abs(multiplier - 1) < 0.01) return step
+
+  return step.replace(/(\d+(?:\.\d+)?(?:\/\d+)?)\s*(cups?|tbsp|tablespoons?|tsp|teaspoons?|oz|ounces?|lbs?|pounds?|g\b|kg|ml|liters?|litres?|cloves?|slices?|pieces?|cans?|pints?|quarts?)/gi,
+    (match, num, unit) => {
+      const base = num.includes('/') ? eval(num) : parseFloat(num)
+      const scaled = base * multiplier
+      // Format nicely
+      let display
+      if (scaled % 1 === 0) display = scaled.toString()
+      else if (Math.abs(scaled - Math.round(scaled * 4) / 4) < 0.01) {
+        // Round to nearest 1/4
+        const rounded = Math.round(scaled * 4) / 4
+        const whole = Math.floor(rounded)
+        const frac = rounded - whole
+        const fracMap = { 0.25: '¼', 0.5: '½', 0.75: '¾' }
+        display = whole > 0 ? `${whole}${frac ? fracMap[frac] || frac : ''}` : (fracMap[frac] || frac.toString())
+      } else {
+        display = +scaled.toFixed(2)
+      }
+      return `<strong style="color:var(--accent)">${display}</strong> ${unit}`
+    }
+  )
+}
+
+function renderIngredientRow(ing, idx, editable, targetServings, baseServings) {
   if (editable) {
     return `
       <div style="display:flex;gap:6px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border)" id="ing-row-${idx}">
@@ -1708,9 +3309,18 @@ function renderIngredientRow(ing, idx, editable) {
       </div>
     `
   }
+  // View mode — scale amounts if targetServings differs from base
+  const multiplier = (targetServings && baseServings && baseServings !== targetServings)
+    ? targetServings / baseServings : 1
+  const rawAmt = parseFloat(ing.amount) || 0
+  const scaledAmt = rawAmt * multiplier
+  const displayAmt = scaledAmt === 0 ? (ing.amount || '') :
+    (scaledAmt % 1 === 0 ? scaledAmt : +scaledAmt.toFixed(2))
+  const amtChanged = multiplier !== 1 && rawAmt > 0
+
   return `
     <div style="display:flex;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border)">
-      <span style="font-size:13px;color:var(--accent);min-width:80px">${esc(ing.amount || '')} ${esc(ing.unit || '')}</span>
+      <span style="font-size:13px;color:${amtChanged ? 'var(--accent)' : 'var(--accent)'};min-width:80px;font-weight:${amtChanged ? '600' : '400'}">${displayAmt} ${esc(ing.unit || '')}</span>
       <span style="font-size:13px;color:var(--text)">${esc(ing.name || '')}</span>
     </div>
   `
@@ -2879,6 +4489,18 @@ function wireGlobals() {
     }
   }
 
+  window.setRecipeServings = (val, recipeId) => {
+    const n = parseFloat(val)
+    if (n > 0) {
+      state.recipeServings = n
+      // Re-render modal content to update scaled values
+      const content = document.getElementById('recipe-modal-content')
+      if (content && state.editingRecipe) {
+        content.innerHTML = renderRecipeModalContent(state.editingRecipe, 'view')
+      }
+    }
+  }
+
   window.generateInstructionsHandler = async (recipeId) => {
     const btn = document.getElementById('gen-instr-btn')
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="analyzing-spinner"></span> Generating...' }
@@ -2973,6 +4595,7 @@ function wireGlobals() {
 
   window.openRecipeModal = (id, mode = 'view') => {
     state.recipeTab = 'ingredients'
+    state.recipeServings = null
     const recipe = state.recipes.find(r => r.id === id)
     if (!recipe) return
     state.editingRecipe = JSON.parse(JSON.stringify(recipe))
