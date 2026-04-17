@@ -992,10 +992,28 @@ function showResult(r) {
     <span class="macro-pill pill-f">${Math.round(r.fat)}g fat</span>
     ${r.fiber ? `<span class="macro-pill pill-fiber">${Math.round(r.fiber)}g fiber</span>` : ''}
   `
+
+  // Ingredients list
+  const ingredients = r.ingredients || []
+  const ingredientHTML = ingredients.length ? `
+    <div style="margin-top:4px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px">
+        Ingredients (${ingredients.length}) — for ${r.servings || 1} serving${(r.servings || 1) !== 1 ? 's' : ''}
+      </div>
+      <div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+        ${ingredients.map(ing => `
+          <div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-bottom:1px solid var(--border);font-size:13px">
+            <span style="color:var(--accent);min-width:70px;font-weight:500">${esc(ing.amount || '')} ${esc(ing.unit || '')}</span>
+            <span style="color:var(--text)">${esc(ing.name)}</span>
+          </div>`).join('').replace(/border-bottom[^;]+;([^<]*)<\/div>\s*$/, '$1</div>')}
+      </div>
+    </div>` : ''
+
   document.getElementById('res-detail').innerHTML = `
     <span style="color:var(--text3)">Sugar: </span><span>${Math.round(r.sugar || 0)}g</span>
     &nbsp;&nbsp;<span style="color:var(--text3)">Confidence: </span><span>${r.confidence}</span>
     ${r.notes ? `<br><span style="color:var(--text3)">Note: </span><span>${r.notes}</span>` : ''}
+    ${ingredientHTML}
   `
   const btn = document.getElementById('log-entry-btn')
   if (btn) { btn.textContent = '+ Log this meal'; btn.className = 'log-btn' }
@@ -1106,6 +1124,24 @@ function wireGlobals() {
     try {
       const entry = await addMealEntry(state.user.id, state.currentEntry)
       state.log.unshift(entry)
+
+      // Auto-save recipe with ingredients if we have them (background, non-blocking)
+      if (state.currentEntry.ingredients?.length) {
+        const e = state.currentEntry
+        getRecipeByName(state.user.id, e.name).then(existing => {
+          if (!existing) {
+            upsertRecipe(state.user.id, {
+              name: e.name, description: e.description || '',
+              servings: e.servings || 1, calories: e.calories,
+              protein: e.protein, carbs: e.carbs, fat: e.fat,
+              fiber: e.fiber || 0, sugar: e.sugar || 0,
+              ingredients: e.ingredients, source: 'ai_photo',
+              confidence: e.confidence, ai_notes: e.notes || ''
+            }).then(recipe => { state.recipes.unshift(recipe) }).catch(() => {})
+          }
+        }).catch(() => {})
+      }
+
       state.currentEntry = null
       updateStats()
       const btn = document.getElementById('log-entry-btn')
@@ -1536,17 +1572,29 @@ function wireGlobals() {
     const e = state.currentEntry
     try {
       const existing = await getRecipeByName(state.user.id, e.name)
-      if (existing) { showToast('Recipe already saved — find it in Recipes', ''); return }
+      if (existing) {
+        // Update ingredients if we have them and existing doesn't
+        if (e.ingredients?.length && !existing.ingredients?.length) {
+          await upsertRecipe(state.user.id, { ...existing, ingredients: e.ingredients })
+          const idx = state.recipes.findIndex(r => r.id === existing.id)
+          if (idx !== -1) state.recipes[idx] = { ...existing, ingredients: e.ingredients }
+        }
+        showToast('Recipe already saved — find it in Recipes', '')
+        return
+      }
       const recipe = await upsertRecipe(state.user.id, {
-        name: e.name, description: e.description || '', servings: e.servings || 1,
+        name: e.name,
+        description: e.description || '',
+        servings: e.servings || 1,
         calories: e.calories, protein: e.protein, carbs: e.carbs,
         fat: e.fat, fiber: e.fiber || 0, sugar: e.sugar || 0,
-        ingredients: [], source: 'ai_photo', confidence: e.confidence, ai_notes: e.notes || ''
+        ingredients: e.ingredients || [],
+        source: 'ai_photo', confidence: e.confidence, ai_notes: e.notes || ''
       })
       state.recipes.unshift(recipe)
-      showToast(`"${e.name}" saved to Recipes!`, 'success')
+      showToast(`"${e.name}" saved to Recipes with ${e.ingredients?.length || 0} ingredients!`, 'success')
       const btn = document.getElementById('save-recipe-btn')
-      if (btn) { btn.textContent = '✓ Saved'; btn.style.color = 'var(--green)'; btn.disabled = true }
+      if (btn) { btn.textContent = '✓ Saved to Recipes'; btn.style.color = 'var(--green)'; btn.disabled = true }
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
