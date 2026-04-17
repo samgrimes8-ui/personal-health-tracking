@@ -400,8 +400,7 @@ async function renderPlanner(container) {
         <span style="font-size:11px;color:var(--text3)">${isCurrentWeek ? 'This week' : ''} 📅</span>
       </button>
 
-      <button class="td-act" onclick="shiftWeek(1)" style="font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)"
-        ${isCurrentWeek ? 'disabled style="opacity:0.3;cursor:not-allowed;font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)"' : ''}>›</button>
+      <button class="td-act" onclick="shiftWeek(1)" style="font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)">›</button>
 
       ${!isCurrentWeek ? `<button onclick="jumpToToday()" style="background:rgba(232,197,71,0.12);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:6px 12px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap">Today</button>` : ''}
     </div>
