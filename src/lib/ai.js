@@ -58,14 +58,27 @@ const FULL_ANALYSIS_PROMPT = `Respond ONLY with a JSON object, no markdown, no e
   "confidence": "low|medium|high",
   "notes": "any important caveats or empty string",
   "ingredients": [
-    {"name": "ingredient name", "amount": "quantity", "unit": "lbs/oz/cups/tbsp/tsp/cloves/etc"},
+    {"name": "ingredient name", "amount": number, "unit": "oz/lbs/cups/tbsp/tsp/cloves/whole/slices", "category": "produce|protein|dairy|pantry|spices|grains|frozen|bakery|beverages"},
     ...
   ]
 }
 
-The ingredients array must list every ingredient needed to make this recipe for the number of servings returned.
-Be specific with amounts (e.g. "3" "lbs", "2" "cups", "1" "tbsp", "4" "cloves").
-If it is a packaged/restaurant item with no recipe, return an empty ingredients array.`
+Rules for ingredients:
+- amount must be a NUMBER (e.g. 3, 0.5, 2.5) — not a string
+- unit: prefer oz for most solid ingredients where it makes sense (meat, cheese, vegetables).
+  Use lbs only for large cuts (whole chicken, roast). Use cups for liquids and grains.
+  Use tbsp/tsp for oils, sauces, spices. Use "whole" or "cloves" for things like garlic.
+- category must be exactly one of: produce, protein, dairy, pantry, spices, grains, frozen, bakery, beverages
+  - produce: fresh fruits, vegetables, herbs
+  - protein: meat, poultry, fish, eggs, tofu, beans
+  - dairy: milk, cheese, butter, cream, yogurt
+  - pantry: oils, canned goods, sauces, vinegar, broth, pasta, condiments
+  - spices: dried spices, salt, pepper, seasonings
+  - grains: rice, bread, flour, oats, quinoa
+  - frozen: frozen vegetables, frozen proteins
+  - bakery: fresh bread, rolls, tortillas
+  - beverages: wine, beer, juice used in cooking
+- List every ingredient needed. If packaged/restaurant item with no recipe, return empty array.`
 
 // Planner/simple prompt — just macros, no ingredients needed
 const MACROS_ONLY_PROMPT = `Respond ONLY with a JSON object, no markdown, no explanation. Format:

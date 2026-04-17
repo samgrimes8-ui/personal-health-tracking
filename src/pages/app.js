@@ -31,6 +31,9 @@ let state = {
   plannerView: 'meals',
   groceryView: 'full',
   groceryItems: null,
+  groceryCustomItems: [],
+  mealServings: {},
+  excludedIngredients: new Set(),
   aiPlannerResult: null,
   weekStart: getWeekStart(),
   // apiKey moved server-side — no longer needed in client
@@ -417,62 +420,134 @@ function renderMealPlanView(planner) {
 
 function renderGroceryList(allMeals, planner) {
   const view = state.groceryView || 'full'
-  // Load any manual edits from state
-  const groceryItems = state.groceryItems || buildGroceryItems(allMeals, planner)
-  if (!state.groceryItems) state.groceryItems = groceryItems
-
   return `
     <div class="log-card" style="margin-bottom:20px">
       <div class="log-header">
         <span class="log-header-title">🛒 Grocery list</span>
         <div style="display:flex;gap:8px;align-items:center">
           <button class="clear-btn" onclick="addGroceryItem()" style="color:var(--accent)">+ Add item</button>
-          <button class="clear-btn" onclick="clearCheckedItems()">Clear checked</button>
+          <button class="clear-btn" onclick="resetExclusions()" style="color:var(--text3)">Reset exclusions</button>
         </div>
       </div>
-
-      <!-- View toggle: full list vs by meal -->
       <div style="display:flex;gap:4px;padding:12px 16px;border-bottom:1px solid var(--border)">
         <button class="mode-tab ${view === 'full' ? 'active' : ''}" onclick="setGroceryView('full')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">Full list</button>
         <button class="mode-tab ${view === 'bymeal' ? 'active' : ''}" onclick="setGroceryView('bymeal')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">By meal</button>
       </div>
-
-      ${view === 'full' ? renderGroceryFull(groceryItems) : renderGroceryByMeal(planner)}
+      ${view === 'full' ? renderGroceryFull(planner) : renderGroceryByMeal(planner)}
     </div>
   `
 }
 
-function buildGroceryItems(allMeals, planner) {
+// ── Category config ────────────────────────────────────────────────────────────
+const CATEGORIES = {
+  produce:    { label: 'Produce',    emoji: '🥦', color: 'var(--protein)' },
+  protein:    { label: 'Protein',    emoji: '🥩', color: 'var(--fat)' },
+  dairy:      { label: 'Dairy',      emoji: '🧀', color: 'var(--carbs)' },
+  pantry:     { label: 'Pantry',     emoji: '🥫', color: 'var(--text2)' },
+  spices:     { label: 'Spices',     emoji: '🧂', color: '#c4a8f0' },
+  grains:     { label: 'Grains',     emoji: '🌾', color: 'var(--cal)' },
+  frozen:     { label: 'Frozen',     emoji: '🧊', color: 'var(--carbs)' },
+  bakery:     { label: 'Bakery',     emoji: '🍞', color: 'var(--fat)' },
+  beverages:  { label: 'Beverages',  emoji: '🧃', color: 'var(--text2)' },
+  other:      { label: 'Other',      emoji: '📦', color: 'var(--text3)' },
+}
+const CATEGORY_ORDER = ['produce','protein','dairy','grains','pantry','spices','frozen','bakery','beverages','other']
+
+// ── Unit conversion helpers ────────────────────────────────────────────────────
+const UNIT_TO_OZ = { lbs: 16, lb: 16, oz: 1, g: 0.03527, kg: 35.27 }
+const OZ_CONVERSIONS = ['lbs','lb','oz','g','kg']
+
+function toOz(amount, unit) {
+  const factor = UNIT_TO_OZ[unit?.toLowerCase()]
+  return factor ? amount * factor : null
+}
+
+function formatAmount(oz, preferUnit) {
+  if (oz === null) return null
+  if (oz >= 16) return { amount: +(oz / 16).toFixed(2), unit: 'lbs' }
+  return { amount: +oz.toFixed(2), unit: 'oz' }
+}
+
+function sumIngredients(items) {
+  // items: [{name, amount (number), unit, category, excluded, mealName}]
+  // Group by name+unit where possible, summing amounts
+  const grouped = {}
+  items.forEach(item => {
+    if (item.excluded) return
+    const key = item.name.toLowerCase().trim()
+    if (!grouped[key]) {
+      grouped[key] = { ...item, totalAmount: parseFloat(item.amount) || 0, meals: [item.mealName] }
+    } else {
+      const existing = grouped[key]
+      // Try to convert to oz for summing
+      const existOz = toOz(existing.totalAmount, existing.unit)
+      const newOz = toOz(parseFloat(item.amount) || 0, item.unit)
+      if (existOz !== null && newOz !== null) {
+        const totalOz = existOz + newOz
+        const fmt = formatAmount(totalOz)
+        existing.totalAmount = fmt.amount
+        existing.unit = fmt.unit
+      } else if (existing.unit === item.unit) {
+        existing.totalAmount += parseFloat(item.amount) || 0
+      } else {
+        // Different units that can't convert — add separate entry
+        const altKey = `${key}_${item.unit}`
+        if (!grouped[altKey]) grouped[altKey] = { ...item, totalAmount: parseFloat(item.amount) || 0, meals: [item.mealName] }
+        else { grouped[altKey].totalAmount += parseFloat(item.amount) || 0; grouped[altKey].meals.push(item.mealName) }
+        return
+      }
+      if (!existing.meals.includes(item.mealName)) existing.meals.push(item.mealName)
+    }
+  })
+  return Object.values(grouped)
+}
+
+function collectAllIngredients(planner) {
+  // Returns flat list of {name, amount, unit, category, mealId, mealName, servings, day}
+  // Respects state.mealServings overrides
   const items = []
+  if (!state.excludedIngredients) state.excludedIngredients = new Set()
+
   DAYS.forEach((day, di) => {
     const meals = planner.meals[di] || []
     meals.forEach(m => {
       const mealName = m.meal_name || m.name
-      // Look up saved recipe for this meal to get real ingredients
-      const recipe = state.recipes.find(r =>
-        r.name.toLowerCase() === mealName.toLowerCase()
-      )
-      if (recipe?.ingredients?.length) {
-        // Use actual ingredients from saved recipe
-        recipe.ingredients.forEach(ing => {
-          items.push({
-            id: `${m.id}-${ing.name}-${Math.random()}`,
-            text: `${ing.amount ? ing.amount + ' ' : ''}${ing.unit ? ing.unit + ' ' : ''}${ing.name}`.trim(),
-            checked: false,
-            mealId: m.id,
-            mealName,
-            day: di
-          })
-        })
-      } else {
-        // No ingredients saved — use meal name as a single item
+      const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
+      const ingredients = recipe?.ingredients || []
+      const baseServings = recipe?.servings || 1
+      const requestedServings = state.mealServings?.[m.id] || baseServings
+      const multiplier = requestedServings / baseServings
+
+      ingredients.forEach(ing => {
+        const excKey = `${m.id}::${ing.name.toLowerCase()}`
         items.push({
-          id: `${m.id}-${Date.now()}-${Math.random()}`,
-          text: mealName,
-          checked: false,
+          name: ing.name,
+          amount: (parseFloat(ing.amount) || 0) * multiplier,
+          unit: ing.unit || '',
+          category: ing.category || 'other',
+          excluded: state.excludedIngredients.has(excKey),
+          excKey,
           mealId: m.id,
           mealName,
-          day: di
+          day: di,
+          requestedServings,
+          baseServings
+        })
+      })
+
+      if (!ingredients.length) {
+        const excKey = `${m.id}::${mealName.toLowerCase()}`
+        items.push({
+          name: mealName,
+          amount: null,
+          unit: '',
+          category: 'other',
+          excluded: state.excludedIngredients.has(excKey),
+          excKey,
+          mealId: m.id,
+          mealName,
+          day: di,
+          noIngredients: true
         })
       }
     })
@@ -480,19 +555,63 @@ function buildGroceryItems(allMeals, planner) {
   return items
 }
 
-function renderGroceryFull(items) {
-  if (!items.length) return `<div class="log-empty">No meals planned yet. Add meals to the planner to generate a grocery list.</div>`
+function renderGroceryFull(planner) {
+  const allItems = collectAllIngredients(planner)
+  const active = allItems.filter(i => !i.excluded)
+
+  if (!allItems.length) return `<div class="log-empty">No meals planned yet. Add meals to the planner to generate a grocery list.</div>`
+
+  // Sum by ingredient name
+  const summed = sumIngredients(active)
+
+  // Group by category
+  const byCategory = {}
+  summed.forEach(item => {
+    const cat = item.category || 'other'
+    if (!byCategory[cat]) byCategory[cat] = []
+    byCategory[cat].push(item)
+  })
+
+  // Custom items
+  const customItems = state.groceryCustomItems || []
+
+  const excludedCount = allItems.filter(i => i.excluded).length
+
   return `
-    <div style="padding:8px 0">
-      ${items.map((item, i) => `
-        <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border);${item.checked ? 'opacity:0.45' : ''}">
-          <input type="checkbox" ${item.checked ? 'checked' : ''} onchange="toggleGroceryItem(${i})"
-            style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;flex-shrink:0" />
-          <input type="text" value="${esc(item.text)}" onchange="editGroceryItem(${i}, this.value)"
-            style="flex:1;background:none;border:none;outline:none;color:${item.checked ? 'var(--text3)' : 'var(--text)'};font-size:14px;font-family:inherit;${item.checked ? 'text-decoration:line-through' : ''}" />
-          <span style="font-size:11px;color:var(--text3)">${DAYS[item.day] || ''}</span>
-          <button class="td-act" onclick="removeGroceryItem(${i})" style="color:var(--text3);font-size:16px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'">×</button>
-        </div>`).join('')}
+    <div style="padding:0">
+      ${excludedCount ? `<div style="padding:8px 20px;font-size:12px;color:var(--text3);background:var(--bg3);border-bottom:1px solid var(--border)">${excludedCount} item${excludedCount !== 1 ? 's' : ''} excluded — <button class="clear-btn" style="color:var(--accent);font-size:12px" onclick="resetExclusions()">Show all</button></div>` : ''}
+
+      ${CATEGORY_ORDER.filter(cat => byCategory[cat]?.length).map(cat => {
+        const cfg = CATEGORIES[cat]
+        const items = byCategory[cat]
+        return `
+          <div>
+            <div style="padding:10px 20px 6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:${cfg.color};background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px">
+              <span>${cfg.emoji}</span><span>${cfg.label}</span><span style="color:var(--text3);font-weight:400">(${items.length})</span>
+            </div>
+            ${items.map(item => `
+              <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)">
+                <span style="font-weight:600;color:${cfg.color};min-width:80px;font-size:13px">
+                  ${item.totalAmount ? `${item.totalAmount % 1 === 0 ? item.totalAmount : +item.totalAmount.toFixed(2)} ${item.unit}` : '—'}
+                </span>
+                <span style="flex:1;font-size:14px;color:var(--text)">${esc(item.name)}</span>
+                <span style="font-size:11px;color:var(--text3)">${item.meals?.join(', ') || ''}</span>
+              </div>`).join('')}
+          </div>`
+      }).join('')}
+
+      ${customItems.length ? `
+        <div>
+          <div style="padding:10px 20px 6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3);background:var(--bg3);border-bottom:1px solid var(--border)">📝 Custom items</div>
+          ${customItems.map((item, i) => `
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)">
+              <input type="text" value="${esc(item.text)}" onchange="editCustomGroceryItem(${i}, this.value)"
+                style="flex:1;background:none;border:none;outline:none;color:var(--text);font-size:14px;font-family:inherit" />
+              <button class="td-act" onclick="removeCustomGroceryItem(${i})" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'" style="font-size:16px">×</button>
+            </div>`).join('')}
+        </div>` : ''}
+
+      ${!summed.length && !customItems.length ? `<div class="log-empty">All items excluded. <button class="clear-btn" style="color:var(--accent)" onclick="resetExclusions()">Reset</button></div>` : ''}
     </div>
   `
 }
@@ -500,6 +619,9 @@ function renderGroceryFull(items) {
 function renderGroceryByMeal(planner) {
   const hasMeals = planner.meals.some(d => d.length > 0)
   if (!hasMeals) return `<div class="log-empty">No meals planned yet.</div>`
+  if (!state.mealServings) state.mealServings = {}
+  if (!state.excludedIngredients) state.excludedIngredients = new Set()
+
   return `
     <div style="padding:12px 20px">
       ${DAYS.map((day, di) => {
@@ -512,25 +634,50 @@ function renderGroceryByMeal(planner) {
               const mealName = m.meal_name || m.name
               const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
               const ingredients = recipe?.ingredients || []
+              const baseServings = recipe?.servings || 1
+              const requestedServings = state.mealServings[m.id] || baseServings
+              const multiplier = requestedServings / baseServings
+
               return `
                 <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
-                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                     <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(mealName)}</div>
-                    ${!ingredients.length ? `
-                      <button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>
-                    ` : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`}
+                    ${!ingredients.length
+                      ? `<button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>`
+                      : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`}
                   </div>
-                  <div style="font-size:11px;color:var(--text3);margin-bottom:6px">${Math.round(m.calories)} kcal · P${Math.round(m.protein)} C${Math.round(m.carbs)} F${Math.round(m.fat)}</div>
+
+                  <!-- Serving size input -->
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+                    <span style="font-size:12px;color:var(--text3)">Servings:</span>
+                    <input type="number" min="1" max="100" step="1"
+                      value="${requestedServings}"
+                      onchange="setMealServings('${m.id}', this.value)"
+                      style="width:60px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none;text-align:center" />
+                    <span style="font-size:12px;color:var(--text3)">people</span>
+                    ${multiplier !== 1 ? `<span style="font-size:11px;color:var(--accent);margin-left:4px">×${+multiplier.toFixed(2)} base recipe</span>` : ''}
+                  </div>
+
                   ${ingredients.length ? `
-                    <div style="margin-top:6px">
-                      ${ingredients.map(ing => `
-                        <div style="display:flex;align-items:center;gap:8px;padding:3px 0">
-                          <input type="checkbox" style="accent-color:var(--accent);cursor:pointer;flex-shrink:0" />
-                          <span style="font-size:12px;color:var(--accent)">${esc(ing.amount || '')} ${esc(ing.unit || '')}</span>
-                          <span style="font-size:12px;color:var(--text)">${esc(ing.name)}</span>
-                        </div>`).join('')}
+                    <div>
+                      ${ingredients.map(ing => {
+                        const excKey = `${m.id}::${ing.name.toLowerCase()}`
+                        const isExcluded = state.excludedIngredients.has(excKey)
+                        const adjustedAmt = (parseFloat(ing.amount) || 0) * multiplier
+                        const displayAmt = adjustedAmt % 1 === 0 ? adjustedAmt : +adjustedAmt.toFixed(2)
+                        const cat = CATEGORIES[ing.category] || CATEGORIES.other
+                        return `
+                          <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);${isExcluded ? 'opacity:0.4' : ''}">
+                            <button onclick="toggleIngredientExclusion('${m.id}', '${ing.name.replace(/'/g,"\\'")}', ${isExcluded})"
+                              title="${isExcluded ? 'Add back to list' : 'Already have it — exclude from list'}"
+                              style="background:none;border:none;cursor:pointer;font-size:14px;padding:0;line-height:1;flex-shrink:0">${isExcluded ? '➕' : '➖'}</button>
+                            <span style="font-size:11px;padding:1px 6px;border-radius:4px;background:${cat.color}22;color:${cat.color};min-width:52px;text-align:center">${cat.emoji} ${cat.label}</span>
+                            <span style="font-size:12px;font-weight:500;color:var(--text2);min-width:65px">${displayAmt} ${esc(ing.unit || '')}</span>
+                            <span style="font-size:13px;color:var(--text);${isExcluded ? 'text-decoration:line-through' : ''}">${esc(ing.name)}</span>
+                          </div>`
+                      }).join('')}
                     </div>
-                  ` : `<div style="font-size:11px;color:var(--text3)">No ingredients — click AI extract above</div>`}
+                  ` : `<div style="font-size:11px;color:var(--text3)">No ingredients yet — click AI extract above</div>`}
                 </div>`
             }).join('')}
           </div>`
@@ -538,6 +685,8 @@ function renderGroceryByMeal(planner) {
     </div>
   `
 }
+
+
 
 function formatWeekLabel(weekStart) {
   const d = new Date(weekStart + 'T00:00:00')
@@ -1268,7 +1417,8 @@ function wireGlobals() {
     const d = new Date(state.weekStart + 'T00:00:00')
     d.setDate(d.getDate() + dir * 7)
     state.weekStart = d.toISOString().split('T')[0]
-    state.groceryItems = null // reset grocery list for new week
+    state.mealServings = {}
+    state.excludedIngredients = new Set()
     renderPage()
   }
 
@@ -1278,41 +1428,53 @@ function wireGlobals() {
     renderPage()
   }
 
-  window.toggleGroceryItem = (idx) => {
-    if (!state.groceryItems) return
-    state.groceryItems[idx].checked = !state.groceryItems[idx].checked
+  window.setMealServings = (mealId, val) => {
+    if (!state.mealServings) state.mealServings = {}
+    const n = parseInt(val)
+    if (n > 0) state.mealServings[mealId] = n
     renderPage()
   }
 
-  window.editGroceryItem = (idx, val) => {
-    if (!state.groceryItems) return
-    state.groceryItems[idx].text = val
-    // Don't re-render — let the input stay focused
+  window.toggleIngredientExclusion = (mealId, ingName, isCurrentlyExcluded) => {
+    if (!state.excludedIngredients) state.excludedIngredients = new Set()
+    const key = `${mealId}::${ingName.toLowerCase()}`
+    if (isCurrentlyExcluded) state.excludedIngredients.delete(key)
+    else state.excludedIngredients.add(key)
+    renderPage()
   }
 
-  window.removeGroceryItem = (idx) => {
-    if (!state.groceryItems) return
-    state.groceryItems.splice(idx, 1)
+  window.resetExclusions = () => {
+    state.excludedIngredients = new Set()
     renderPage()
   }
 
   window.addGroceryItem = () => {
-    if (!state.groceryItems) state.groceryItems = []
-    state.groceryItems.push({ id: Date.now().toString(), text: '', checked: false, day: -1 })
+    if (!state.groceryCustomItems) state.groceryCustomItems = []
+    state.groceryCustomItems.push({ id: Date.now().toString(), text: '' })
     renderPage()
-    // Focus the new input
     setTimeout(() => {
-      const inputs = document.querySelectorAll('[data-grocery-input]')
+      const inputs = document.querySelectorAll('[onchange*="editCustomGroceryItem"]')
       const last = inputs[inputs.length - 1]
       if (last) last.focus()
     }, 50)
   }
 
-  window.clearCheckedItems = () => {
-    if (!state.groceryItems) return
-    state.groceryItems = state.groceryItems.filter(i => !i.checked)
+  window.editCustomGroceryItem = (idx, val) => {
+    if (!state.groceryCustomItems) return
+    state.groceryCustomItems[idx].text = val
+  }
+
+  window.removeCustomGroceryItem = (idx) => {
+    if (!state.groceryCustomItems) return
+    state.groceryCustomItems.splice(idx, 1)
     renderPage()
   }
+
+  // Legacy handlers — kept for compat
+  window.toggleGroceryItem = () => {}
+  window.editGroceryItem = () => {}
+  window.removeGroceryItem = () => {}
+  window.clearCheckedItems = () => {}
 
   window.addIngredientToMeal = (mealId, dayIdx) => {
     const ingredient = prompt('Add ingredient:')
@@ -1425,7 +1587,8 @@ function wireGlobals() {
     try {
       await deletePlannerMeal(state.user.id, id)
       state.planner.meals[d].splice(m, 1)
-      state.groceryItems = null // regenerate grocery list
+      state.groceryItems = null
+      state.excludedIngredients = new Set()
       renderPage()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
