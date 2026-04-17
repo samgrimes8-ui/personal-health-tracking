@@ -22,7 +22,7 @@ let state = {
   planner: { meals: Array(7).fill(null).map(() => []) },
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false },
   currentPage: 'log',
-  currentMode: 'photo',
+  currentMode: 'recipe',
   imageBase64: null,
   currentEntry: null,
   editingEntry: null,
@@ -242,18 +242,18 @@ function renderDashboard(container) {
       <div class="upload-card">
         <div class="section-title">Analyze food</div>
         <div class="mode-tabs">
-          <button class="mode-tab ${state.currentMode === 'photo' ? 'active' : ''}" onclick="switchMode('photo')">📸 Photo</button>
           <button class="mode-tab ${state.currentMode === 'recipe' ? 'active' : ''}" onclick="switchMode('recipe')">📝 Recipe</button>
+          <button class="mode-tab ${state.currentMode === 'photo' ? 'active' : ''}" onclick="switchMode('photo')">📸 Photo</button>
           <button class="mode-tab ${state.currentMode === 'link' ? 'active' : ''}" onclick="switchMode('link')">🔍 Search</button>
+        </div>
+        <div class="mode-panel ${state.currentMode === 'recipe' ? 'active' : ''}" id="mode-recipe">
+          <textarea class="recipe-textarea" id="recipe-input" placeholder="Describe your recipe or paste ingredients...&#10;&#10;e.g. Grilled chicken breast 200g, brown rice 1 cup, olive oil 1 tbsp"></textarea>
         </div>
         <div class="mode-panel ${state.currentMode === 'photo' ? 'active' : ''}" id="mode-photo">
           <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
             <div id="upload-inner"><div class="upload-icon">📸</div><div class="upload-text">Drop a photo of your food</div><div class="upload-hint">supports jpg, png, webp</div></div>
           </div>
           <input type="file" id="file-input" accept="image/*" style="display:none" />
-        </div>
-        <div class="mode-panel ${state.currentMode === 'recipe' ? 'active' : ''}" id="mode-recipe">
-          <textarea class="recipe-textarea" id="recipe-input" placeholder="Describe your recipe or paste ingredients...&#10;&#10;e.g. Grilled chicken breast 200g, brown rice 1 cup, olive oil 1 tbsp"></textarea>
         </div>
         <div class="mode-panel ${state.currentMode === 'link' ? 'active' : ''}" id="mode-link">
           <input class="link-input" type="url" id="link-input" placeholder="Paste URL (optional)..." style="margin-bottom:8px" />
