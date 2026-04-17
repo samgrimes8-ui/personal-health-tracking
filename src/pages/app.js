@@ -2290,6 +2290,7 @@ function wireGlobals() {
     if (!recipe) return
     state.planningRecipe = { recipe, selectedDays: [], cookOnceOpen: false }
     document.getElementById('plan-recipe-modal-content').innerHTML = renderPlanRecipeModal(recipe)
+    document.getElementById('recipe-modal')?.classList.remove('open')
     document.getElementById('plan-recipe-modal').classList.add('open')
   }
 
