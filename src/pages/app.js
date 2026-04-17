@@ -6,7 +6,8 @@ import {
   getUsageSummary, getAdminUserOverview, setUserPrivileges,
   getRecipes, upsertRecipe, deleteRecipe, getRecipeByName,
   getWeeksWithMeals, getPlannerRange,
-  getFoodItems, upsertFoodItem, deleteFoodItem
+  getFoodItems, upsertFoodItem, deleteFoodItem,
+  saveRecipeInstructions
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -2955,13 +2956,18 @@ function wireGlobals() {
       const recipe = state.recipes.find(r => r.id === recipeId)
       if (!recipe) return
       const result = await generateRecipeInstructions(recipe)
-      // Save to recipe
+      if (!result?.steps?.length) throw new Error('No instructions returned')
+
+      // Update state immediately so UI shows them
       recipe.instructions = result
       state.editingRecipe = { ...state.editingRecipe, instructions: result }
-      await upsertRecipe(state.user.id, { ...recipe, instructions: result })
+
+      // Save directly via targeted update — only touches instructions column
+      await saveRecipeInstructions(state.user.id, recipeId, result)
+      showToast('Instructions saved!', 'success')
+
       state.recipeTab = 'instructions'
       document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'view')
-      showToast('Instructions generated!', 'success')
     } catch (err) {
       showToast('Failed: ' + err.message, 'error')
       if (btn) { btn.disabled = false; btn.textContent = '✨ Generate cooking instructions with AI' }

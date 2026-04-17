@@ -371,13 +371,32 @@ export async function upsertRecipe(userId, recipe) {
   try {
     return await tryUpsert(payload)
   } catch (err) {
-    // Schema cache lag — strip newer columns and retry
-    if (err.message?.includes('source_url') || err.message?.includes('instructions') || err.message?.includes('notes')) {
-      const { source_url, instructions, notes, ...stripped } = payload
+    // Schema cache lag — strip only the specific column causing the error and retry
+    if (err.message?.includes("'recipes'")) {
+      const stripped = { ...payload }
+      if (err.message?.includes('source_url')) delete stripped.source_url
+      if (err.message?.includes('notes') && !err.message?.includes('ai_notes')) delete stripped.notes
+      // Never strip instructions — it's the most important field to persist
       return await tryUpsert(stripped)
     }
     throw err
   }
+}
+
+
+export async function saveRecipeInstructions(userId, recipeId, instructions) {
+  if (!supabase) {
+    const all = getLocalFallback('macrolens_recipes', [])
+    const idx = all.findIndex(r => r.id === recipeId)
+    if (idx !== -1) { all[idx].instructions = instructions; setLocalFallback('macrolens_recipes', all) }
+    return
+  }
+  const { error } = await supabase
+    .from('recipes')
+    .update({ instructions, updated_at: new Date().toISOString() })
+    .eq('id', recipeId)
+    .eq('user_id', userId)
+  if (error) throw error
 }
 
 export async function deleteRecipe(userId, id) {
