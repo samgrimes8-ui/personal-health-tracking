@@ -23,7 +23,7 @@ let state = {
   planner: { meals: Array(7).fill(null).map(() => []) },
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false },
   currentPage: 'log',
-  currentMode: 'recipe',
+  currentMode: 'food',
   foodMode: 'barcode',    // 'barcode' | 'label' | 'search'
   imageBase64: null,
   labelImageBase64: null,
@@ -275,10 +275,10 @@ function renderDashboard(container) {
       <div class="upload-card">
         <div class="section-title">Analyze food</div>
         <div class="mode-tabs">
+          <button class="mode-tab ${state.currentMode === 'food' ? 'active' : ''}" onclick="switchMode('food')">🍎 Food</button>
           <button class="mode-tab ${state.currentMode === 'recipe' ? 'active' : ''}" onclick="switchMode('recipe')">📝 Recipe</button>
           <button class="mode-tab ${state.currentMode === 'photo' ? 'active' : ''}" onclick="switchMode('photo')">📸 Photo</button>
           <button class="mode-tab ${state.currentMode === 'link' ? 'active' : ''}" onclick="switchMode('link')">🔍 Search</button>
-          <button class="mode-tab ${state.currentMode === 'food' ? 'active' : ''}" onclick="switchMode('food')">🍎 Food</button>
         </div>
         <div class="mode-panel ${state.currentMode === 'recipe' ? 'active' : ''}" id="mode-recipe">
           <textarea class="recipe-textarea" id="recipe-input" placeholder="Describe your recipe or paste ingredients...&#10;&#10;e.g. Grilled chicken breast 200g, brown rice 1 cup, olive oil 1 tbsp"></textarea>
