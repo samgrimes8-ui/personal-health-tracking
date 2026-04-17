@@ -1022,28 +1022,28 @@ function renderRecipeModalContent(recipe, mode = 'view') {
     <div style="position:relative">
 
       <!-- Sticky header: name + plan button -->
-      <div style="position:sticky;top:0;z-index:10;background:var(--bg2);border-bottom:1px solid var(--border);padding:16px 20px 14px">
-        <button class="modal-close" onclick="closeRecipeModal()" style="top:12px;right:14px">×</button>
+      <div style="position:sticky;top:0;z-index:10;background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 16px 10px">
+        <button class="modal-close" onclick="closeRecipeModal()" style="top:10px;right:12px">×</button>
 
         ${mode === 'edit' || isNew ? `
           <input type="text" id="recipe-name" value="${esc(recipe.name || '')}"
             placeholder="Recipe name..."
-            style="width:100%;background:none;border:none;border-bottom:1px solid var(--border2);outline:none;font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);padding-bottom:6px;margin-right:32px;display:block" />
+            style="width:100%;background:none;border:none;border-bottom:1px solid var(--border2);outline:none;font-family:'DM Serif Display',serif;font-size:20px;color:var(--text);padding-bottom:4px;margin-right:32px;display:block" />
         ` : `
-          <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-right:36px;line-height:1.2;margin-bottom:8px">${esc(recipe.name)}</div>
+          <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);margin-right:36px;line-height:1.2;margin-bottom:8px">${esc(recipe.name)}</div>
         `}
 
         ${isView ? `
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px">
-            <div style="display:flex;gap:6px;flex-wrap:wrap;flex:1">
-              <span class="macro-pill pill-cal" style="font-size:11px;padding:3px 8px">${Math.round(recipe.calories)} kcal</span>
-              <span class="macro-pill pill-p" style="font-size:11px;padding:3px 8px">${Math.round(recipe.protein)}g P</span>
-              <span class="macro-pill pill-c" style="font-size:11px;padding:3px 8px">${Math.round(recipe.carbs)}g C</span>
-              <span class="macro-pill pill-f" style="font-size:11px;padding:3px 8px">${Math.round(recipe.fat)}g F</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div style="display:flex;gap:4px;flex-wrap:nowrap;flex:1;overflow:hidden;min-width:0">
+              <span class="macro-pill pill-cal" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.calories)} kcal</span>
+              <span class="macro-pill pill-p" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.protein)}g P</span>
+              <span class="macro-pill pill-c" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.carbs)}g C</span>
+              <span class="macro-pill pill-f" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.fat)}g F</span>
             </div>
             <button onclick="openPlanRecipeModal('${recipe.id}')"
-              style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:8px 16px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
-              📅 Add to plan
+              style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:7px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
+              📅 Plan
             </button>
           </div>
         ` : ''}
