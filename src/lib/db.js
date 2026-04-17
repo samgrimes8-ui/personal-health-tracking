@@ -422,17 +422,19 @@ export async function getPlannerRange(userId, fromDate, toDate) {
     .order('day_of_week')
   if (error) throw error
 
+  // Helper: local date string without UTC shift
+  const localDs = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+
   // Filter to only days within fromDate..toDate
   const meals = (data ?? []).filter(row => {
-    const d = new Date(row.week_start_date + 'T00:00:00')
-    d.setDate(d.getDate() + row.day_of_week)
-    const ds = d.toISOString().split('T')[0]
+    const [yr, mo, dy] = row.week_start_date.split('-').map(Number)
+    const d = new Date(yr, mo - 1, dy + row.day_of_week)
+    const ds = localDs(d)
     return ds >= fromDate && ds <= toDate
   }).map(row => {
-    // Attach the actual date for display
-    const d = new Date(row.week_start_date + 'T00:00:00')
-    d.setDate(d.getDate() + row.day_of_week)
-    return { ...row, actualDate: d.toISOString().split('T')[0] }
+    const [yr, mo, dy] = row.week_start_date.split('-').map(Number)
+    const d = new Date(yr, mo - 1, dy + row.day_of_week)
+    return { ...row, actualDate: localDs(d) }
   })
 
   return { meals }

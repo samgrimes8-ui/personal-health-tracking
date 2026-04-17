@@ -50,6 +50,11 @@ let state = {
   editingRecipe: null,  // recipe being edited in modal
 }
 
+// Safe local date string — avoids UTC timezone shift from toISOString()
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
 function getWeekStart() {
   const d = new Date()
   d.setDate(d.getDate() - d.getDay())
@@ -549,9 +554,10 @@ function renderCalendarPicker() {
   const weeksSet = new Set(state.weeksWithMeals)
 
   function getWeekStartForDate(dateStr) {
-    const d = new Date(dateStr + 'T00:00:00')
+    const [yr, mo, dy] = dateStr.split('-').map(Number)
+    const d = new Date(yr, mo - 1, dy)
     d.setDate(d.getDate() - d.getDay())
-    return d.toISOString().split('T')[0]
+    return localDateStr(d)
   }
 
   const cells = []
@@ -585,7 +591,7 @@ function renderCalendarPicker() {
               const wk = getWeekStartForDate(dateStr)
               const isSelected = wk === currentWeekStart
               const hasMeals = weeksSet.has(wk)
-              const isToday = dateStr === today.toISOString().split('T')[0]
+              const isToday = dateStr === localDateStr(today)
               return `<button onclick="jumpToWeek('${wk}')"
                 style="aspect-ratio:1;border-radius:50%;border:none;cursor:pointer;font-size:11px;font-family:inherit;position:relative;
                   background:${isSelected ? 'var(--accent)' : 'none'};
@@ -1251,7 +1257,7 @@ function renderPlanRecipeModal(recipe) {
   for (let i = 0; i < 28; i++) {
     const d = new Date(today)
     d.setDate(today.getDate() + i)
-    const dateStr = d.toISOString().split('T')[0]
+    const dateStr = localDateStr(d)
     // Get week start (Sunday)
     const ws = new Date(d)
     ws.setDate(d.getDate() - d.getDay())
@@ -1260,7 +1266,7 @@ function renderPlanRecipeModal(recipe) {
       label: DAYS_SHORT[d.getDay()],
       dayNum: d.getDate(),
       month: d.toLocaleDateString([], { month: 'short' }),
-      weekStart: ws.toISOString().split('T')[0],
+      weekStart: localDateStr(ws),
       isToday: i === 0,
       isFirstOfMonth: d.getDate() === 1 || i === 0
     })
@@ -2494,8 +2500,9 @@ function wireGlobals() {
       // First day = primary (ingredients counted), rest = cook-once leftovers
       for (let i = 0; i < selectedDays.length; i++) {
         const { dateStr, weekStart } = selectedDays[i]
-        const dt = new Date(dateStr + 'T00:00:00')
-        const dayOfWeek = dt.getDay()
+        // Parse date parts directly to avoid UTC timezone shift
+        const [yr, mo, dy] = dateStr.split('-').map(Number)
+        const dayOfWeek = new Date(yr, mo - 1, dy).getDay()
         const mealName = i === 0 || selectedDays.length === 1
           ? recipe.name
           : `${recipe.name} (leftovers)`
