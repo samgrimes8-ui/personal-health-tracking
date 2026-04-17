@@ -54,13 +54,18 @@ function getWeekStart() {
   return d.toISOString().split('T')[0]
 }
 
+let _appInitialized = false
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 export async function initApp(user, container) {
   state.user = user
   await loadAll()
-  renderShell(container)
+  if (!_appInitialized) {
+    renderShell(container)
+    wireGlobals()
+    _appInitialized = true
+  }
   renderPage()
-  wireGlobals()
 }
 
 async function loadAll() {
@@ -275,10 +280,10 @@ function renderDashboard(container) {
       <div class="upload-card">
         <div class="section-title">Analyze food</div>
         <div class="mode-tabs">
-          <button class="mode-tab ${state.currentMode === 'food' ? 'active' : ''}" onclick="switchMode('food')">🍎 Food</button>
-          <button class="mode-tab ${state.currentMode === 'recipe' ? 'active' : ''}" onclick="switchMode('recipe')">📝 Recipe</button>
-          <button class="mode-tab ${state.currentMode === 'photo' ? 'active' : ''}" onclick="switchMode('photo')">📸 Photo</button>
-          <button class="mode-tab ${state.currentMode === 'link' ? 'active' : ''}" onclick="switchMode('link')">🔍 Search</button>
+          <button class="mode-tab ${state.currentMode === 'food' ? 'active' : ''}" data-mode="food" onclick="switchMode('food')">🍎 Food</button>
+          <button class="mode-tab ${state.currentMode === 'recipe' ? 'active' : ''}" data-mode="recipe" onclick="switchMode('recipe')">📝 Recipe</button>
+          <button class="mode-tab ${state.currentMode === 'photo' ? 'active' : ''}" data-mode="photo" onclick="switchMode('photo')">📸 Photo</button>
+          <button class="mode-tab ${state.currentMode === 'link' ? 'active' : ''}" data-mode="link" onclick="switchMode('link')">🔍 Search</button>
         </div>
         <div class="mode-panel ${state.currentMode === 'recipe' ? 'active' : ''}" id="mode-recipe">
           <textarea class="recipe-textarea" id="recipe-input" placeholder="Describe your recipe or paste ingredients...&#10;&#10;e.g. Grilled chicken breast 200g, brown rice 1 cup, olive oil 1 tbsp"></textarea>
@@ -1526,12 +1531,14 @@ function wireGlobals() {
   window.switchMode = (mode) => {
     state.currentMode = mode
     if (mode !== 'photo') state.imageBase64 = null
-    // Swap tab buttons and panels in place
+    // Toggle panels
     ;['recipe', 'photo', 'link', 'food'].forEach(m => {
       const panel = document.getElementById(`mode-${m}`)
-      const btns = document.querySelectorAll(`.mode-tab[onclick="switchMode('${m}')"]`)
       if (panel) panel.classList.toggle('active', m === mode)
-      btns.forEach(b => b.classList.toggle('active', m === mode))
+    })
+    // Toggle tab buttons — use data-mode attribute
+    document.querySelectorAll('.mode-tab[data-mode]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === mode)
     })
     if (mode === 'food') {
       if (state.foodMode === 'label') wireLabelFileInput()
@@ -1541,7 +1548,6 @@ function wireGlobals() {
 
   window.setFoodMode = (mode) => {
     state.foodMode = mode
-    // Swap panels and button states in place — no full re-render needed
     ;['barcode', 'label', 'search'].forEach(m => {
       const panel = document.getElementById(`food-panel-${m}`)
       const btn = document.getElementById(`food-btn-${m}`)
