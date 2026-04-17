@@ -1283,9 +1283,9 @@ function renderFoodItemModal(item, editingComponents) {
       </div>
 
       <div style="display:flex;gap:8px;margin-top:12px">
-        <button onclick="cancelAddComponent()" class="btn-cancel" style="flex:1">Cancel</button>
-        <button onclick="confirmAddComponent()" class="btn-save" style="flex:1" id="comp-add-btn">Add component</button>
+        <button onclick="cancelAddComponent()" class="btn-cancel" style="flex:0 0 auto">Cancel</button>
         <button onclick="analyzeComponentHandler()" class="pm-analyze-btn" style="flex:1;margin:0" id="comp-analyze-btn">✨ Look up</button>
+        <button onclick="confirmAddComponent()" class="btn-save" style="flex:0 0 auto;opacity:0.5" id="comp-add-btn">Add ✓</button>
       </div>
     </div>
   `
@@ -2794,31 +2794,74 @@ function wireGlobals() {
 
   window.analyzeComponentHandler = async () => {
     const btn = document.getElementById('comp-analyze-btn')
-    const activeMode = document.getElementById('comp-panel-describe').style.display !== 'none' ? 'describe' : 'barcode'
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="analyzing-spinner"></span>' }
+    const descPanel = document.getElementById('comp-panel-describe')
+    const isDescribe = descPanel && descPanel.style.display !== 'none'
+
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="analyzing-spinner"></span> Looking up...' }
     try {
       let result
-      if (activeMode === 'describe') {
+      if (isDescribe) {
         const desc = document.getElementById('comp-describe-input')?.value.trim()
         if (!desc) { showToast('Describe the component first', 'error'); return }
         result = await analyzeFoodItem(desc)
+      } else {
+        // Barcode manual input
+        const code = document.getElementById('comp-barcode-manual')?.value.trim()
+        if (!code) { showToast('Enter a barcode number', 'error'); return }
+        const res = await fetch(`/api/barcode?upc=${code}`)
+        const data = await res.json()
+        if (data.found) result = data
+        else { showToast('Product not found', 'error'); return }
       }
       if (result) {
-        state.pendingComponent = { name: result.name, calories: result.calories, protein: result.protein, carbs: result.carbs, fat: result.fat, fiber: result.fiber || 0, sugar: result.sugar || 0 }
+        state.pendingComponent = {
+          name: result.name,
+          calories: result.calories || 0,
+          protein: result.protein || 0,
+          carbs: result.carbs || 0,
+          fat: result.fat || 0,
+          fiber: result.fiber || 0,
+          sugar: result.sugar || 0
+        }
         showComponentResult(state.pendingComponent)
       }
-    } catch (err) { showToast('Lookup failed: ' + err.message, 'error') }
-    if (btn) { btn.disabled = false; btn.textContent = '✨ Look up' }
+    } catch (err) {
+      showToast('Lookup failed: ' + err.message, 'error')
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '✨ Look up' }
+    }
   }
 
   function showComponentResult(c) {
     const el = document.getElementById('comp-result')
     const nameEl = document.getElementById('comp-result-name')
     const macroEl = document.getElementById('comp-result-macros')
+    const addBtn = document.getElementById('comp-add-btn')
     if (!el) return
     el.style.display = 'block'
     if (nameEl) nameEl.textContent = c.name
     if (macroEl) macroEl.textContent = `${Math.round(c.calories)} kcal · P${Math.round(c.protein)}g C${Math.round(c.carbs)}g F${Math.round(c.fat)}g`
+    // Highlight add button once result is ready
+    if (addBtn) { addBtn.style.background = 'var(--accent)'; addBtn.style.color = '#1a1500' }
+  }
+
+  window.confirmAddComponent = () => {
+    if (!state.pendingComponent) { showToast('Look up a component first', 'error'); return }
+    if (!state.editingComponents) state.editingComponents = []
+    state.editingComponents.push({ ...state.pendingComponent })
+    state.pendingComponent = null
+    // Re-render modal content, then re-open the add panel so user can add more
+    document.getElementById('food-item-modal-content').innerHTML = renderFoodItemModal(state.editingFoodItem, state.editingComponents)
+    // Re-open the component panel for adding another
+    const panel = document.getElementById('add-component-panel')
+    if (panel) {
+      panel.style.display = 'block'
+      const resultEl = document.getElementById('comp-result')
+      if (resultEl) resultEl.style.display = 'none'
+      const descInput = document.getElementById('comp-describe-input')
+      if (descInput) descInput.value = ''
+    }
+    showToast(`${(state.editingComponents[state.editingComponents.length-1]?.name || 'Component')} added!`, 'success')
   }
 
   window.handleComponentBarcode = async (file) => {
