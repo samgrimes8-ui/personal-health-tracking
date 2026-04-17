@@ -2021,17 +2021,20 @@ function showResult(r) {
   `
   const btn = document.getElementById('log-entry-btn')
   if (btn) { btn.textContent = '+ Log this meal'; btn.className = 'log-btn'; btn.style.display = 'block' }
-  // Add "Save as recipe" button if not already there
+  // Add save button — routes to Foods or Recipes based on content
   if (!document.getElementById('save-recipe-btn')) {
     const recipeBtn = document.createElement('button')
     recipeBtn.id = 'save-recipe-btn'
     recipeBtn.className = 'log-btn'
-    recipeBtn.textContent = '⭐ Save as recipe'
+    const hasIngredients = r.ingredients?.length > 0
+    recipeBtn.textContent = hasIngredients ? '⭐ Save as recipe' : '🍎 Save to My Foods'
     recipeBtn.onclick = () => window.saveAsRecipeHandler?.()
     btn?.parentNode?.appendChild(recipeBtn)
   } else {
     const rb = document.getElementById('save-recipe-btn')
-    rb.textContent = '⭐ Save as recipe'; rb.disabled = false; rb.style.color = ''
+    const hasIngredients = r.ingredients?.length > 0
+    rb.textContent = hasIngredients ? '⭐ Save as recipe' : '🍎 Save to My Foods'
+    rb.disabled = false; rb.style.color = ''
   }
 }
 
@@ -3707,31 +3710,52 @@ function wireGlobals() {
   window.saveAsRecipeHandler = async () => {
     if (!state.currentEntry) return
     const e = state.currentEntry
+    const hasIngredients = e.ingredients?.length > 0
+    const btn = document.getElementById('save-recipe-btn')
+
     try {
-      const existing = await getRecipeByName(state.user.id, e.name)
-      if (existing) {
-        // Update ingredients if we have them and existing doesn't
-        if (e.ingredients?.length && !existing.ingredients?.length) {
-          await upsertRecipe(state.user.id, { ...existing, ingredients: e.ingredients })
-          const idx = state.recipes.findIndex(r => r.id === existing.id)
-          if (idx !== -1) state.recipes[idx] = { ...existing, ingredients: e.ingredients }
+      if (hasIngredients) {
+        // Has ingredients → save as Recipe
+        const existing = await getRecipeByName(state.user.id, e.name)
+        if (existing) {
+          if (e.ingredients?.length && !existing.ingredients?.length) {
+            await upsertRecipe(state.user.id, { ...existing, ingredients: e.ingredients })
+            const idx = state.recipes.findIndex(r => r.id === existing.id)
+            if (idx !== -1) state.recipes[idx] = { ...existing, ingredients: e.ingredients }
+          }
+          showToast('Already in Recipes', '')
+          return
         }
-        showToast('Recipe already saved — find it in Recipes', '')
-        return
+        const recipe = await upsertRecipe(state.user.id, {
+          name: e.name, description: e.description || '',
+          servings: e.servings || 1, calories: e.calories,
+          protein: e.protein, carbs: e.carbs, fat: e.fat,
+          fiber: e.fiber || 0, sugar: e.sugar || 0,
+          ingredients: e.ingredients, source: 'ai_photo',
+          confidence: e.confidence, ai_notes: e.notes || ''
+        })
+        state.recipes.unshift(recipe)
+        showToast(`"${e.name}" saved to Recipes!`, 'success')
+        if (btn) { btn.textContent = '✓ Saved to Recipes'; btn.style.color = 'var(--protein)'; btn.disabled = true }
+      } else {
+        // No ingredients → save to My Foods
+        const existing = state.foodItems.find(f => f.name.toLowerCase() === e.name.toLowerCase())
+        if (existing) {
+          showToast('Already in My Foods', '')
+          return
+        }
+        const food = await upsertFoodItem(state.user.id, {
+          name: e.name,
+          brand: e.brand || '',
+          serving_size: e.serving_size || '1 serving',
+          calories: e.calories, protein: e.protein, carbs: e.carbs,
+          fat: e.fat, fiber: e.fiber || 0, sugar: e.sugar || 0,
+          sodium: e.sodium || 0, components: [], source: 'ai',
+        })
+        state.foodItems.unshift(food)
+        showToast(`"${e.name}" saved to My Foods!`, 'success')
+        if (btn) { btn.textContent = '✓ Saved to Foods'; btn.style.color = 'var(--carbs)'; btn.disabled = true }
       }
-      const recipe = await upsertRecipe(state.user.id, {
-        name: e.name,
-        description: e.description || '',
-        servings: e.servings || 1,
-        calories: e.calories, protein: e.protein, carbs: e.carbs,
-        fat: e.fat, fiber: e.fiber || 0, sugar: e.sugar || 0,
-        ingredients: e.ingredients || [],
-        source: 'ai_photo', confidence: e.confidence, ai_notes: e.notes || ''
-      })
-      state.recipes.unshift(recipe)
-      showToast(`"${e.name}" saved to Recipes with ${e.ingredients?.length || 0} ingredients!`, 'success')
-      const btn = document.getElementById('save-recipe-btn')
-      if (btn) { btn.textContent = '✓ Saved to Recipes'; btn.style.color = 'var(--green)'; btn.disabled = true }
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
