@@ -161,7 +161,7 @@ function renderShell(container) {
           <button class="pm-tab" id="pm-tab-photo" onclick="switchPlannerTab('photo')">📸 Photo</button>
         </div>
         <div class="pm-panel active" id="pm-panel-history">
-          <input class="planner-search" id="planner-search" placeholder="Search meals from history..." oninput="filterPlannerList()" />
+          <input class="planner-search" id="planner-search" placeholder="Search recipes and meal history..." oninput="filterPlannerList()" />
           <div class="history-pick-list" id="history-pick-list"></div>
         </div>
         <div class="pm-panel" id="pm-panel-ai">
@@ -311,6 +311,18 @@ function renderDashboard(container) {
           <div><div class="bar-row-label"><span class="bar-label">Carbs</span><span class="bar-val" id="bar-c-val">—</span></div><div class="bar-bg"><div class="bar-fill" id="bar-c" style="background:var(--carbs);width:0%"></div></div></div>
           <div><div class="bar-row-label"><span class="bar-label">Fat</span><span class="bar-val" id="bar-f-val">—</span></div><div class="bar-bg"><div class="bar-fill" id="bar-f" style="background:var(--fat);width:0%"></div></div></div>
         </div>
+      </div>
+    </div>
+
+    <div class="log-card" style="margin-bottom:16px">
+      <div class="log-header">
+        <span class="log-header-title">Quick log</span>
+        <span style="font-size:11px;color:var(--text3)">from history or recipes</span>
+      </div>
+      <div style="padding:12px 16px">
+        <input class="planner-search" id="quick-log-search" placeholder="Search meals and recipes to log..."
+          oninput="filterQuickLog()" style="margin-bottom:8px" />
+        <div id="quick-log-list"></div>
       </div>
     </div>
 
@@ -1496,6 +1508,8 @@ function wireGlobals() {
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
+  window.filterQuickLog = filterQuickLog
+
   // API key no longer needed client-side — handled by server proxy
 
   window.handleSignOut = async () => {
@@ -2102,26 +2116,132 @@ function wireGlobals() {
   document.getElementById('recipe-modal')?.addEventListener('click', e => { if (e.target.id === 'recipe-modal') closeRecipeModal() })
 }
 
-function filterPlannerList() {
-  const q = document.getElementById('planner-search')?.value.toLowerCase() ?? ''
-  const seen = new Set()
-  const unique = state.log.filter(e => { if (seen.has(e.name)) return false; seen.add(e.name); return true })
-  const filtered = q ? unique.filter(e => e.name.toLowerCase().includes(q)) : unique
-  const list = document.getElementById('history-pick-list')
+function filterQuickLog() {
+  const q = document.getElementById('quick-log-search')?.value.toLowerCase() ?? ''
+  const list = document.getElementById('quick-log-list')
   if (!list) return
+
+  if (!q) { list.innerHTML = ''; return }
+
+  // Merge recipes + unique log entries
+  const items = []
+  const seen = new Set()
+
+  state.recipes.forEach(r => {
+    seen.add(r.name.toLowerCase())
+    items.push({ ...r, source: 'recipe' })
+  })
+  state.log.forEach(e => {
+    const key = e.name.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    items.push({ ...e, source: 'log' })
+  })
+
+  const filtered = items.filter(i => i.name.toLowerCase().includes(q)).slice(0, 8)
+
   if (!filtered.length) {
-    list.innerHTML = `<div style="padding:20px;text-align:center;font-size:13px;color:var(--text3)">No meals found. Log some meals first.</div>`
+    list.innerHTML = `<div style="padding:8px 4px;font-size:13px;color:var(--text3)">No matches — try analyzing a new meal above</div>`
     return
   }
-  list.innerHTML = filtered.slice(0, 30).map(e => `
-    <div class="history-pick-item" onclick="addHistoryMealToPlanner('${e.id}')">
-      <span class="hpi-name">${esc(e.name)}</span>
-      <span class="hpi-cal">${Math.round(e.calories)} kcal</span>
+
+  list.innerHTML = filtered.map(item => `
+    <div class="history-pick-item" onclick="quickLogMeal('${esc(item.source === 'recipe' ? 'recipe::' + item.id : item.id)}')"
+      style="border-radius:var(--r)">
+      <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
+        <span class="hpi-name">${esc(item.name)}</span>
+        <span style="font-size:10px;color:${item.source === 'recipe' ? 'var(--protein)' : 'var(--text3)'}">
+          ${item.source === 'recipe' ? '⭐ Recipe' : '📋 Log history'}
+        </span>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div class="hpi-cal">${Math.round(item.calories)} kcal</div>
+        <div style="font-size:10px;color:var(--text3)">P${Math.round(item.protein)} C${Math.round(item.carbs)} F${Math.round(item.fat)}</div>
+      </div>
+    </div>`).join('')
+
+  window.quickLogMeal = async (id) => {
+    let meal
+    if (id.startsWith('recipe::')) {
+      meal = state.recipes.find(r => r.id === id.replace('recipe::', ''))
+    } else {
+      meal = state.log.find(e => String(e.id) === String(id))
+    }
+    if (!meal) return
+    try {
+      const entry = await addMealEntry(state.user.id, meal)
+      state.log.unshift(entry)
+      // Clear the search
+      const input = document.getElementById('quick-log-search')
+      if (input) input.value = ''
+      document.getElementById('quick-log-list').innerHTML = ''
+      updateStats()
+      showToast(`${meal.name} logged!`, 'success')
+    } catch (err) { showToast('Failed to log: ' + err.message, 'error') }
+  }
+}
+
+function filterPlannerList() {
+  const q = document.getElementById('planner-search')?.value.toLowerCase() ?? ''
+  const list = document.getElementById('history-pick-list')
+  if (!list) return
+
+  // Build merged list: recipes first, then unique logged meals
+  const items = []
+  const seen = new Set()
+
+  // 1. Saved recipes (always available, most useful)
+  state.recipes.forEach(r => {
+    seen.add(r.name.toLowerCase())
+    items.push({
+      id: 'recipe::' + r.id,
+      name: r.name,
+      calories: r.calories,
+      protein: r.protein,
+      carbs: r.carbs,
+      fat: r.fat,
+      fiber: r.fiber || 0,
+      sugar: r.sugar || 0,
+      servings: r.servings,
+      ingredients: r.ingredients || [],
+      source: 'recipe'
+    })
+  })
+
+  // 2. Logged meals not already covered by a recipe
+  state.log.forEach(e => {
+    const key = e.name.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    items.push({ ...e, source: 'log' })
+  })
+
+  const filtered = q ? items.filter(i => i.name.toLowerCase().includes(q)) : items
+
+  if (!filtered.length) {
+    list.innerHTML = `<div style="padding:20px;text-align:center;font-size:13px;color:var(--text3)">${q ? 'No matches found.' : 'No meals or recipes yet.'}</div>`
+    return
+  }
+
+  list.innerHTML = filtered.slice(0, 40).map(item => `
+    <div class="history-pick-item" onclick="addHistoryMealToPlanner('${esc(item.id)}')">
+      <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0">
+        <span class="hpi-name">${esc(item.name)}</span>
+        ${item.source === 'recipe' ? `<span style="font-size:10px;color:var(--protein)">⭐ Recipe${item.servings ? ' · ' + item.servings + ' servings' : ''}</span>` : `<span style="font-size:10px;color:var(--text3)">📋 From log</span>`}
+      </div>
+      <span class="hpi-cal">${Math.round(item.calories)} kcal</span>
     </div>`).join('')
 
   window.addHistoryMealToPlanner = async (id) => {
     if (!state.plannerTarget) return
-    const meal = state.log.find(e => String(e.id) === String(id))
+    // Find from merged list
+    let meal
+    if (id.startsWith('recipe::')) {
+      const recipeId = id.replace('recipe::', '')
+      meal = state.recipes.find(r => r.id === recipeId)
+    } else {
+      meal = state.log.find(e => String(e.id) === String(id))
+    }
     if (!meal) return
     const addAsLeftover = document.getElementById('leftover-check').checked
     const dayIdx = state.plannerTarget.dayIdx
