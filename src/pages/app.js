@@ -27,6 +27,7 @@ let state = {
   imageBase64: null,
   currentEntry: null,
   editingEntry: null,
+  editingBaseMacros: null,
   plannerTarget: null,
   plannerTab: 'history',
   plannerView: 'meals',
@@ -135,6 +136,16 @@ function renderShell(container) {
         <button class="modal-close" onclick="closeEditModal()">×</button>
         <h3>Edit meal</h3>
         <div class="modal-field"><label>Meal name</label><input type="text" id="edit-name" /></div>
+
+        <!-- Servings multiplier -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
+          <label style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;white-space:nowrap">Servings</label>
+          <input type="number" id="edit-servings" min="0.25" max="20" step="0.25" value="1"
+            oninput="applyServingsMultiplier()"
+            style="width:70px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:6px 10px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;text-align:center" />
+          <span style="font-size:12px;color:var(--text3)">× per-serving values below</span>
+        </div>
+
         <div class="modal-grid">
           <div class="modal-field"><label>Calories</label><input type="number" id="edit-cal" /></div>
           <div class="modal-field"><label>Protein (g)</label><input type="number" id="edit-protein" /></div>
@@ -1533,7 +1544,17 @@ function wireGlobals() {
     }
     if (!entry) return
     state.editingEntry = { id, source, plannerCtx }
+    // Store base per-serving macros so the multiplier always works from original values
+    state.editingBaseMacros = {
+      calories: entry.calories || 0,
+      protein: entry.protein || 0,
+      carbs: entry.carbs || 0,
+      fat: entry.fat || 0,
+      fiber: entry.fiber || 0,
+      sugar: entry.sugar || 0,
+    }
     document.getElementById('edit-name').value = entry.name || ''
+    document.getElementById('edit-servings').value = 1
     document.getElementById('edit-cal').value = Math.round(entry.calories || 0)
     document.getElementById('edit-protein').value = Math.round(entry.protein || 0)
     document.getElementById('edit-carbs').value = Math.round(entry.carbs || 0)
@@ -1546,6 +1567,20 @@ function wireGlobals() {
   window.closeEditModal = () => {
     document.getElementById('edit-modal').classList.remove('open')
     state.editingEntry = null
+    state.editingBaseMacros = null
+  }
+
+  window.applyServingsMultiplier = () => {
+    const servings = parseFloat(document.getElementById('edit-servings').value) || 1
+    const base = state.editingBaseMacros
+    if (!base) return
+    const round = (v) => Math.round(v * servings * 10) / 10
+    document.getElementById('edit-cal').value = round(base.calories)
+    document.getElementById('edit-protein').value = round(base.protein)
+    document.getElementById('edit-carbs').value = round(base.carbs)
+    document.getElementById('edit-fat').value = round(base.fat)
+    document.getElementById('edit-fiber').value = round(base.fiber)
+    document.getElementById('edit-sugar').value = round(base.sugar)
   }
 
   window.saveEditEntry = async () => {
