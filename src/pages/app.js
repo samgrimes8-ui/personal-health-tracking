@@ -2603,6 +2603,19 @@ function wireGlobals() {
       set('r-fiber', result.fiber)
       set('r-sugar', result.sugar)
 
+      // Auto-fill name if blank
+      const nameEl = document.getElementById('recipe-name')
+      if (nameEl && !nameEl.value.trim() && result.name) {
+        nameEl.value = result.name
+        if (state.editingRecipe) state.editingRecipe.name = result.name
+      }
+
+      // Auto-fill description if blank
+      const descEl = document.getElementById('recipe-desc')
+      if (descEl && !descEl.value.trim() && result.description) {
+        descEl.value = result.description
+      }
+
       // Update servings if AI returned a different number
       if (result.servings && result.servings !== servings) {
         const servEl = document.getElementById('recipe-servings')
@@ -2657,6 +2670,19 @@ function wireGlobals() {
       renderPage()
       showToast('Recipe saved!', 'success')
     } catch (err) {
+      // If source_url column not found, retry without it
+      if (err.message?.includes('source_url')) {
+        try {
+          const { source_url, ...recipeWithout } = recipe
+          const saved = await upsertRecipe(state.user.id, recipeWithout)
+          const idx = state.recipes.findIndex(r => r.id === saved.id)
+          if (idx !== -1) state.recipes[idx] = saved; else state.recipes.unshift(saved)
+          closeRecipeModal()
+          renderPage()
+          showToast('Recipe saved!', 'success')
+          return
+        } catch {}
+      }
       showToast('Error saving: ' + err.message, 'error')
       if (btn) { btn.disabled = false; btn.textContent = 'Save recipe' }
     }
