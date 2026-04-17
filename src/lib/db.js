@@ -317,7 +317,28 @@ export async function upsertRecipe(userId, recipe) {
     setLocalFallback('macrolens_recipes', all)
     return updated
   }
-  const payload = { user_id: userId, ...recipe, updated_at: new Date().toISOString() }
+  // Only send columns that exist in the DB schema
+  const payload = {
+    user_id: userId,
+    updated_at: new Date().toISOString(),
+    name: recipe.name,
+    description: recipe.description || '',
+    servings: recipe.servings || 4,
+    serving_label: recipe.serving_label || 'serving',
+    calories: recipe.calories || 0,
+    protein: recipe.protein || 0,
+    carbs: recipe.carbs || 0,
+    fat: recipe.fat || 0,
+    fiber: recipe.fiber || 0,
+    sugar: recipe.sugar || 0,
+    ingredients: recipe.ingredients || [],
+    ai_notes: recipe.ai_notes || recipe.notes || '',
+    confidence: recipe.confidence || 'medium',
+    source: recipe.source || 'manual',
+    source_url: recipe.source_url || '',
+    notes: recipe.notes || '',
+  }
+  if (recipe.id) payload.id = recipe.id
   const { data, error } = await supabase
     .from('recipes')
     .upsert(payload)

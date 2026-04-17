@@ -2515,6 +2515,15 @@ function wireGlobals() {
       const dayWord = selectedDays.length === 1 ? 'day' : `${selectedDays.length} days`
       showToast(`${recipe.name} added to ${dayWord}!`, 'success')
       closePlanRecipeModal()
+      // Navigate to the first selected week in the planner
+      const firstWeek = selectedDays[0].weekStart
+      state.weekStart = firstWeek
+      state.currentPage = 'planner'
+      state.plannerView = 'meals'
+      document.querySelectorAll('.nav-item[id^="nav-"]').forEach(el => {
+        el.classList.toggle('active', el.id === 'nav-planner')
+      })
+      renderPage()
     } catch (err) {
       showToast('Error: ' + err.message, 'error')
       if (btn) { btn.textContent = 'Add to plan'; btn.style.opacity = '1' }
