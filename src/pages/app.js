@@ -2113,67 +2113,92 @@ function wireGlobals() {
     document.getElementById('barcode-manual-input')?.focus()
   }
 
+  // ── Barcode decode: free-first approach ────────────────────────
+  // 1. Native BarcodeDetector (iOS 17+, Chrome Android) — zero cost
+  // 2. ZXing WASM — free JS lib, handles large mobile photos
+  // 3. Manual entry — never burn tokens on barcode reading
+
+  async function decodeBarcodeFromFile(file) {
+    // Downscale large photos first (12MP → much faster decode)
+    const bitmap = await createImageBitmap(file)
+    const maxSize = 1200
+    const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height))
+    const w = Math.round(bitmap.width * scale)
+    const h = Math.round(bitmap.height * scale)
+    const canvas = document.createElement('canvas')
+    canvas.width = w; canvas.height = h
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h)
+
+    // 1. Try native BarcodeDetector (free, instant)
+    if ('BarcodeDetector' in window) {
+      try {
+        const detector = new window.BarcodeDetector({
+          formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code']
+        })
+        const results = await detector.detect(canvas)
+        if (results.length > 0) return results[0].rawValue
+      } catch {}
+    }
+
+    // 2. Try ZXing WASM (free JS library)
+    try {
+      await loadZXing()
+      const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9))
+      const url = URL.createObjectURL(blob)
+      const results = await window._ZXing.readBarcodesFromImageUrl(url, {
+        formats: ['EAN-13','EAN-8','UPC-A','UPC-E','Code128','Code39']
+      })
+      URL.revokeObjectURL(url)
+      if (results?.length > 0) return results[0].text
+    } catch {}
+
+    return null
+  }
+
+  function loadZXing() {
+    if (window._ZXing) return Promise.resolve()
+    return new Promise((resolve, reject) => {
+      // Use the browser-compatible ZXing build
+      const s = document.createElement('script')
+      s.src = 'https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.4/umd/index.min.js'
+      s.onload = async () => {
+        try {
+          window._ZXing = new window.ZXingBrowser.BrowserMultiFormatReader()
+          resolve()
+        } catch { reject() }
+      }
+      s.onerror = reject
+      document.head.appendChild(s)
+    })
+  }
+
   window.handleBarcodeImage = async (file) => {
     const status = document.getElementById('barcode-status')
     const inner = document.getElementById('barcode-scanner-inner')
     if (!file) return
 
+    // Show preview
+    const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = e => r(e.target.result); fr.readAsDataURL(file) })
+    if (inner) inner.innerHTML = `<img src="${dataUrl}" style="max-height:140px;border-radius:var(--r);object-fit:contain" />`
     if (status) status.textContent = 'Reading barcode...'
 
-    const reader = new FileReader()
-    reader.onload = async (ev) => {
-      const dataUrl = ev.target.result
-      const b64 = dataUrl.split(',')[1]
-      if (inner) inner.innerHTML = `<img src="${dataUrl}" style="max-height:140px;border-radius:var(--r);object-fit:contain" />`
-
-      try {
-        // Ask AI to read the barcode number from the image
-        const { data: { session } } = await supabase.auth.getSession()
-        const res = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-          body: JSON.stringify({
-            feature: 'food',
-            max_tokens: 100,
-            messages: [{
-              role: 'user',
-              content: [
-                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-                { type: 'text', text: 'Read the barcode number in this image. Return ONLY the barcode digits, nothing else. If you cannot read a barcode, return "NONE".' }
-              ]
-            }]
-          })
-        })
-        const data = await res.json()
-        const code = data.content?.map(b => b.text || '').join('').trim().replace(/\D/g, '')
-
-        if (code && code.length >= 6) {
-          if (status) status.textContent = `Found: ${code} — looking up...`
-          await lookupBarcode(code)
-        } else {
-          // AI couldn't read it — show manual entry
-          if (status) status.textContent = 'Could not read barcode — enter number below'
-          const manualInput = document.getElementById('barcode-manual-input')
-          if (manualInput) { manualInput.focus(); manualInput.style.borderColor = 'var(--accent)' }
-        }
-      } catch (e) {
-        if (status) status.textContent = 'Read failed — enter barcode number below'
-        document.getElementById('barcode-manual-input')?.focus()
+    try {
+      const code = await decodeBarcodeFromFile(file)
+      if (code) {
+        if (status) status.textContent = `Found: ${code} — looking up...`
+        await lookupBarcode(code)
+      } else {
+        if (status) status.textContent = 'Could not read barcode — type the number below'
+        const input = document.getElementById('barcode-manual-input')
+        if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
       }
+    } catch (e) {
+      if (status) status.textContent = 'Read failed — type the number below'
+      document.getElementById('barcode-manual-input')?.focus()
     }
-    reader.readAsDataURL(file)
   }
 
-  function loadQuagga() {
-    // Kept for component barcode scanning
-    if (window.Quagga) return Promise.resolve()
-    return new Promise((resolve, reject) => {
-      const s = document.createElement('script')
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js'
-      s.onload = resolve; s.onerror = reject
-      document.head.appendChild(s)
-    })
-  }
+  function loadQuagga() { return Promise.resolve() } // no longer used
 
 
   window.lookupBarcode = async (code) => {
@@ -3078,48 +3103,32 @@ function wireGlobals() {
     const status = document.getElementById('comp-barcode-status')
     if (!file) return
     if (status) status.textContent = 'Reading barcode...'
-
-    const reader = new FileReader()
-    reader.onload = async (ev) => {
-      const b64 = ev.target.result.split(',')[1]
-      try {
-        const { data: { session } } = await supabase.auth.getSession()
-        const res = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-          body: JSON.stringify({
-            feature: 'food', max_tokens: 100,
-            messages: [{ role: 'user', content: [
-              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-              { type: 'text', text: 'Read the barcode number in this image. Return ONLY the digits, nothing else. If no barcode, return "NONE".' }
-            ]}]
-          })
-        })
-        const data = await res.json()
-        const code = data.content?.map(b => b.text || '').join('').trim().replace(/\D/g, '')
-
-        if (code && code.length >= 6) {
-          if (status) status.textContent = `Found: ${code} — looking up...`
-          const bres = await fetch(`/api/barcode?upc=${code}`)
-          const bdata = await bres.json()
-          if (bdata.found) {
-            state.pendingComponent = { name: bdata.name, calories: bdata.calories||0, protein: bdata.protein||0, carbs: bdata.carbs||0, fat: bdata.fat||0, fiber: bdata.fiber||0, sugar: bdata.sugar||0, serving_size: bdata.serving_size || '' }
-            state.pendingComponent._base = { ...state.pendingComponent }
-            showComponentResult(state.pendingComponent)
-            if (status) status.textContent = `✓ ${bdata.name}`
-          } else {
-            if (status) status.textContent = 'Not in database — try Describe tab'
+    try {
+      const code = await decodeBarcodeFromFile(file)
+      if (code) {
+        if (status) status.textContent = `Found: ${code} — looking up...`
+        const bres = await fetch(`/api/barcode?upc=${code}`)
+        const bdata = await bres.json()
+        if (bdata.found) {
+          state.pendingComponent = {
+            name: bdata.name, calories: bdata.calories||0, protein: bdata.protein||0,
+            carbs: bdata.carbs||0, fat: bdata.fat||0, fiber: bdata.fiber||0,
+            sugar: bdata.sugar||0, serving_size: bdata.serving_size || ''
           }
+          state.pendingComponent._base = { ...state.pendingComponent }
+          showComponentResult(state.pendingComponent)
+          if (status) status.textContent = `✓ ${bdata.name}`
         } else {
-          if (status) status.textContent = 'Could not read barcode — type number below'
-          document.getElementById('comp-barcode-manual')?.focus()
+          if (status) status.textContent = 'Not in database — try Describe tab'
         }
-      } catch (e) {
-        if (status) status.textContent = 'Failed — type barcode number below'
+      } else {
+        if (status) status.textContent = 'Could not read barcode — type number below'
         document.getElementById('comp-barcode-manual')?.focus()
       }
+    } catch (e) {
+      if (status) status.textContent = 'Failed — type number below'
+      document.getElementById('comp-barcode-manual')?.focus()
     }
-    reader.readAsDataURL(file)
   }
 
   window.confirmAddComponent = () => {
