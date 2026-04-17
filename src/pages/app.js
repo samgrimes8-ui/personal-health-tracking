@@ -1538,7 +1538,7 @@ function renderRecipeModalContent(recipe, mode = 'view') {
               <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:12px">
                 ${(recipe.instructions.steps || []).map((step, i) => {
                   const target = state.recipeServings != null ? state.recipeServings : (recipe.servings || 1)
-                  return `<li style="font-size:14px;color:var(--text);line-height:1.55;padding-left:4px">${esc(scaleStepText(step, recipe.servings || 1, target))}</li>`
+                  return `<li style="font-size:14px;color:var(--text);line-height:1.55;padding-left:4px">${scaleStepText(step, recipe.servings || 1, target)}</li>`
                 }).join('')}
               </ol>
               ${recipe.instructions.tips?.length ? `
@@ -1720,10 +1720,13 @@ function renderPlanRecipeModal(recipe) {
 
 // Scale number+unit mentions in a step by a multiplier
 function scaleStepText(step, baseServings, targetServings) {
-  if (!baseServings || !targetServings || baseServings === targetServings) return step
+  // Always escape the raw step text first for safety
+  const safeStep = esc(step)
+  if (!baseServings || !targetServings) return safeStep
   const multiplier = targetServings / baseServings
-  if (Math.abs(multiplier - 1) < 0.01) return step
-  return step.replace(/(\d+(?:\.\d+)?(?:\/\d+)?)\s*(cups?|tbsp|tablespoons?|tsp|teaspoons?|oz|ounces?|lbs?|pounds?|\bg\b|kg|ml|liters?|litres?|cloves?|slices?|pieces?|cans?|pints?|quarts?)/gi,
+  if (Math.abs(multiplier - 1) < 0.01) return safeStep
+  // Now replace number+unit patterns in the already-escaped text
+  return safeStep.replace(/(\d+(?:\.\d+)?(?:\/\d+)?)\s*(cups?|tbsp|tablespoons?|tsp|teaspoons?|oz|ounces?|lbs?|pounds?|\bg\b|kg|ml|liters?|litres?|cloves?|slices?|pieces?|cans?|pints?|quarts?)/gi,
     (match, num, unit) => {
       const base = num.includes('/') ? (() => { const [n,d] = num.split('/').map(Number); return n/d })() : parseFloat(num)
       const scaled = base * multiplier
