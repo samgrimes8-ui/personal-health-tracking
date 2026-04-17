@@ -1191,7 +1191,7 @@ function renderRecipeModalContent(recipe, mode = 'view') {
             </div>
             <div style="display:flex;gap:8px">
               ${mode === 'edit' || isNew ? `<button class="clear-btn" style="color:var(--accent)" onclick="addIngredientRow()">+ Add</button>` : ''}
-              ${!isNew ? `<button class="clear-btn" style="color:var(--carbs)" onclick="fetchIngredients('${recipe.id}')">✨ AI extract</button>` : ''}
+              <button class="clear-btn" style="color:var(--carbs)" onclick="fetchIngredients('${recipe.id || ''}')">✨ AI extract</button>
             </div>
           </div>
           <div id="ingredient-list" style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
@@ -1209,6 +1209,16 @@ function renderRecipeModalContent(recipe, mode = 'view') {
           <div style="margin-bottom:20px">
             <button class="pm-analyze-btn" id="recalc-btn" onclick="recalculateMacrosHandler()">
               ✨ Recalculate macros from ingredients
+            </button>
+          </div>
+        ` : ''}
+
+        <!-- AI estimate for new recipes with no ingredients yet -->
+        ${(mode === 'edit' || isNew) && !ingredients.length ? `
+          <div style="margin-bottom:20px;padding:14px;background:var(--bg3);border-radius:var(--r);border:1px solid var(--border)">
+            <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Let AI estimate macros and extract ingredients from the recipe name, description, or URL.</div>
+            <button class="pm-analyze-btn" id="ai-estimate-btn" onclick="aiEstimateRecipeHandler()">
+              ✨ Estimate macros &amp; ingredients with AI
             </button>
           </div>
         ` : ''}
@@ -2556,7 +2566,69 @@ function wireGlobals() {
 
   window.updateServingLabel = () => {}
 
-  window.saveRecipeHandler = async () => {
+  window.aiEstimateRecipeHandler = async () => {
+    const btn = document.getElementById('ai-estimate-btn')
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="analyzing-spinner"></span> Estimating...' }
+
+    // Read current form values
+    const name = document.getElementById('recipe-name')?.value.trim()
+    const desc = document.getElementById('recipe-desc')?.value.trim()
+    const url = document.getElementById('recipe-source-url')?.value.trim()
+    const servings = parseFloat(document.getElementById('recipe-servings')?.value) || 4
+
+    if (!name && !desc && !url) {
+      showToast('Add a recipe name or description first', 'error')
+      if (btn) { btn.disabled = false; btn.textContent = '✨ Estimate macros & ingredients with AI' }
+      return
+    }
+
+    // Build a description for the AI from whatever we have
+    const context = [
+      name && `Recipe: ${name}`,
+      desc && `Description: ${desc}`,
+      url && `Source URL: ${url}`,
+      `Servings: ${servings}`
+    ].filter(Boolean).join('\n')
+
+    try {
+      // Use analyzeRecipe which returns macros + full ingredient list
+      const result = await analyzeRecipe(context, name)
+
+      // Fill in macro fields
+      const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = Math.round(val || 0) }
+      set('r-cal', result.calories)
+      set('r-protein', result.protein)
+      set('r-carbs', result.carbs)
+      set('r-fat', result.fat)
+      set('r-fiber', result.fiber)
+      set('r-sugar', result.sugar)
+
+      // Update servings if AI returned a different number
+      if (result.servings && result.servings !== servings) {
+        const servEl = document.getElementById('recipe-servings')
+        if (servEl) servEl.value = result.servings
+      }
+
+      // Save ingredients to editing recipe and re-render ingredient list
+      if (result.ingredients?.length && state.editingRecipe) {
+        state.editingRecipe.ingredients = result.ingredients
+        const listEl = document.getElementById('ingredient-list')
+        if (listEl) {
+          listEl.innerHTML = result.ingredients.map((ing, i) =>
+            renderIngredientRow(ing, i, true)
+          ).join('')
+        }
+        // Hide the estimate panel, show recalculate button
+        const estimatePanel = btn?.closest('div[style*="background"]')
+        if (estimatePanel) estimatePanel.style.display = 'none'
+      }
+
+      showToast(`Estimated! ${result.ingredients?.length || 0} ingredients extracted.`, 'success')
+    } catch (err) {
+      showToast('Estimate failed: ' + err.message, 'error')
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Estimate macros & ingredients with AI' }
+  }
     if (!state.editingRecipe) return
     const btn = document.getElementById('recipe-save-btn')
     if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
