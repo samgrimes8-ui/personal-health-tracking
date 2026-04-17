@@ -409,7 +409,7 @@ export async function getPlannerRange(userId, fromDate, toDate) {
   const cursor = new Date(from)
   cursor.setDate(cursor.getDate() - cursor.getDay()) // snap to Sunday
   while (cursor <= to) {
-    weekStarts.push(cursor.toISOString().split('T')[0])
+    const c = cursor; weekStarts.push(`${c.getFullYear()}-${String(c.getMonth()+1).padStart(2,'0')}-${String(c.getDate()).padStart(2,'0')}`)
     cursor.setDate(cursor.getDate() + 7)
   }
 

@@ -58,8 +58,7 @@ function localDateStr(d) {
 function getWeekStart() {
   const d = new Date()
   d.setDate(d.getDate() - d.getDay())
-  d.setHours(0, 0, 0, 0)
-  return d.toISOString().split('T')[0]
+  return localDateStr(d)
 }
 
 let _appInitialized = false
@@ -612,8 +611,9 @@ function renderCalendarPicker() {
             ? `<div style="font-size:12px;color:var(--text3)">No planned weeks yet</div>`
             : recentWeeks.map(wk => {
                 const isSelected = wk === currentWeekStart
-                const d = new Date(wk + 'T00:00:00')
-                const end = new Date(d); end.setDate(end.getDate() + 6)
+                const [wyr,wmo,wdy] = wk.split('-').map(Number)
+                const d = new Date(wyr, wmo-1, wdy)
+                const end = new Date(wyr, wmo-1, wdy+6)
                 const label = `${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})}`
                 const isThisWeek = wk === getWeekStart()
                 return `<button onclick="jumpToWeek('${wk}')"
@@ -681,7 +681,7 @@ function renderMealPlanView(planner) {
 
 async function renderGroceryList(allMeals, planner) {
   const view = state.groceryView || 'full'
-  const today = new Date().toISOString().split('T')[0]
+  const today = localDateStr(new Date())
 
   // Compute effective date range
   const fromDate = state.groceryFromDate || today
@@ -691,9 +691,9 @@ async function renderGroceryList(allMeals, planner) {
       ? [...state.weeksWithMeals].sort()
       : [state.weekStart]
     const lastWeek = weeks[weeks.length - 1]
-    const d = new Date(lastWeek + 'T00:00:00')
-    d.setDate(d.getDate() + 6)
-    return d.toISOString().split('T')[0]
+    const [yr, mo, dy] = lastWeek.split('-').map(Number)
+    const d = new Date(yr, mo - 1, dy + 6)
+    return localDateStr(d)
   })()
 
   // Fetch meals across the range (may span multiple weeks)
@@ -711,8 +711,7 @@ async function renderGroceryList(allMeals, planner) {
   const isAutoTo = !state.groceryToDate
   const pastDaysExcluded = isAutoFrom && fromDate > (() => {
     // Check if current week has past days
-    const ws = new Date(state.weekStart + 'T00:00:00')
-    return ws.toISOString().split('T')[0]
+    return state.weekStart
   })()
 
   const container = document.createElement('div')
@@ -1041,8 +1040,9 @@ function renderGroceryByMeal(planner, rangeMeals) {
 
 
 function formatWeekLabel(weekStart) {
-  const d = new Date(weekStart + 'T00:00:00')
-  const end = new Date(d); end.setDate(end.getDate() + 6)
+  const [yr, mo, dy] = weekStart.split('-').map(Number)
+  const d = new Date(yr, mo - 1, dy)
+  const end = new Date(yr, mo - 1, dy + 6)
   return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
 }
 
@@ -2073,9 +2073,8 @@ function wireGlobals() {
   window.toggleCalendar = () => {
     state.showCalendar = !state.showCalendar
     if (state.showCalendar) {
-      // Initialize calendar to current weekStart's month
-      const d = new Date(state.weekStart + 'T00:00:00')
-      state.calendarMonth = { year: d.getFullYear(), month: d.getMonth() }
+      const [tyr, tmo] = state.weekStart.split('-').map(Number)
+      state.calendarMonth = { year: tyr, month: tmo - 1 }
     }
     renderPage()
   }
@@ -2109,9 +2108,9 @@ function wireGlobals() {
   }
 
   window.shiftWeek = (dir) => {
-    const d = new Date(state.weekStart + 'T00:00:00')
-    d.setDate(d.getDate() + dir * 7)
-    state.weekStart = d.toISOString().split('T')[0]
+    const [yr, mo, dy] = state.weekStart.split('-').map(Number)
+    const d = new Date(yr, mo - 1, dy + dir * 7)
+    state.weekStart = localDateStr(d)
     state.showCalendar = false
     state.calendarMonth = null
     state.mealServings = {}
@@ -2457,7 +2456,7 @@ function wireGlobals() {
     document.querySelectorAll('#plan-day-grid button[data-date]').forEach(btn => {
       const selected = days.some(d => d.dateStr === btn.dataset.date)
       btn.classList.toggle('plan-day-selected', selected)
-      btn.style.background = selected ? 'var(--accent)' : (btn.dataset.date === new Date().toISOString().split('T')[0] ? 'rgba(232,197,71,0.12)' : 'var(--bg3)')
+      btn.style.background = selected ? 'var(--accent)' : (btn.dataset.date === localDateStr(new Date()) ? 'rgba(232,197,71,0.12)' : 'var(--bg3)')
       btn.style.color = selected ? '#1a1500' : ''
       btn.style.fontWeight = selected ? '600' : ''
       btn.style.border = selected ? '2px solid var(--accent)' : '1px solid var(--border)'
@@ -2520,17 +2519,8 @@ function wireGlobals() {
         }
       }
       const dayWord = selectedDays.length === 1 ? 'day' : `${selectedDays.length} days`
-      showToast(`${recipe.name} added to ${dayWord}!`, 'success')
+      showToast(`${recipe.name} added to your meal plan!`, 'success')
       closePlanRecipeModal()
-      // Navigate to the first selected week in the planner
-      const firstWeek = selectedDays[0].weekStart
-      state.weekStart = firstWeek
-      state.currentPage = 'planner'
-      state.plannerView = 'meals'
-      document.querySelectorAll('.nav-item[id^="nav-"]').forEach(el => {
-        el.classList.toggle('active', el.id === 'nav-planner')
-      })
-      renderPage()
     } catch (err) {
       showToast('Error: ' + err.message, 'error')
       if (btn) { btn.textContent = 'Add to plan'; btn.style.opacity = '1' }
