@@ -30,6 +30,7 @@ let state = {
   currentEntry: null,
   editingEntry: null,
   editingBaseMacros: null,
+  planningRecipe: null,
   plannerTarget: null,
   plannerTab: 'history',
   plannerView: 'meals',
@@ -216,6 +217,13 @@ function renderShell(container) {
             Will also be added to <span id="leftover-day-label">Monday</span> as lunch
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Plan recipe modal -->
+    <div class="modal-overlay" id="plan-recipe-modal">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:0;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;position:relative">
+        <div id="plan-recipe-modal-content"></div>
       </div>
     </div>
 
@@ -1106,6 +1114,7 @@ function renderRecipeModalContent(recipe, mode = 'view') {
         ${!isNew && mode === 'view' ? `
           <button class="btn-delete" onclick="deleteRecipeHandler('${recipe.id}')">Delete</button>
           <button class="btn-cancel" onclick="closeRecipeModal()">Close</button>
+          <button class="btn-save" style="background:var(--bg3);color:var(--text);border:1px solid var(--border2)" onclick="openPlanRecipeModal('${recipe.id}')">📅 Add to plan</button>
           <button class="btn-save" onclick="openRecipeModal('${recipe.id}', 'edit')">Edit recipe</button>
         ` : `
           ${!isNew ? `<button class="btn-delete" onclick="deleteRecipeHandler('${recipe.id}')">Delete</button>` : ''}
@@ -1113,6 +1122,91 @@ function renderRecipeModalContent(recipe, mode = 'view') {
           <button class="btn-save" id="recipe-save-btn" onclick="saveRecipeHandler()">Save recipe</button>
         `}
       </div>
+    </div>
+  `
+}
+
+function renderPlanRecipeModal(recipe) {
+  const DAYS_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+  // Build 4-week grid of days for picking
+  const today = new Date()
+  today.setHours(0,0,0,0)
+
+  // Generate next 28 days
+  const days = []
+  for (let i = 0; i < 28; i++) {
+    const d = new Date(today)
+    d.setDate(today.getDate() + i)
+    const dateStr = d.toISOString().split('T')[0]
+    // Get week start (Sunday)
+    const ws = new Date(d)
+    ws.setDate(d.getDate() - d.getDay())
+    days.push({
+      dateStr,
+      label: DAYS_SHORT[d.getDay()],
+      dayNum: d.getDate(),
+      month: d.toLocaleDateString([], { month: 'short' }),
+      weekStart: ws.toISOString().split('T')[0],
+      isToday: i === 0,
+      isFirstOfMonth: d.getDate() === 1 || i === 0
+    })
+  }
+
+  return `
+    <div style="padding:24px 24px 20px">
+      <button class="modal-close" onclick="closePlanRecipeModal()" style="position:absolute;top:16px;right:16px">×</button>
+      <h3 style="margin:0 0 4px;font-size:18px">Add to meal plan</h3>
+      <div style="font-size:13px;color:var(--text3);margin-bottom:20px">${esc(recipe.name)}</div>
+
+      <!-- Day picker -->
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Pick day(s) to eat this</div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:20px" id="plan-day-grid">
+        ${DAYS_SHORT.map(d => `<div style="text-align:center;font-size:10px;color:var(--text3);padding:2px 0">${d}</div>`).join('')}
+        ${days.map(d => `
+          <button data-date="${d.dateStr}" data-weekstart="${d.weekStart}"
+            onclick="togglePlanDay('${d.dateStr}','${d.weekStart}')"
+            style="aspect-ratio:1;border-radius:6px;border:1px solid var(--border);background:${d.isToday ? 'rgba(232,197,71,0.12)' : 'var(--bg3)'};
+              color:${d.isToday ? 'var(--accent)' : 'var(--text2)'};cursor:pointer;font-size:11px;font-family:inherit;
+              outline:${d.isToday ? '1px solid var(--accent)' : 'none'};position:relative;padding:0"
+            onmouseover="if(!this.classList.contains('plan-day-selected'))this.style.background='var(--bg4)'"
+            onmouseout="if(!this.classList.contains('plan-day-selected'))this.style.background='${d.isToday ? 'rgba(232,197,71,0.12)' : 'var(--bg3)'}'">
+            ${d.isFirstOfMonth ? `<span style="position:absolute;top:2px;left:3px;font-size:8px;color:var(--text3)">${d.month}</span>` : ''}
+            ${d.dayNum}
+          </button>`).join('')}
+      </div>
+
+      <!-- Cook-once advanced option — collapsed by default -->
+      <div id="cook-once-section">
+        <button onclick="toggleCookOnce()" style="background:none;border:none;color:var(--text3);font-size:12px;cursor:pointer;font-family:inherit;padding:0;display:flex;align-items:center;gap:6px;margin-bottom:12px">
+          <span id="cook-once-chevron">▶</span>
+          <span>🍳 Cook once, eat on multiple days</span>
+        </button>
+        <div id="cook-once-panel" style="display:none;background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:16px;font-size:13px">
+          <div style="color:var(--text2);margin-bottom:10px;line-height:1.5">
+            Select multiple days above — ingredients only count once (first day).
+            The other days show as "no shopping needed" in your grocery list.
+          </div>
+          <div style="color:var(--text3);font-size:12px;line-height:1.6">
+            <strong style="color:var(--text2)">Common patterns:</strong><br>
+            • Meal prep: cook Sun → eat Mon, Wed, Fri<br>
+            • Big batch: Mon dinner → Thu lunch → Sat dinner<br>
+            • Two nights: Tue dinner → Wed dinner
+          </div>
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+            <div style="font-size:12px;color:var(--text3);margin-bottom:6px">First cooking day <span style="color:var(--accent)">(ingredients counted here)</span></div>
+            <div id="cook-once-primary" style="font-size:13px;color:var(--text2);font-style:italic">Select a day above to set</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Selected days summary -->
+      <div id="plan-selected-summary" style="font-size:12px;color:var(--text3);margin-bottom:16px;min-height:18px"></div>
+
+      <!-- Add button -->
+      <button id="plan-recipe-add-btn" onclick="confirmPlanRecipe('${recipe.id}')"
+        style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;opacity:0.4;pointer-events:none">
+        Add to plan
+      </button>
     </div>
   `
 }
@@ -2189,6 +2283,118 @@ function wireGlobals() {
     document.getElementById('recipe-modal')?.classList.remove('open')
     state.editingRecipe = null
   }
+
+  // ── Plan recipe from recipe page ────────────────────────────────
+  window.openPlanRecipeModal = (recipeId) => {
+    const recipe = state.recipes.find(r => r.id === recipeId)
+    if (!recipe) return
+    state.planningRecipe = { recipe, selectedDays: [], cookOnceOpen: false }
+    document.getElementById('plan-recipe-modal-content').innerHTML = renderPlanRecipeModal(recipe)
+    document.getElementById('plan-recipe-modal').classList.add('open')
+  }
+
+  window.closePlanRecipeModal = () => {
+    document.getElementById('plan-recipe-modal')?.classList.remove('open')
+    state.planningRecipe = null
+  }
+
+  window.toggleCookOnce = () => {
+    if (!state.planningRecipe) return
+    state.planningRecipe.cookOnceOpen = !state.planningRecipe.cookOnceOpen
+    const panel = document.getElementById('cook-once-panel')
+    const chevron = document.getElementById('cook-once-chevron')
+    if (panel) panel.style.display = state.planningRecipe.cookOnceOpen ? '' : 'none'
+    if (chevron) chevron.textContent = state.planningRecipe.cookOnceOpen ? '▼' : '▶'
+  }
+
+  window.togglePlanDay = (dateStr, weekStart) => {
+    if (!state.planningRecipe) return
+    const days = state.planningRecipe.selectedDays
+    const idx = days.findIndex(d => d.dateStr === dateStr)
+    if (idx !== -1) {
+      days.splice(idx, 1)
+    } else {
+      days.push({ dateStr, weekStart })
+      // Sort chronologically
+      days.sort((a, b) => a.dateStr.localeCompare(b.dateStr))
+    }
+    // Update button styles
+    document.querySelectorAll('#plan-day-grid button[data-date]').forEach(btn => {
+      const selected = days.some(d => d.dateStr === btn.dataset.date)
+      btn.classList.toggle('plan-day-selected', selected)
+      btn.style.background = selected ? 'var(--accent)' : (btn.dataset.date === new Date().toISOString().split('T')[0] ? 'rgba(232,197,71,0.12)' : 'var(--bg3)')
+      btn.style.color = selected ? '#1a1500' : ''
+      btn.style.fontWeight = selected ? '600' : ''
+      btn.style.border = selected ? '2px solid var(--accent)' : '1px solid var(--border)'
+    })
+    // Update summary
+    const summary = document.getElementById('plan-selected-summary')
+    const cookOncePrimary = document.getElementById('cook-once-primary')
+    if (summary) {
+      if (!days.length) {
+        summary.textContent = ''
+      } else {
+        const labels = days.map(d => {
+          const dt = new Date(d.dateStr + 'T00:00:00')
+          return dt.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+        })
+        summary.innerHTML = `<span style="color:var(--accent)">${days.length} day${days.length !== 1 ? 's' : ''}</span> selected: ${labels.join(', ')}`
+      }
+    }
+    if (cookOncePrimary && days.length) {
+      const first = new Date(days[0].dateStr + 'T00:00:00')
+      cookOncePrimary.textContent = first.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })
+      cookOncePrimary.style.fontStyle = 'normal'
+      cookOncePrimary.style.color = 'var(--accent)'
+    }
+    // Enable/disable add button
+    const addBtn = document.getElementById('plan-recipe-add-btn')
+    if (addBtn) {
+      const enabled = days.length > 0
+      addBtn.style.opacity = enabled ? '1' : '0.4'
+      addBtn.style.pointerEvents = enabled ? 'auto' : 'none'
+    }
+  }
+
+  window.confirmPlanRecipe = async (recipeId) => {
+    if (!state.planningRecipe?.selectedDays?.length) return
+    const { recipe, selectedDays } = state.planningRecipe
+    const btn = document.getElementById('plan-recipe-add-btn')
+    if (btn) { btn.textContent = 'Adding...'; btn.style.opacity = '0.7' }
+    try {
+      // First day = primary (ingredients counted), rest = cook-once leftovers
+      for (let i = 0; i < selectedDays.length; i++) {
+        const { dateStr, weekStart } = selectedDays[i]
+        const dt = new Date(dateStr + 'T00:00:00')
+        const dayOfWeek = dt.getDay()
+        const mealName = i === 0 || selectedDays.length === 1
+          ? recipe.name
+          : `${recipe.name} (leftovers)`
+        const added = await addPlannerMeal(state.user.id, weekStart, dayOfWeek, {
+          ...recipe, name: mealName
+        })
+        // Update state if this week is loaded
+        if (weekStart === state.weekStart) {
+          if (!state.planner) state.planner = { meals: Array(7).fill(null).map(() => []) }
+          state.planner.meals[dayOfWeek].push(added)
+        }
+        // Track this week as having meals
+        if (!state.weeksWithMeals.includes(weekStart)) {
+          state.weeksWithMeals = [weekStart, ...state.weeksWithMeals].sort().reverse()
+        }
+      }
+      const dayWord = selectedDays.length === 1 ? 'day' : `${selectedDays.length} days`
+      showToast(`${recipe.name} added to ${dayWord}!`, 'success')
+      closePlanRecipeModal()
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+      if (btn) { btn.textContent = 'Add to plan'; btn.style.opacity = '1' }
+    }
+  }
+
+  document.getElementById('plan-recipe-modal')?.addEventListener('click', e => {
+    if (e.target.id === 'plan-recipe-modal') closePlanRecipeModal()
+  })
 
   window.updateIngredient = (idx, field, val) => {
     if (!state.editingRecipe?.ingredients) return
