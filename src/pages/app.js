@@ -72,7 +72,20 @@ let _appInitialized = false
 // ─── Init ─────────────────────────────────────────────────────────────────────
 export async function initApp(user, container) {
   state.user = user
-  await loadAll()
+  try {
+    await Promise.race([
+      loadAll(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Load timeout')), 12000))
+    ])
+  } catch (err) {
+    console.warn('loadAll failed or timed out:', err.message)
+    // Set safe defaults so the app still renders
+    state.goals = state.goals || { calories: 2000, protein: 150, carbs: 200, fat: 65 }
+    state.log = state.log || []
+    state.recipes = state.recipes || []
+    state.foodItems = state.foodItems || []
+    state.weeksWithMeals = state.weeksWithMeals || []
+  }
   if (!_appInitialized) {
     renderShell(container)
     wireGlobals()
@@ -82,20 +95,22 @@ export async function initApp(user, container) {
 }
 
 async function loadAll() {
+  const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
+
   const [goals, log, usage, recipes, weeksWithMeals, foodItems] = await Promise.all([
-    getGoals(state.user.id),
-    getMealLog(state.user.id, { limit: 300 }),
-    getUsageSummary(state.user.id),
-    getRecipes(state.user.id),
-    getWeeksWithMeals(state.user.id),
-    getFoodItems(state.user.id)
+    safe(() => getGoals(state.user.id)),
+    safe(() => getMealLog(state.user.id, { limit: 300 })),
+    safe(() => getUsageSummary(state.user.id)),
+    safe(() => getRecipes(state.user.id)),
+    safe(() => getWeeksWithMeals(state.user.id)),
+    safe(() => getFoodItems(state.user.id))
   ])
-  state.goals = { calories: goals.calories ?? 2000, protein: goals.protein ?? 150, carbs: goals.carbs ?? 200, fat: goals.fat ?? 65 }
-  state.log = log
+  state.goals = { calories: goals?.calories ?? 2000, protein: goals?.protein ?? 150, carbs: goals?.carbs ?? 200, fat: goals?.fat ?? 65 }
+  state.log = log ?? []
   state.usage = usage
-  state.recipes = recipes
-  state.weeksWithMeals = weeksWithMeals
-  state.foodItems = foodItems
+  state.recipes = recipes ?? []
+  state.weeksWithMeals = weeksWithMeals ?? []
+  state.foodItems = foodItems ?? []
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
