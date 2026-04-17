@@ -315,7 +315,7 @@ function renderDashboard(container) {
           </div>
 
           <!-- Barcode scanner -->
-          <div id="food-panel-barcode" style="${state.foodMode === 'label' || state.foodMode === 'search' ? 'display:none' : ''}">
+          <div id="food-panel-barcode" style="${state.foodMode !== 'barcode' ? 'display:none' : ''}">
             <div id="barcode-scanner-area" style="border:1.5px dashed var(--border2);border-radius:var(--r);overflow:hidden;position:relative;background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;cursor:pointer" onclick="startBarcodeScanner()">
               <div id="barcode-scanner-inner" style="text-align:center;padding:20px">
                 <div style="font-size:28px;margin-bottom:6px">📷</div>
@@ -1526,13 +1526,30 @@ function wireGlobals() {
   window.switchMode = (mode) => {
     state.currentMode = mode
     if (mode !== 'photo') state.imageBase64 = null
-    if (mode !== 'food') state.labelImageBase64 = null
-    renderPage()
+    // Swap tab buttons and panels in place
+    ;['recipe', 'photo', 'link', 'food'].forEach(m => {
+      const panel = document.getElementById(`mode-${m}`)
+      const btns = document.querySelectorAll(`.mode-tab[onclick="switchMode('${m}')"]`)
+      if (panel) panel.classList.toggle('active', m === mode)
+      btns.forEach(b => b.classList.toggle('active', m === mode))
+    })
+    if (mode === 'food') {
+      if (state.foodMode === 'label') wireLabelFileInput()
+      if (state.foodMode === 'barcode') wireBarcodeInput()
+    }
   }
 
   window.setFoodMode = (mode) => {
     state.foodMode = mode
-    renderPage()
+    // Swap panels and button states in place — no full re-render needed
+    ;['barcode', 'label', 'search'].forEach(m => {
+      const panel = document.getElementById(`food-panel-${m}`)
+      const btn = document.getElementById(`food-btn-${m}`)
+      if (panel) panel.style.display = m === mode ? '' : 'none'
+      if (btn) btn.classList.toggle('active', m === mode)
+    })
+    if (mode === 'label') wireLabelFileInput()
+    if (mode === 'barcode') wireBarcodeInput()
   }
 
   // ── Barcode scanner ─────────────────────────────────────────────
