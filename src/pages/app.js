@@ -340,7 +340,7 @@ function renderDashboard(container) {
 
     <div class="log-card">
       <div class="log-header"><span class="log-header-title">Today's log</span><button class="clear-btn" onclick="clearTodayLog()">Clear today</button></div>
-      ${renderLogTable(todayLog, true)}
+      <div id="today-log-body">${renderLogTable(todayLog, true)}</div>
     </div>
   `
 
@@ -1379,6 +1379,13 @@ function showResult(r) {
   }
 }
 
+function refreshTodayLog() {
+  // Update just the today's log table without re-rendering the whole dashboard
+  const el = document.getElementById('today-log-body')
+  if (!el) return
+  el.innerHTML = renderLogTable(getTodayLog(), true)
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getTodayLog() {
   const today = new Date().toDateString()
@@ -1492,6 +1499,7 @@ function wireGlobals() {
 
       state.currentEntry = null
       updateStats()
+      refreshTodayLog()
       const btn = document.getElementById('log-entry-btn')
       if (btn) { btn.textContent = '✓ Logged!'; btn.className = 'log-btn logged' }
       showToast(entry.name + ' logged!', 'success')
@@ -2210,11 +2218,11 @@ function filterQuickLog() {
     try {
       const entry = await addMealEntry(state.user.id, meal)
       state.log.unshift(entry)
-      // Clear the search
       const input = document.getElementById('quick-log-search')
       if (input) input.value = ''
       document.getElementById('quick-log-list').innerHTML = ''
       updateStats()
+      refreshTodayLog()
       showToast(`${meal.name} logged!`, 'success')
     } catch (err) { showToast('Failed to log: ' + err.message, 'error') }
   }
