@@ -297,7 +297,7 @@ function renderDashboard(container) {
         <div class="mode-panel ${state.currentMode === 'food' ? 'active' : ''}" id="mode-food">
           <!-- Three sub-options for single food items -->
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
-            <button class="food-sub-btn ${state.foodMode !== 'label' && state.foodMode !== 'search' ? 'active' : ''}"
+            <button class="food-sub-btn ${state.foodMode === 'barcode' ? 'active' : ''}"
               onclick="setFoodMode('barcode')" id="food-btn-barcode">
               <span style="font-size:20px;display:block;margin-bottom:3px">📷</span>
               <span style="font-size:11px">Scan barcode</span>
@@ -1532,15 +1532,7 @@ function wireGlobals() {
 
   window.setFoodMode = (mode) => {
     state.foodMode = mode
-    // Show/hide panels without full re-render
-    ;['barcode','label','search'].forEach(m => {
-      const el = document.getElementById(`food-panel-${m}`)
-      if (el) el.style.display = m === mode ? '' : 'none'
-      const btn = document.getElementById(`food-btn-${m}`)
-      if (btn) btn.classList.toggle('active', m === mode)
-    })
-    if (mode === 'label') wireLabelFileInput()
-    if (mode === 'barcode') wireBarcodeInput()
+    renderPage()
   }
 
   // ── Barcode scanner ─────────────────────────────────────────────
