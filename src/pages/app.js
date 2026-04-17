@@ -1265,7 +1265,7 @@ function renderFoodItemModal(item, editingComponents) {
     <!-- Add component sub-panel (hidden by default) -->
     <div id="add-component-panel" style="display:none;border-top:1px solid var(--border);padding:20px;background:var(--bg3)">
       <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:12px">Add a component</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px">
         <button class="food-sub-btn active" id="comp-btn-describe" onclick="setCompMode('describe')">
           <span style="font-size:18px;display:block;margin-bottom:2px">🔤</span>
           <span style="font-size:11px">Describe</span>
@@ -1273,6 +1273,10 @@ function renderFoodItemModal(item, editingComponents) {
         <button class="food-sub-btn" id="comp-btn-barcode" onclick="setCompMode('barcode')">
           <span style="font-size:18px;display:block;margin-bottom:2px">📷</span>
           <span style="font-size:11px">Scan</span>
+        </button>
+        <button class="food-sub-btn" id="comp-btn-label" onclick="setCompMode('label')">
+          <span style="font-size:18px;display:block;margin-bottom:2px">🏷️</span>
+          <span style="font-size:11px">Label</span>
         </button>
         <button class="food-sub-btn" id="comp-btn-saved" onclick="setCompMode('saved')">
           <span style="font-size:18px;display:block;margin-bottom:2px">⭐</span>
@@ -1292,6 +1296,15 @@ function renderFoodItemModal(item, editingComponents) {
         </button>
         <input class="link-input" id="comp-barcode-manual" placeholder="Or type barcode number..." style="margin-top:8px" />
         <div id="comp-barcode-status" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
+      </div>
+      <div id="comp-panel-label" style="display:none">
+        <input type="file" id="comp-label-file" accept="image/*" capture="environment" style="display:none"
+          onchange="handleComponentLabel(this.files[0])" />
+        <button onclick="document.getElementById('comp-label-file').click()"
+          style="width:100%;padding:12px;background:var(--bg4);border:1.5px dashed var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;cursor:pointer;font-family:inherit">
+          🏷️ Snap nutrition label
+        </button>
+        <div id="comp-label-status" style="font-size:11px;color:var(--text3);margin-top:6px;text-align:center"></div>
       </div>
       <div id="comp-panel-saved" style="display:none">
         <input class="link-input" id="comp-saved-search" placeholder="Search saved foods and recipes..."
@@ -2789,11 +2802,44 @@ function wireGlobals() {
   }
 
   window.setCompMode = (mode) => {
-    ;['describe','barcode','saved'].forEach(m => {
-      document.getElementById(`comp-panel-${m}`).style.display = m === mode ? '' : 'none'
-      document.getElementById(`comp-btn-${m}`).classList.toggle('active', m === mode)
+    ;['describe','barcode','label','saved'].forEach(m => {
+      const panel = document.getElementById(`comp-panel-${m}`)
+      const btn = document.getElementById(`comp-btn-${m}`)
+      if (panel) panel.style.display = m === mode ? '' : 'none'
+      if (btn) btn.classList.toggle('active', m === mode)
     })
     if (mode === 'saved') filterCompSavedSearch('')
+  }
+
+  window.handleComponentLabel = async (file) => {
+    const status = document.getElementById('comp-label-status')
+    if (!file) return
+    if (status) status.textContent = 'Reading label...'
+    const reader = new FileReader()
+    reader.onload = async (ev) => {
+      const b64 = ev.target.result.split(',')[1]
+      try {
+        const result = await analyzeNutritionLabel(b64)
+        if (result) {
+          state.pendingComponent = {
+            name: result.name || 'Food Item',
+            calories: result.calories || 0,
+            protein: result.protein || 0,
+            carbs: result.carbs || 0,
+            fat: result.fat || 0,
+            fiber: result.fiber || 0,
+            sugar: result.sugar || 0,
+            serving_size: result.serving_size || '',
+            _base: { calories: result.calories||0, protein: result.protein||0, carbs: result.carbs||0, fat: result.fat||0, fiber: result.fiber||0, sugar: result.sugar||0 }
+          }
+          if (status) status.textContent = `✓ Read: ${result.name || 'Food Item'}`
+          showComponentResult(state.pendingComponent)
+        }
+      } catch (err) {
+        if (status) status.textContent = 'Could not read label — try describe instead'
+      }
+    }
+    reader.readAsDataURL(file)
   }
 
   window.filterCompSavedSearch = (q) => {
