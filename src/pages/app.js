@@ -244,6 +244,20 @@ function renderDashboard(container) {
       <div class="stat-card"><div class="stat-label">Fat</div><div class="stat-val" style="color:var(--fat)" id="stat-f">0g</div><div class="stat-sub">of <span id="stat-f-goal">${state.goals.fat}</span>g</div></div>
     </div>
 
+    <!-- Quick log — above analyze -->
+    <div class="log-card" style="margin-bottom:16px">
+      <div class="log-header">
+        <span class="log-header-title">Quick log</span>
+        <span style="font-size:11px;color:var(--text3)">from recipes & history</span>
+      </div>
+      <div style="padding:12px 16px">
+        <input class="planner-search" id="quick-log-search" placeholder="Search meals and recipes to log..."
+          oninput="filterQuickLog()" style="margin-bottom:8px" />
+        <div id="quick-log-list"></div>
+      </div>
+    </div>
+
+    <!-- Analyze food -->
     <div class="two-col">
       <div class="upload-card">
         <div class="section-title">Analyze food</div>
@@ -273,13 +287,12 @@ function renderDashboard(container) {
       </div>
 
       <div class="result-card" id="result-card">
-        <div class="result-empty" id="result-empty"><div style="font-size:28px">🥗</div><div>Upload a photo, describe a recipe, or search a dish</div></div>
-        <div id="result-content" style="display:none;flex-direction:column;gap:14px">
-          <div class="result-name" id="res-name">—</div>
-          <div class="result-desc" id="res-desc">—</div>
+        <div id="result-content" style="display:flex;flex-direction:column;gap:14px">
+          <div class="result-name" id="res-name" style="color:var(--text3);font-family:inherit;font-size:15px">Results will appear here after analysis</div>
+          <div class="result-desc" id="res-desc"></div>
           <div class="macro-pills" id="res-pills"></div>
           <div class="nutrition-detail" id="res-detail"></div>
-          <button class="log-btn" id="log-entry-btn" onclick="logCurrentEntryHandler()">+ Log this meal</button>
+          <button class="log-btn" id="log-entry-btn" onclick="logCurrentEntryHandler()" style="display:none">+ Log this meal</button>
         </div>
       </div>
     </div>
@@ -311,18 +324,6 @@ function renderDashboard(container) {
           <div><div class="bar-row-label"><span class="bar-label">Carbs</span><span class="bar-val" id="bar-c-val">—</span></div><div class="bar-bg"><div class="bar-fill" id="bar-c" style="background:var(--carbs);width:0%"></div></div></div>
           <div><div class="bar-row-label"><span class="bar-label">Fat</span><span class="bar-val" id="bar-f-val">—</span></div><div class="bar-bg"><div class="bar-fill" id="bar-f" style="background:var(--fat);width:0%"></div></div></div>
         </div>
-      </div>
-    </div>
-
-    <div class="log-card" style="margin-bottom:16px">
-      <div class="log-header">
-        <span class="log-header-title">Quick log</span>
-        <span style="font-size:11px;color:var(--text3)">from history or recipes</span>
-      </div>
-      <div style="padding:12px 16px">
-        <input class="planner-search" id="quick-log-search" placeholder="Search meals and recipes to log..."
-          oninput="filterQuickLog()" style="margin-bottom:8px" />
-        <div id="quick-log-list"></div>
       </div>
     </div>
 
@@ -1311,12 +1312,13 @@ function updateStats() {
 }
 
 function showResult(r) {
-  const empty = document.getElementById('result-empty')
   const content = document.getElementById('result-content')
-  if (!empty || !content) return
-  empty.style.display = 'none'
+  if (!content) return
   content.style.display = 'flex'
   document.getElementById('res-name').textContent = r.name
+  document.getElementById('res-name').style.color = 'var(--text)'
+  document.getElementById('res-name').style.fontFamily = "'DM Serif Display', serif"
+  document.getElementById('res-name').style.fontSize = '20px'
   document.getElementById('res-desc').textContent = r.description ?? ''
   document.getElementById('res-pills').innerHTML = `
     <span class="macro-pill pill-cal">${Math.round(r.calories)} kcal</span>
@@ -1349,7 +1351,7 @@ function showResult(r) {
     ${ingredientHTML}
   `
   const btn = document.getElementById('log-entry-btn')
-  if (btn) { btn.textContent = '+ Log this meal'; btn.className = 'log-btn' }
+  if (btn) { btn.textContent = '+ Log this meal'; btn.className = 'log-btn'; btn.style.display = 'block' }
   // Add "Save as recipe" button if not already there
   if (!document.getElementById('save-recipe-btn')) {
     const recipeBtn = document.createElement('button')
