@@ -3011,6 +3011,8 @@ function wireGlobals() {
     if (!state.pendingComponent) return
     state.pendingComponent.unit = document.getElementById('comp-result-unit')?.value || 'serving'
   }
+
+  window.handleComponentBarcode = async (file) => {
     const status = document.getElementById('comp-barcode-status')
     if (!file) return
     if (status) status.textContent = 'Reading barcode...'
