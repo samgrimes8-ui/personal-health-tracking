@@ -128,22 +128,32 @@ export async function analyzeRecipe(recipe, mealHint) {
 
 export async function analyzeDishBySearch(dishName, link) {
   const query = link
-    ? `Search for the recipe "${dishName}" and find its full ingredients and serving size. URL for context: ${link}`
-    : `Search for the recipe "${dishName}" and find its full ingredients and serving size.`
+    ? `Search for the recipe "${dishName}" from this URL: ${link}. Find the full ingredient list and serving size.`
+    : `Search for the recipe "${dishName}". Find the full ingredient list and serving size.`
 
   const data = await callProxy('search', [{
     role: 'user',
-    content: `${query}\n\nOnce you find the recipe, return macros per serving AND the full ingredient list. ${FULL_ANALYSIS_PROMPT}`
+    content: `${query}\n\nAfter searching, return ONLY a JSON object with the macros per serving and full ingredient list. ${FULL_ANALYSIS_PROMPT}`
   }], {
-    max_tokens: 2000,
+    max_tokens: 4000,
     tools: [{ type: 'web_search_20250305', name: 'web_search' }]
   })
 
-  const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('')
+  // Web search responses mix tool_use and text blocks — grab all text
+  const text = data.content
+    .filter(b => b.type === 'text')
+    .map(b => b.text)
+    .join('')
+
   if (!text) throw new Error('No response — try being more specific with the dish name')
-  const match = text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('Could not parse — try the Recipe tab and paste ingredients directly')
-  return JSON.parse(match[0])
+
+  // Use the same resilient parser
+  const fakeData = { content: [{ type: 'text', text }] }
+  try {
+    return parseJSON(fakeData)
+  } catch {
+    throw new Error('Could not extract recipe data — try pasting the ingredients directly in the Recipe tab')
+  }
 }
 
 export async function analyzePlannerDescription(description) {

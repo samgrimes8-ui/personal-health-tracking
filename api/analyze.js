@@ -64,6 +64,7 @@ export default async function handler(req) {
   }
 
   const { feature, messages, tools, max_tokens = 2000 } = body
+  const clampedTokens = Math.min(max_tokens, 4000)
 
   if (!feature || !messages) {
     return json({ error: 'Missing required fields: feature, messages' }, 400)
@@ -94,7 +95,7 @@ export default async function handler(req) {
   // ── Call Anthropic ────────────────────────────────────────────────
   const anthropicBody = {
     model: ANTHROPIC_MODEL,
-    max_tokens,
+    max_tokens: clampedTokens,
     messages,
     ...(tools ? { tools } : {})
   }
