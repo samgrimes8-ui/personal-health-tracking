@@ -356,3 +356,20 @@ export async function getRecipeByName(userId, name) {
   if (error) throw error
   return data
 }
+
+export async function getWeeksWithMeals(userId) {
+  // Returns array of distinct week_start_date strings that have at least one meal
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('meal_planner')
+    .select('week_start_date')
+    .eq('user_id', userId)
+    .order('week_start_date', { ascending: false })
+  if (error) throw error
+  // Deduplicate
+  const seen = new Set()
+  return (data ?? []).filter(r => {
+    if (seen.has(r.week_start_date)) return false
+    seen.add(r.week_start_date); return true
+  }).map(r => r.week_start_date)
+}

@@ -4,7 +4,8 @@ import {
   getMealLog, addMealEntry, updateMealEntry, deleteMealEntry,
   getPlannerWeek, addPlannerMeal, updatePlannerMeal, deletePlannerMeal,
   getUsageSummary, getAdminUserOverview, setUserPrivileges,
-  getRecipes, upsertRecipe, deleteRecipe, getRecipeByName
+  getRecipes, upsertRecipe, deleteRecipe, getRecipeByName,
+  getWeeksWithMeals
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -36,6 +37,9 @@ let state = {
   excludedIngredients: new Set(),
   aiPlannerResult: null,
   weekStart: getWeekStart(),
+  weeksWithMeals: [],
+  showCalendar: false,
+  calendarMonth: null,
   // apiKey moved server-side — no longer needed in client
   editingRecipe: null,  // recipe being edited in modal
 }
@@ -57,16 +61,18 @@ export async function initApp(user, container) {
 }
 
 async function loadAll() {
-  const [goals, log, usage, recipes] = await Promise.all([
+  const [goals, log, usage, recipes, weeksWithMeals] = await Promise.all([
     getGoals(state.user.id),
     getMealLog(state.user.id, { limit: 300 }),
     getUsageSummary(state.user.id),
-    getRecipes(state.user.id)
+    getRecipes(state.user.id),
+    getWeeksWithMeals(state.user.id)
   ])
   state.goals = { calories: goals.calories ?? 2000, protein: goals.protein ?? 150, carbs: goals.carbs ?? 200, fat: goals.fat ?? 65 }
   state.log = log
   state.usage = usage
   state.recipes = recipes
+  state.weeksWithMeals = weeksWithMeals
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
@@ -372,24 +378,149 @@ async function renderPlanner(container) {
   const planner = await getPlannerWeek(state.user.id, state.weekStart)
   state.planner = planner
 
-  // Build grocery list from all meals in the week
+  // Ensure current week is in the weeksWithMeals list if it has meals
+  const hasMealsThisWeek = planner.meals.some(d => d.length > 0)
+  if (hasMealsThisWeek && !state.weeksWithMeals.includes(state.weekStart)) {
+    state.weeksWithMeals = [state.weekStart, ...state.weeksWithMeals].sort().reverse()
+  }
+
   const allMeals = planner.meals.flat()
+  const isCurrentWeek = state.weekStart === getWeekStart()
 
   container.innerHTML = `
     <div class="greeting">Meal Planner</div>
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-      <button class="td-act" onclick="shiftWeek(-1)" style="font-size:18px;padding:4px 10px">‹</button>
-      <div class="greeting-sub" style="margin-bottom:0">Week of ${formatWeekLabel(state.weekStart)}</div>
-      <button class="td-act" onclick="shiftWeek(1)" style="font-size:18px;padding:4px 10px">›</button>
+
+    <!-- Week navigation bar -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+      <button class="td-act" onclick="shiftWeek(-1)" style="font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)">‹</button>
+
+      <!-- Week label — click to open calendar -->
+      <button onclick="toggleCalendar()" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px 14px;color:var(--text);font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+        <span style="font-size:14px;font-weight:500">${formatWeekLabel(state.weekStart)}</span>
+        <span style="font-size:11px;color:var(--text3)">${isCurrentWeek ? 'This week' : ''} 📅</span>
+      </button>
+
+      <button class="td-act" onclick="shiftWeek(1)" style="font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)"
+        ${isCurrentWeek ? 'disabled style="opacity:0.3;cursor:not-allowed;font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)"' : ''}>›</button>
+
+      ${!isCurrentWeek ? `<button onclick="jumpToToday()" style="background:rgba(232,197,71,0.12);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:6px 12px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap">Today</button>` : ''}
     </div>
 
+    <!-- Calendar picker -->
+    ${state.showCalendar ? renderCalendarPicker() : ''}
+
     <!-- Planner / Grocery tabs -->
-    <div style="display:flex;gap:4px;margin-bottom:20px">
+    <div style="display:flex;gap:4px;margin-bottom:20px;margin-top:16px">
       <button class="mode-tab ${state.plannerView !== 'grocery' ? 'active' : ''}" onclick="setPlannerView('meals')" style="flex:0 0 auto;padding:8px 18px">📅 Meal plan</button>
       <button class="mode-tab ${state.plannerView === 'grocery' ? 'active' : ''}" onclick="setPlannerView('grocery')" style="flex:0 0 auto;padding:8px 18px">🛒 Grocery list</button>
     </div>
 
     ${state.plannerView === 'grocery' ? renderGroceryList(allMeals, planner) : renderMealPlanView(planner)}
+  `
+}
+
+function renderCalendarPicker() {
+  // Build a mini month calendar + quick-jump list of weeks with meals
+  const today = new Date()
+  const currentWeekStart = state.weekStart
+
+  // Use state.calendarMonth if set, otherwise use the month of the current weekStart
+  if (!state.calendarMonth) {
+    const d = new Date(currentWeekStart + 'T00:00:00')
+    state.calendarMonth = { year: d.getFullYear(), month: d.getMonth() }
+  }
+  const { year, month } = state.calendarMonth
+
+  const monthName = new Date(year, month, 1).toLocaleDateString([], { month: 'long', year: 'numeric' })
+
+  // Build calendar days
+  const firstDay = new Date(year, month, 1)
+  const startOffset = firstDay.getDay() // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+
+  // Get all weeks in this month
+  const weeksSet = new Set(state.weeksWithMeals)
+
+  function getWeekStartForDate(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00')
+    d.setDate(d.getDate() - d.getDay())
+    return d.toISOString().split('T')[0]
+  }
+
+  const cells = []
+  // Empty cells for offset
+  for (let i = 0; i < startOffset; i++) cells.push(null)
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d)
+
+  // Quick-jump: last 10 weeks with meals (most recent first)
+  const recentWeeks = state.weeksWithMeals.slice(0, 10)
+
+  return `
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);overflow:hidden;margin-bottom:4px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid var(--border)">
+
+        <!-- Mini calendar -->
+        <div style="padding:16px;border-right:1px solid var(--border)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <button onclick="shiftCalMonth(-1)" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:16px;padding:2px 8px;font-family:inherit">‹</button>
+            <span style="font-size:13px;font-weight:500;color:var(--text)">${monthName}</span>
+            <button onclick="shiftCalMonth(1)" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:16px;padding:2px 8px;font-family:inherit">›</button>
+          </div>
+          <!-- Day headers -->
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">
+            ${['S','M','T','W','T','F','S'].map(d => `<div style="text-align:center;font-size:10px;color:var(--text3);padding:2px 0">${d}</div>`).join('')}
+          </div>
+          <!-- Day cells -->
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
+            ${cells.map(day => {
+              if (!day) return `<div></div>`
+              const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+              const wk = getWeekStartForDate(dateStr)
+              const isSelected = wk === currentWeekStart
+              const hasMeals = weeksSet.has(wk)
+              const isToday = dateStr === today.toISOString().split('T')[0]
+              return `<button onclick="jumpToWeek('${wk}')"
+                style="aspect-ratio:1;border-radius:50%;border:none;cursor:pointer;font-size:11px;font-family:inherit;position:relative;
+                  background:${isSelected ? 'var(--accent)' : 'none'};
+                  color:${isSelected ? '#1a1500' : isToday ? 'var(--accent)' : 'var(--text)'};
+                  font-weight:${isToday || isSelected ? '600' : '400'};
+                  outline:${isToday && !isSelected ? '1px solid var(--accent)' : 'none'}"
+                onmouseover="if(!${isSelected})this.style.background='var(--bg3)'"
+                onmouseout="if(!${isSelected})this.style.background='none'"
+              >${day}${hasMeals && !isSelected ? `<span style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);width:4px;height:4px;background:var(--accent);border-radius:50%;opacity:0.6"></span>` : ''}</button>`
+            }).join('')}
+          </div>
+        </div>
+
+        <!-- Recent weeks with meals -->
+        <div style="padding:16px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Weeks with meals</div>
+          ${!recentWeeks.length
+            ? `<div style="font-size:12px;color:var(--text3)">No planned weeks yet</div>`
+            : recentWeeks.map(wk => {
+                const isSelected = wk === currentWeekStart
+                const d = new Date(wk + 'T00:00:00')
+                const end = new Date(d); end.setDate(end.getDate() + 6)
+                const label = `${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})}`
+                const isThisWeek = wk === getWeekStart()
+                return `<button onclick="jumpToWeek('${wk}')"
+                  style="width:100%;text-align:left;background:${isSelected ? 'rgba(232,197,71,0.12)' : 'none'};
+                    border:1px solid ${isSelected ? 'rgba(232,197,71,0.3)' : 'transparent'};
+                    border-radius:var(--r);padding:7px 10px;margin-bottom:4px;
+                    color:${isSelected ? 'var(--accent)' : 'var(--text2)'};
+                    font-size:12px;font-family:inherit;cursor:pointer;display:flex;justify-content:space-between;align-items:center"
+                  onmouseover="if(!${isSelected})this.style.background='var(--bg3)'"
+                  onmouseout="if(!${isSelected})this.style.background='none'"
+                >
+                  <span>${label}</span>
+                  ${isThisWeek ? `<span style="font-size:10px;color:var(--accent)">this week</span>` : ''}
+                </button>`
+              }).join('')}
+          ${state.weeksWithMeals.length > 10 ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">+ ${state.weeksWithMeals.length - 10} more — use calendar to navigate</div>` : ''}
+        </div>
+      </div>
+      <button onclick="toggleCalendar()" style="width:100%;background:none;border:none;color:var(--text3);font-size:12px;padding:8px;cursor:pointer;font-family:inherit">Close ✕</button>
+    </div>
   `
 }
 
@@ -1455,10 +1586,50 @@ function wireGlobals() {
     renderPage()
   }
 
+  window.toggleCalendar = () => {
+    state.showCalendar = !state.showCalendar
+    if (state.showCalendar) {
+      // Initialize calendar to current weekStart's month
+      const d = new Date(state.weekStart + 'T00:00:00')
+      state.calendarMonth = { year: d.getFullYear(), month: d.getMonth() }
+    }
+    renderPage()
+  }
+
+  window.shiftCalMonth = (dir) => {
+    if (!state.calendarMonth) return
+    let { year, month } = state.calendarMonth
+    month += dir
+    if (month < 0) { month = 11; year-- }
+    if (month > 11) { month = 0; year++ }
+    state.calendarMonth = { year, month }
+    renderPage()
+  }
+
+  window.jumpToWeek = (weekStart) => {
+    state.weekStart = weekStart
+    state.showCalendar = false
+    state.calendarMonth = null
+    state.mealServings = {}
+    state.excludedIngredients = new Set()
+    renderPage()
+  }
+
+  window.jumpToToday = () => {
+    state.weekStart = getWeekStart()
+    state.showCalendar = false
+    state.calendarMonth = null
+    state.mealServings = {}
+    state.excludedIngredients = new Set()
+    renderPage()
+  }
+
   window.shiftWeek = (dir) => {
     const d = new Date(state.weekStart + 'T00:00:00')
     d.setDate(d.getDate() + dir * 7)
     state.weekStart = d.toISOString().split('T')[0]
+    state.showCalendar = false
+    state.calendarMonth = null
     state.mealServings = {}
     state.excludedIngredients = new Set()
     renderPage()
