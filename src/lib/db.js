@@ -96,6 +96,13 @@ export async function addMealEntry(userId, entry) {
       fat: entry.fat ?? 0,
       fiber: entry.fiber ?? 0,
       sugar: entry.sugar ?? 0,
+      base_calories: entry.base_calories ?? entry.calories ?? 0,
+      base_protein: entry.base_protein ?? entry.protein ?? 0,
+      base_carbs: entry.base_carbs ?? entry.carbs ?? 0,
+      base_fat: entry.base_fat ?? entry.fat ?? 0,
+      base_fiber: entry.base_fiber ?? entry.fiber ?? 0,
+      base_sugar: entry.base_sugar ?? entry.sugar ?? 0,
+      servings_consumed: entry.servings_consumed ?? 1,
       confidence: entry.confidence ?? 'medium',
       notes: entry.notes ?? '',
       logged_at: new Date().toISOString()

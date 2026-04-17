@@ -153,11 +153,11 @@ function renderShell(container) {
 
         <!-- Servings multiplier -->
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
-          <label style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;white-space:nowrap">Servings</label>
+          <label style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;white-space:nowrap">Servings eaten</label>
           <input type="number" id="edit-servings" min="0.25" max="20" step="0.25" value="1"
             oninput="applyServingsMultiplier()"
             style="width:70px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:6px 10px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;text-align:center" />
-          <span style="font-size:12px;color:var(--text3)">× per-serving values below</span>
+          <span style="font-size:12px;color:var(--text3)">Macros below update automatically</span>
         </div>
 
         <div class="modal-grid">
@@ -467,7 +467,7 @@ function renderLogTable(entries, isToday) {
             ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
           return `<tr style="cursor:pointer" onclick="openEditModal('${e.id}', 'log')">
-            <td class="td-name">${esc(e.name)}</td>
+            <td class="td-name">${esc(e.name)}${e.servings_consumed && e.servings_consumed != 1 ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">×${e.servings_consumed}</span>` : ''}</td>
             <td class="td-time">${timeStr}</td>
             <td class="td-cal">${Math.round(e.calories)}</td>
             <td class="td-p">${Math.round(e.protein)}g</td>
@@ -2027,17 +2027,22 @@ function wireGlobals() {
     }
     if (!entry) return
     state.editingEntry = { id, source, plannerCtx }
-    // Store base per-serving macros so the multiplier always works from original values
+
+    // Base macros = per-serving values (stored separately, or fall back to current values)
+    // If servings_consumed > 1, divide back to get per-serving base
+    const consumed = parseFloat(entry.servings_consumed) || 1
     state.editingBaseMacros = {
-      calories: entry.calories || 0,
-      protein: entry.protein || 0,
-      carbs: entry.carbs || 0,
-      fat: entry.fat || 0,
-      fiber: entry.fiber || 0,
-      sugar: entry.sugar || 0,
+      calories: entry.base_calories ?? (entry.calories / consumed) ?? 0,
+      protein:  entry.base_protein  ?? (entry.protein  / consumed) ?? 0,
+      carbs:    entry.base_carbs    ?? (entry.carbs    / consumed) ?? 0,
+      fat:      entry.base_fat      ?? (entry.fat      / consumed) ?? 0,
+      fiber:    entry.base_fiber    ?? (entry.fiber    / consumed) ?? 0,
+      sugar:    entry.base_sugar    ?? (entry.sugar    / consumed) ?? 0,
     }
+
     document.getElementById('edit-name').value = entry.name || ''
-    document.getElementById('edit-servings').value = 1
+    document.getElementById('edit-servings').value = consumed
+    // Show consumed (already-multiplied) values in fields
     document.getElementById('edit-cal').value = Math.round(entry.calories || 0)
     document.getElementById('edit-protein').value = Math.round(entry.protein || 0)
     document.getElementById('edit-carbs').value = Math.round(entry.carbs || 0)
@@ -2069,14 +2074,25 @@ function wireGlobals() {
   window.saveEditEntry = async () => {
     if (!state.editingEntry) return
     const { id, source, plannerCtx } = state.editingEntry
+    const servings = parseFloat(document.getElementById('edit-servings').value) || 1
+    const base = state.editingBaseMacros || {}
     const vals = {
       name: document.getElementById('edit-name').value.trim(),
-      calories: parseFloat(document.getElementById('edit-cal').value) || 0,
-      protein: parseFloat(document.getElementById('edit-protein').value) || 0,
-      carbs: parseFloat(document.getElementById('edit-carbs').value) || 0,
-      fat: parseFloat(document.getElementById('edit-fat').value) || 0,
-      fiber: parseFloat(document.getElementById('edit-fiber').value) || 0,
-      sugar: parseFloat(document.getElementById('edit-sugar').value) || 0
+      // Consumed = base × servings
+      calories: Math.round((base.calories || 0) * servings * 10) / 10,
+      protein:  Math.round((base.protein  || 0) * servings * 10) / 10,
+      carbs:    Math.round((base.carbs    || 0) * servings * 10) / 10,
+      fat:      Math.round((base.fat      || 0) * servings * 10) / 10,
+      fiber:    Math.round((base.fiber    || 0) * servings * 10) / 10,
+      sugar:    Math.round((base.sugar    || 0) * servings * 10) / 10,
+      // Preserve base macros and servings_consumed
+      base_calories: base.calories || 0,
+      base_protein:  base.protein  || 0,
+      base_carbs:    base.carbs    || 0,
+      base_fat:      base.fat      || 0,
+      base_fiber:    base.fiber    || 0,
+      base_sugar:    base.sugar    || 0,
+      servings_consumed: servings,
     }
     try {
       if (source === 'log') {
