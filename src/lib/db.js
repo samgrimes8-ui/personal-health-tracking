@@ -461,3 +461,67 @@ export async function getPlannerRange(userId, fromDate, toDate) {
 
   return { meals }
 }
+
+// ─── Food Items ───────────────────────────────────────────────────────────────
+
+export async function getFoodItems(userId) {
+  if (!supabase) return getLocalFallback('macrolens_food_items', [])
+  const { data, error } = await supabase
+    .from('food_items')
+    .select('*')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+  if (error) throw error
+  return data ?? []
+}
+
+export async function upsertFoodItem(userId, item) {
+  if (!supabase) {
+    const all = getLocalFallback('macrolens_food_items', [])
+    const idx = all.findIndex(f => f.id === item.id)
+    const updated = { ...item, user_id: userId, updated_at: new Date().toISOString() }
+    if (!updated.id) updated.id = Date.now().toString()
+    if (idx !== -1) all[idx] = updated; else all.unshift(updated)
+    setLocalFallback('macrolens_food_items', all)
+    return updated
+  }
+  const payload = {
+    user_id: userId,
+    updated_at: new Date().toISOString(),
+    name: item.name,
+    brand: item.brand || '',
+    serving_size: item.serving_size || '1 serving',
+    calories: item.calories || 0,
+    protein: item.protein || 0,
+    carbs: item.carbs || 0,
+    fat: item.fat || 0,
+    fiber: item.fiber || 0,
+    sugar: item.sugar || 0,
+    sodium: item.sodium || 0,
+    components: item.components || [],
+    notes: item.notes || '',
+    source: item.source || 'manual',
+  }
+  if (item.id) payload.id = item.id
+  const { data, error } = await supabase
+    .from('food_items')
+    .upsert(payload)
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteFoodItem(userId, id) {
+  if (!supabase) {
+    const all = getLocalFallback('macrolens_food_items', [])
+    setLocalFallback('macrolens_food_items', all.filter(f => f.id !== id))
+    return
+  }
+  const { error } = await supabase
+    .from('food_items')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', userId)
+  if (error) throw error
+}

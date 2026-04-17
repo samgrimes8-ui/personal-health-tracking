@@ -5,7 +5,8 @@ import {
   getPlannerWeek, addPlannerMeal, updatePlannerMeal, deletePlannerMeal,
   getUsageSummary, getAdminUserOverview, setUserPrivileges,
   getRecipes, upsertRecipe, deleteRecipe, getRecipeByName,
-  getWeeksWithMeals, getPlannerRange
+  getWeeksWithMeals, getPlannerRange,
+  getFoodItems, upsertFoodItem, deleteFoodItem
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -20,6 +21,11 @@ let state = {
   goals: { calories: 2000, protein: 150, carbs: 200, fat: 65 },
   log: [],
   recipes: [],
+  foodItems: [],
+  editingFoodItem: null,
+  editingComponents: null,
+  pendingComponent: null,
+  foodSearch: '',
   planner: { meals: Array(7).fill(null).map(() => []) },
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false },
   currentPage: 'log',
@@ -76,18 +82,20 @@ export async function initApp(user, container) {
 }
 
 async function loadAll() {
-  const [goals, log, usage, recipes, weeksWithMeals] = await Promise.all([
+  const [goals, log, usage, recipes, weeksWithMeals, foodItems] = await Promise.all([
     getGoals(state.user.id),
     getMealLog(state.user.id, { limit: 300 }),
     getUsageSummary(state.user.id),
     getRecipes(state.user.id),
-    getWeeksWithMeals(state.user.id)
+    getWeeksWithMeals(state.user.id),
+    getFoodItems(state.user.id)
   ])
   state.goals = { calories: goals.calories ?? 2000, protein: goals.protein ?? 150, carbs: goals.carbs ?? 200, fat: goals.fat ?? 65 }
   state.log = log
   state.usage = usage
   state.recipes = recipes
   state.weeksWithMeals = weeksWithMeals
+  state.foodItems = foodItems
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
@@ -122,6 +130,10 @@ function renderShell(container) {
           <div class="nav-item ${state.currentPage === 'recipes' ? 'active' : ''}" id="nav-recipes" onclick="switchPage('recipes')">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
             Recipes
+          </div>
+          <div class="nav-item ${state.currentPage === 'foods' ? 'active' : ''}" id="nav-foods" onclick="switchPage('foods')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            Foods
           </div>
           <div class="nav-item ${state.currentPage === 'account' ? 'active' : ''}" id="nav-account" onclick="switchPage('account')">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -226,6 +238,13 @@ function renderShell(container) {
       </div>
     </div>
 
+    <!-- Food item modal -->
+    <div class="modal-overlay" id="food-item-modal">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);width:100%;max-width:520px;max-height:90vh;overflow-y:auto;position:relative">
+        <div id="food-item-modal-content"></div>
+      </div>
+    </div>
+
     <!-- Plan recipe modal -->
     <div class="modal-overlay" id="plan-recipe-modal">
       <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:0;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;position:relative">
@@ -254,6 +273,7 @@ function renderPage() {
     case 'history':  renderHistory(main); break
     case 'goals':    renderGoalsPage(main); break
     case 'recipes':  renderRecipesPage(main); break
+    case 'foods':    renderFoodsPage(main); break
     case 'account':  renderAccount(main); break
   }
   updateSidebar()
@@ -1048,6 +1068,212 @@ function formatWeekLabel(weekStart) {
   const d = new Date(yr, mo - 1, dy)
   const end = new Date(yr, mo - 1, dy + 6)
   return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+}
+
+// ─── Foods Page ───────────────────────────────────────────────────────────────
+function renderFoodsPage(container) {
+  const items = state.foodItems
+  const q = state.foodSearch || ''
+  const filtered = q ? items.filter(f => f.name.toLowerCase().includes(q.toLowerCase()) || (f.brand||'').toLowerCase().includes(q.toLowerCase())) : items
+
+  container.innerHTML = `
+    <div class="greeting">My Foods</div>
+    <div class="greeting-sub">Saved food items — single foods, combos, protein shakes.</div>
+
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <input class="planner-search" placeholder="Search foods..." value="${esc(q)}"
+        oninput="state.foodSearch=this.value;renderPage()" style="flex:1;min-width:180px" />
+      <button class="analyze-btn" style="width:auto;padding:10px 20px;flex-shrink:0" onclick="openFoodItemModal()">+ New food</button>
+    </div>
+
+    ${!filtered.length ? `
+      <div class="log-card">
+        <div class="log-empty" style="padding:60px">
+          ${items.length ? 'No matches.' : 'No saved foods yet.'}<br>
+          <span style="font-size:12px;color:var(--text3);margin-top:6px;display:block">
+            Save packaged foods from barcode scan, or build combos like protein shakes.
+          </span>
+        </div>
+      </div>
+    ` : `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
+        ${filtered.map(f => `
+          <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s"
+            onmouseover="this.style.borderColor='var(--border2)'"
+            onmouseout="this.style.borderColor='var(--border)'"
+            onclick="openFoodItemModal('${f.id}')">
+            <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:600;font-size:15px;color:var(--text);margin-bottom:2px">${esc(f.name)}</div>
+                ${f.brand ? `<div style="font-size:12px;color:var(--text3)">${esc(f.brand)}</div>` : ''}
+              </div>
+              <div style="font-size:11px;color:var(--text3);flex-shrink:0;margin-left:8px;text-align:right">
+                ${f.serving_size || '1 serving'}<br>
+                ${f.components?.length ? `<span style="color:var(--carbs)">${f.components.length} components</span>` : ''}
+              </div>
+            </div>
+            <div class="macro-pills" style="margin-bottom:10px">
+              <span class="macro-pill pill-cal" style="font-size:11px;padding:2px 8px">${Math.round(f.calories)} kcal</span>
+              <span class="macro-pill pill-p" style="font-size:11px;padding:2px 8px">${Math.round(f.protein)}g P</span>
+              <span class="macro-pill pill-c" style="font-size:11px;padding:2px 8px">${Math.round(f.carbs)}g C</span>
+              <span class="macro-pill pill-f" style="font-size:11px;padding:2px 8px">${Math.round(f.fat)}g F</span>
+            </div>
+            <button onclick="quickLogFoodItem('${f.id}');event.stopPropagation()"
+              style="width:100%;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.25);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+              + Log this
+            </button>
+          </div>`).join('')}
+      </div>
+    `}
+  `
+}
+
+function renderFoodItemModal(item, editingComponents) {
+  const isNew = !item?.id
+  const components = editingComponents || item?.components || []
+  const totals = components.reduce((acc, c) => ({
+    calories: acc.calories + (c.calories || 0),
+    protein:  acc.protein  + (c.protein  || 0),
+    carbs:    acc.carbs    + (c.carbs    || 0),
+    fat:      acc.fat      + (c.fat      || 0),
+    fiber:    acc.fiber    + (c.fiber    || 0),
+    sugar:    acc.sugar    + (c.sugar    || 0),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0 })
+
+  const hasComponents = components.length > 0
+
+  return `
+    <div style="padding:20px">
+      <button class="modal-close" onclick="closeFoodItemModal()">×</button>
+      <h3 style="margin:0 0 16px;font-size:18px">${isNew ? 'New food item' : 'Edit food item'}</h3>
+
+      <!-- Name + Brand -->
+      <div class="modal-field">
+        <label>Food name</label>
+        <input type="text" id="fi-name" value="${esc(item?.name || '')}" placeholder="Morning Protein Shake, Greek Yogurt Bowl..." />
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="modal-field" style="margin-bottom:0">
+          <label>Brand (optional)</label>
+          <input type="text" id="fi-brand" value="${esc(item?.brand || '')}" placeholder="Brand name..." />
+        </div>
+        <div class="modal-field" style="margin-bottom:0">
+          <label>Serving size</label>
+          <input type="text" id="fi-serving" value="${esc(item?.serving_size || '1 serving')}" placeholder="1 shake, 1 cup..." />
+        </div>
+      </div>
+
+      <!-- Components section -->
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">
+            Components ${components.length ? `(${components.length})` : ''}
+          </div>
+          <button onclick="openAddComponentModal()" class="clear-btn" style="color:var(--accent)">+ Add component</button>
+        </div>
+
+        ${!components.length ? `
+          <div style="padding:16px;text-align:center;font-size:13px;color:var(--text3);background:var(--bg3);border-radius:var(--r);border:1px dashed var(--border2)">
+            Add components to auto-calculate macros<br>
+            <span style="font-size:11px">e.g. 2 cups milk, 1 scoop protein powder</span>
+          </div>
+        ` : `
+          <div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+            ${components.map((c, i) => `
+              <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border)">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;color:var(--text)">${esc(c.name)}</div>
+                  <div style="font-size:11px;color:var(--text3)">${Math.round(c.calories)} kcal · P${Math.round(c.protein)} C${Math.round(c.carbs)} F${Math.round(c.fat)}</div>
+                </div>
+                <button onclick="removeFoodComponent(${i})" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0;flex-shrink:0"
+                  onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'">×</button>
+              </div>`).join('')}
+            <!-- Totals row -->
+            <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg3)">
+              <div style="flex:1">
+                <div style="font-size:12px;font-weight:600;color:var(--text2)">Total</div>
+              </div>
+              <div style="font-size:12px;color:var(--text2);font-weight:500">
+                ${Math.round(totals.calories)} kcal · P${Math.round(totals.protein)} C${Math.round(totals.carbs)} F${Math.round(totals.fat)}
+              </div>
+            </div>
+          </div>
+        `}
+      </div>
+
+      <!-- Manual macros (shown when no components, or as override) -->
+      <div id="fi-manual-section">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">
+            ${hasComponents ? 'Macros (auto-calculated)' : 'Macros per serving'}
+          </div>
+        </div>
+        <div class="modal-grid">
+          <div class="modal-field"><label>Calories</label><input type="number" id="fi-cal" value="${Math.round(hasComponents ? totals.calories : (item?.calories||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Protein (g)</label><input type="number" id="fi-protein" value="${Math.round(hasComponents ? totals.protein : (item?.protein||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Carbs (g)</label><input type="number" id="fi-carbs" value="${Math.round(hasComponents ? totals.carbs : (item?.carbs||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Fat (g)</label><input type="number" id="fi-fat" value="${Math.round(hasComponents ? totals.fat : (item?.fat||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Fiber (g)</label><input type="number" id="fi-fiber" value="${Math.round(hasComponents ? totals.fiber : (item?.fiber||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+          <div class="modal-field"><label>Sugar (g)</label><input type="number" id="fi-sugar" value="${Math.round(hasComponents ? totals.sugar : (item?.sugar||0))}" ${hasComponents?'readonly style="opacity:0.6"':''} /></div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        ${!isNew ? `<button class="btn-delete" onclick="deleteFoodItemHandler('${item.id}')">Delete</button>` : ''}
+        <button class="btn-cancel" onclick="closeFoodItemModal()">Cancel</button>
+        <button class="btn-save" onclick="saveFoodItemHandler()">Save food</button>
+      </div>
+    </div>
+
+    <!-- Add component sub-panel (hidden by default) -->
+    <div id="add-component-panel" style="display:none;border-top:1px solid var(--border);padding:20px;background:var(--bg3)">
+      <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:12px">Add a component</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+        <button class="food-sub-btn active" id="comp-btn-describe" onclick="setCompMode('describe')">
+          <span style="font-size:18px;display:block;margin-bottom:2px">🔤</span>
+          <span style="font-size:11px">Describe</span>
+        </button>
+        <button class="food-sub-btn" id="comp-btn-barcode" onclick="setCompMode('barcode')">
+          <span style="font-size:18px;display:block;margin-bottom:2px">📷</span>
+          <span style="font-size:11px">Scan</span>
+        </button>
+        <button class="food-sub-btn" id="comp-btn-saved" onclick="setCompMode('saved')">
+          <span style="font-size:18px;display:block;margin-bottom:2px">⭐</span>
+          <span style="font-size:11px">Saved</span>
+        </button>
+      </div>
+
+      <div id="comp-panel-describe">
+        <input class="link-input" id="comp-describe-input" placeholder="e.g. 2 cups whole milk, 1 scoop vanilla whey..." />
+      </div>
+      <div id="comp-panel-barcode" style="display:none">
+        <input type="file" id="comp-barcode-file" accept="image/*" capture="environment" style="display:none"
+          onchange="handleComponentBarcode(this.files[0])" />
+        <button onclick="document.getElementById('comp-barcode-file').click()"
+          style="width:100%;padding:12px;background:var(--bg4);border:1.5px dashed var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;cursor:pointer;font-family:inherit">
+          📷 Open camera to scan barcode
+        </button>
+        <input class="link-input" id="comp-barcode-manual" placeholder="Or type barcode number..." style="margin-top:8px" />
+        <div id="comp-barcode-status" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
+      </div>
+      <div id="comp-panel-saved" style="display:none">
+        <input class="link-input" id="comp-saved-search" placeholder="Search saved foods and recipes..."
+          oninput="filterCompSavedSearch(this.value)" />
+        <div id="comp-saved-results" style="margin-top:8px;max-height:180px;overflow-y:auto"></div>
+      </div>
+
+      <div id="comp-result" style="display:none;margin-top:10px;padding:10px 12px;background:var(--bg4);border-radius:var(--r);border:1px solid var(--border2)">
+        <div style="font-size:13px;font-weight:500;color:var(--text)" id="comp-result-name"></div>
+        <div style="font-size:11px;color:var(--text3)" id="comp-result-macros"></div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button onclick="cancelAddComponent()" class="btn-cancel" style="flex:1">Cancel</button>
+        <button onclick="confirmAddComponent()" class="btn-save" style="flex:1" id="comp-add-btn">Add component</button>
+        <button onclick="analyzeComponentHandler()" class="pm-analyze-btn" style="flex:1;margin:0" id="comp-analyze-btn">✨ Look up</button>
+      </div>
+    </div>
+  `
 }
 
 // ─── Recipes Page ─────────────────────────────────────────────────────────────
@@ -2484,7 +2710,210 @@ function wireGlobals() {
     state.editingRecipe = null
   }
 
-  // ── Plan recipe from recipe page ────────────────────────────────
+  // ── Foods page ─────────────────────────────────────────────────
+  window.openFoodItemModal = (id) => {
+    const item = id ? state.foodItems.find(f => f.id === id) : null
+    state.editingFoodItem = item ? { ...item } : { name:'', brand:'', serving_size:'1 serving', components:[], calories:0, protein:0, carbs:0, fat:0, fiber:0, sugar:0 }
+    state.editingComponents = [...(state.editingFoodItem.components || [])]
+    document.getElementById('food-item-modal-content').innerHTML = renderFoodItemModal(state.editingFoodItem, state.editingComponents)
+    document.getElementById('food-item-modal').classList.add('open')
+  }
+
+  window.closeFoodItemModal = () => {
+    document.getElementById('food-item-modal').classList.remove('open')
+    state.editingFoodItem = null
+    state.editingComponents = null
+    state.pendingComponent = null
+  }
+
+  window.openAddComponentModal = () => {
+    const panel = document.getElementById('add-component-panel')
+    if (panel) panel.style.display = 'block'
+    state.pendingComponent = null
+    document.getElementById('comp-result').style.display = 'none'
+    document.getElementById('comp-describe-input').value = ''
+  }
+
+  window.cancelAddComponent = () => {
+    const panel = document.getElementById('add-component-panel')
+    if (panel) panel.style.display = 'none'
+    state.pendingComponent = null
+  }
+
+  window.setCompMode = (mode) => {
+    ;['describe','barcode','saved'].forEach(m => {
+      document.getElementById(`comp-panel-${m}`).style.display = m === mode ? '' : 'none'
+      document.getElementById(`comp-btn-${m}`).classList.toggle('active', m === mode)
+    })
+    if (mode === 'saved') filterCompSavedSearch('')
+  }
+
+  window.filterCompSavedSearch = (q) => {
+    const results = document.getElementById('comp-saved-results')
+    if (!results) return
+    const items = [
+      ...state.foodItems.map(f => ({ ...f, _type: 'food' })),
+      ...state.recipes.map(r => ({ ...r, _type: 'recipe' })),
+    ].filter(i => !q || i.name.toLowerCase().includes(q.toLowerCase())).slice(0, 20)
+
+    results.innerHTML = items.map(i => `
+      <div onclick="selectSavedComponent('${i.id}','${i._type}')"
+        style="padding:8px 10px;cursor:pointer;border-radius:var(--r);display:flex;justify-content:space-between;align-items:center"
+        onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='none'">
+        <div>
+          <div style="font-size:13px;color:var(--text)">${esc(i.name)}</div>
+          <div style="font-size:11px;color:var(--text3)">${i._type === 'food' ? '🍎 Food' : '⭐ Recipe'} · ${Math.round(i.calories)} kcal</div>
+        </div>
+        <span style="font-size:11px;color:var(--text3)">P${Math.round(i.protein)} C${Math.round(i.carbs)} F${Math.round(i.fat)}</span>
+      </div>`).join('') || '<div style="padding:12px;color:var(--text3);font-size:13px">No matches</div>'
+  }
+
+  window.selectSavedComponent = (id, type) => {
+    const item = type === 'food'
+      ? state.foodItems.find(f => f.id === id)
+      : state.recipes.find(r => r.id === id)
+    if (!item) return
+    state.pendingComponent = { name: item.name, calories: item.calories, protein: item.protein, carbs: item.carbs, fat: item.fat, fiber: item.fiber || 0, sugar: item.sugar || 0 }
+    showComponentResult(state.pendingComponent)
+  }
+
+  window.analyzeComponentHandler = async () => {
+    const btn = document.getElementById('comp-analyze-btn')
+    const activeMode = document.getElementById('comp-panel-describe').style.display !== 'none' ? 'describe' : 'barcode'
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="analyzing-spinner"></span>' }
+    try {
+      let result
+      if (activeMode === 'describe') {
+        const desc = document.getElementById('comp-describe-input')?.value.trim()
+        if (!desc) { showToast('Describe the component first', 'error'); return }
+        result = await analyzeFoodItem(desc)
+      }
+      if (result) {
+        state.pendingComponent = { name: result.name, calories: result.calories, protein: result.protein, carbs: result.carbs, fat: result.fat, fiber: result.fiber || 0, sugar: result.sugar || 0 }
+        showComponentResult(state.pendingComponent)
+      }
+    } catch (err) { showToast('Lookup failed: ' + err.message, 'error') }
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Look up' }
+  }
+
+  function showComponentResult(c) {
+    const el = document.getElementById('comp-result')
+    const nameEl = document.getElementById('comp-result-name')
+    const macroEl = document.getElementById('comp-result-macros')
+    if (!el) return
+    el.style.display = 'block'
+    if (nameEl) nameEl.textContent = c.name
+    if (macroEl) macroEl.textContent = `${Math.round(c.calories)} kcal · P${Math.round(c.protein)}g C${Math.round(c.carbs)}g F${Math.round(c.fat)}g`
+  }
+
+  window.handleComponentBarcode = async (file) => {
+    const status = document.getElementById('comp-barcode-status')
+    if (!file) return
+    if (status) status.textContent = 'Reading barcode...'
+    try {
+      await loadQuagga()
+      const reader = new FileReader()
+      reader.onload = ev => {
+        Quagga.decodeSingle({
+          decoder: { readers: ['ean_reader','ean_8_reader','upc_reader','upc_e_reader','code_128_reader'] },
+          locate: true, src: ev.target.result
+        }, async result => {
+          if (result?.codeResult?.code) {
+            if (status) status.textContent = `Found barcode — looking up...`
+            const res = await fetch(`/api/barcode?upc=${result.codeResult.code}`)
+            const data = await res.json()
+            if (data.found) {
+              state.pendingComponent = { name: data.name, calories: data.calories, protein: data.protein, carbs: data.carbs, fat: data.fat, fiber: data.fiber || 0, sugar: data.sugar || 0 }
+              showComponentResult(state.pendingComponent)
+              if (status) status.textContent = `✓ ${data.name}`
+            } else {
+              if (status) status.textContent = 'Not found — try describing it'
+            }
+          } else {
+            if (status) status.textContent = 'No barcode found — type number below'
+          }
+        })
+      }
+      reader.readAsDataURL(file)
+    } catch { if (status) status.textContent = 'Scanner unavailable' }
+  }
+
+  window.confirmAddComponent = () => {
+    if (!state.pendingComponent) { showToast('Look up a component first', 'error'); return }
+    if (!state.editingComponents) state.editingComponents = []
+    state.editingComponents.push(state.pendingComponent)
+    state.pendingComponent = null
+    // Re-render modal with updated components
+    document.getElementById('food-item-modal-content').innerHTML = renderFoodItemModal(state.editingFoodItem, state.editingComponents)
+  }
+
+  window.removeFoodComponent = (idx) => {
+    if (!state.editingComponents) return
+    state.editingComponents.splice(idx, 1)
+    document.getElementById('food-item-modal-content').innerHTML = renderFoodItemModal(state.editingFoodItem, state.editingComponents)
+  }
+
+  window.saveFoodItemHandler = async () => {
+    const name = document.getElementById('fi-name')?.value.trim()
+    if (!name) { showToast('Food needs a name', 'error'); return }
+    const components = state.editingComponents || []
+    const hasComponents = components.length > 0
+    const totals = hasComponents ? components.reduce((a,c) => ({
+      calories: a.calories+(c.calories||0), protein: a.protein+(c.protein||0),
+      carbs: a.carbs+(c.carbs||0), fat: a.fat+(c.fat||0),
+      fiber: a.fiber+(c.fiber||0), sugar: a.sugar+(c.sugar||0)
+    }), {calories:0,protein:0,carbs:0,fat:0,fiber:0,sugar:0}) : {
+      calories: parseFloat(document.getElementById('fi-cal')?.value)||0,
+      protein:  parseFloat(document.getElementById('fi-protein')?.value)||0,
+      carbs:    parseFloat(document.getElementById('fi-carbs')?.value)||0,
+      fat:      parseFloat(document.getElementById('fi-fat')?.value)||0,
+      fiber:    parseFloat(document.getElementById('fi-fiber')?.value)||0,
+      sugar:    parseFloat(document.getElementById('fi-sugar')?.value)||0,
+    }
+    const item = {
+      ...state.editingFoodItem,
+      name,
+      brand: document.getElementById('fi-brand')?.value.trim() || '',
+      serving_size: document.getElementById('fi-serving')?.value.trim() || '1 serving',
+      components,
+      ...totals,
+    }
+    try {
+      const saved = await upsertFoodItem(state.user.id, item)
+      const idx = state.foodItems.findIndex(f => f.id === saved.id)
+      if (idx !== -1) state.foodItems[idx] = saved; else state.foodItems.unshift(saved)
+      closeFoodItemModal()
+      renderPage()
+      showToast(`${name} saved!`, 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.deleteFoodItemHandler = async (id) => {
+    if (!confirm('Delete this food item?')) return
+    try {
+      await deleteFoodItem(state.user.id, id)
+      state.foodItems = state.foodItems.filter(f => f.id !== id)
+      closeFoodItemModal()
+      renderPage()
+      showToast('Deleted', '')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.quickLogFoodItem = async (id) => {
+    const item = state.foodItems.find(f => f.id === id)
+    if (!item) return
+    try {
+      const entry = await addMealEntry(state.user.id, { ...item, base_calories: item.calories, base_protein: item.protein, base_carbs: item.carbs, base_fat: item.fat, base_fiber: item.fiber, base_sugar: item.sugar, servings_consumed: 1 })
+      state.log.unshift(entry)
+      updateStats()
+      refreshTodayLog()
+      showToast(`${item.name} logged!`, 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  document.getElementById('food-item-modal')?.addEventListener('click', e => {
+    if (e.target.id === 'food-item-modal') closeFoodItemModal()
+  })
   window.openPlanRecipeModal = (recipeId) => {
     const recipe = state.recipes.find(r => r.id === recipeId)
     if (!recipe) return
@@ -2952,7 +3381,13 @@ function filterPlannerList() {
   const items = []
   const seen = new Set()
 
-  // 1. Saved recipes (always available, most useful)
+  // 1. Saved food items first
+  state.foodItems.forEach(f => {
+    seen.add(f.name.toLowerCase())
+    items.push({ ...f, source: 'food' })
+  })
+
+  // 2. Saved recipes
   state.recipes.forEach(r => {
     seen.add(r.name.toLowerCase())
     items.push({
@@ -2989,7 +3424,7 @@ function filterPlannerList() {
     <div class="history-pick-item" onclick="addHistoryMealToPlanner('${esc(item.id)}')">
       <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0">
         <span class="hpi-name">${esc(item.name)}</span>
-        ${item.source === 'recipe' ? `<span style="font-size:10px;color:var(--protein)">⭐ Recipe${item.servings ? ' · ' + item.servings + ' servings' : ''}</span>` : `<span style="font-size:10px;color:var(--text3)">📋 From log</span>`}
+        ${item.source === 'recipe' ? `<span style="font-size:10px;color:var(--protein)">⭐ Recipe${item.servings ? ' · ' + item.servings + ' servings' : ''}</span>` : item.source === 'food' ? `<span style="font-size:10px;color:var(--carbs)">🍎 Food · ${item.serving_size || '1 serving'}</span>` : `<span style="font-size:10px;color:var(--text3)">📋 From log</span>`}
       </div>
       <span class="hpi-cal">${Math.round(item.calories)} kcal</span>
     </div>`).join('')
