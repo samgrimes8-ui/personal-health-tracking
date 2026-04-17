@@ -2629,6 +2629,8 @@ function wireGlobals() {
     }
     if (btn) { btn.disabled = false; btn.textContent = '✨ Estimate macros & ingredients with AI' }
   }
+
+  window.saveRecipeHandler = async () => {
     if (!state.editingRecipe) return
     const btn = document.getElementById('recipe-save-btn')
     if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
