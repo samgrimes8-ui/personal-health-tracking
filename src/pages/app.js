@@ -1195,13 +1195,35 @@ function renderFoodItemModal(item, editingComponents) {
         ` : `
           <div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
             ${components.map((c, i) => `
-              <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border)">
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:13px;color:var(--text)">${esc(c.name)}</div>
-                  <div style="font-size:11px;color:var(--text3)">${Math.round(c.calories)} kcal · P${Math.round(c.protein)} C${Math.round(c.carbs)} F${Math.round(c.fat)}</div>
+              <div style="padding:9px 12px;border-bottom:1px solid var(--border)">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:13px;color:var(--text)">
+                    ${c.qty && c.qty !== 1 ? `<span style="color:var(--accent);font-weight:500">${c.qty} ${esc(c.unit||'serving')} </span>` : (c.unit && c.unit !== 'serving' ? `<span style="color:var(--accent);font-weight:500">${esc(c.unit)} </span>` : '')}${esc(c.name)}
+                  </div>
+                    <div style="font-size:11px;color:var(--text3)">${Math.round(c.calories)} kcal · P${Math.round(c.protein)} C${Math.round(c.carbs)} F${Math.round(c.fat)}</div>
+                  </div>
+                  <button onclick="toggleComponentEdit(${i})" style="background:none;border:none;color:var(--text3);font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;border:1px solid var(--border)"
+                    onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text3)'">Edit</button>
+                  <button onclick="removeFoodComponent(${i})" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0;flex-shrink:0"
+                    onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'">×</button>
                 </div>
-                <button onclick="removeFoodComponent(${i})" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0;flex-shrink:0"
-                  onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'">×</button>
+                <!-- Inline edit panel -->
+                <div id="comp-edit-${i}" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+                  <div style="font-size:11px;color:var(--text3);margin-bottom:6px">Adjust serving size — macros scale automatically</div>
+                  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                    <input type="number" min="0.1" step="0.25" value="${c.qty || 1}"
+                      id="comp-qty-${i}"
+                      oninput="updateComponentQty(${i})"
+                      style="width:70px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;color:var(--text);font-size:14px;font-family:inherit;outline:none;text-align:center" />
+                    <input type="text" value="${esc(c.unit || 'serving')}"
+                      id="comp-unit-${i}"
+                      oninput="updateComponentUnit(${i})"
+                      placeholder="serving, cup, scoop..."
+                      style="flex:1;min-width:90px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+                    <span style="font-size:11px;color:var(--text3);white-space:nowrap">= ${Math.round(c.calories)} kcal</span>
+                  </div>
+                </div>
               </div>`).join('')}
             <!-- Totals row -->
             <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg3)">
@@ -1278,8 +1300,19 @@ function renderFoodItemModal(item, editingComponents) {
       </div>
 
       <div id="comp-result" style="display:none;margin-top:10px;padding:10px 12px;background:var(--bg4);border-radius:var(--r);border:1px solid var(--border2)">
-        <div style="font-size:13px;font-weight:500;color:var(--text)" id="comp-result-name"></div>
-        <div style="font-size:11px;color:var(--text3)" id="comp-result-macros"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div style="font-size:13px;font-weight:500;color:var(--text)" id="comp-result-name"></div>
+          <div style="font-size:11px;color:var(--text3)" id="comp-result-macros"></div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span style="font-size:12px;color:var(--text3)">Qty:</span>
+          <input type="number" min="0.1" step="0.25" value="1" id="comp-result-qty"
+            oninput="updatePendingQty()"
+            style="width:65px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none;text-align:center" />
+          <input type="text" value="serving" id="comp-result-unit" placeholder="serving, cup, scoop..."
+            oninput="updatePendingUnit()"
+            style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+        </div>
       </div>
 
       <div style="display:flex;gap:8px;margin-top:12px">
@@ -2837,22 +2870,48 @@ function wireGlobals() {
     const nameEl = document.getElementById('comp-result-name')
     const macroEl = document.getElementById('comp-result-macros')
     const addBtn = document.getElementById('comp-add-btn')
+    const qtyEl = document.getElementById('comp-result-qty')
+    const unitEl = document.getElementById('comp-result-unit')
     if (!el) return
     el.style.display = 'block'
     if (nameEl) nameEl.textContent = c.name
     if (macroEl) macroEl.textContent = `${Math.round(c.calories)} kcal · P${Math.round(c.protein)}g C${Math.round(c.carbs)}g F${Math.round(c.fat)}g`
-    // Highlight add button once result is ready
-    if (addBtn) { addBtn.style.background = 'var(--accent)'; addBtn.style.color = '#1a1500' }
+    // Pre-fill unit from serving_size if available (e.g. "1 bar (40g)" → unit="bar")
+    if (unitEl) {
+      const ss = c.serving_size || ''
+      const unitMatch = ss.match(/^\d+\.?\d*\s+([a-zA-Z]+)/)
+      unitEl.value = unitMatch ? unitMatch[1] : 'serving'
+    }
+    if (qtyEl) qtyEl.value = 1
+    // Store base for scaling
+    state.pendingComponent._base = { calories: c.calories, protein: c.protein, carbs: c.carbs, fat: c.fat, fiber: c.fiber || 0, sugar: c.sugar || 0 }
+    if (addBtn) { addBtn.style.opacity = '1'; addBtn.style.background = 'var(--accent)'; addBtn.style.color = '#1a1500' }
   }
 
   window.confirmAddComponent = () => {
     if (!state.pendingComponent) { showToast('Look up a component first', 'error'); return }
     if (!state.editingComponents) state.editingComponents = []
-    state.editingComponents.push({ ...state.pendingComponent })
+    // Grab qty/unit from result inputs
+    const qty = parseFloat(document.getElementById('comp-result-qty')?.value) || 1
+    const unit = document.getElementById('comp-result-unit')?.value || 'serving'
+    const comp = {
+      ...state.pendingComponent,
+      qty,
+      unit,
+      _base: { ...state.pendingComponent._base } || {
+        calories: state.pendingComponent.calories,
+        protein: state.pendingComponent.protein,
+        carbs: state.pendingComponent.carbs,
+        fat: state.pendingComponent.fat,
+        fiber: state.pendingComponent.fiber || 0,
+        sugar: state.pendingComponent.sugar || 0,
+      }
+    }
+    const addedName = comp.name
+    state.editingComponents.push(comp)
     state.pendingComponent = null
-    // Re-render modal content, then re-open the add panel so user can add more
     document.getElementById('food-item-modal-content').innerHTML = renderFoodItemModal(state.editingFoodItem, state.editingComponents)
-    // Re-open the component panel for adding another
+    // Re-open panel for adding more
     const panel = document.getElementById('add-component-panel')
     if (panel) {
       panel.style.display = 'block'
@@ -2861,10 +2920,97 @@ function wireGlobals() {
       const descInput = document.getElementById('comp-describe-input')
       if (descInput) descInput.value = ''
     }
-    showToast(`${(state.editingComponents[state.editingComponents.length-1]?.name || 'Component')} added!`, 'success')
+    showToast(`${addedName} added!`, 'success')
   }
 
-  window.handleComponentBarcode = async (file) => {
+  window.toggleComponentEdit = (idx) => {
+    const panel = document.getElementById(`comp-edit-${idx}`)
+    if (panel) panel.style.display = panel.style.display === 'none' ? '' : 'none'
+  }
+
+  window.updateComponentQty = (idx) => {
+    if (!state.editingComponents?.[idx]) return
+    const qty = parseFloat(document.getElementById(`comp-qty-${idx}`)?.value) || 1
+    const c = state.editingComponents[idx]
+    const base = c._base || { calories: c.calories, protein: c.protein, carbs: c.carbs, fat: c.fat, fiber: c.fiber, sugar: c.sugar, qty: c.qty || 1 }
+    if (!c._base) c._base = { ...base }
+    const multiplier = qty / (base.qty || 1)
+    c.qty = qty
+    c.calories = +(base.calories * multiplier).toFixed(1)
+    c.protein  = +(base.protein  * multiplier).toFixed(1)
+    c.carbs    = +(base.carbs    * multiplier).toFixed(1)
+    c.fat      = +(base.fat      * multiplier).toFixed(1)
+    c.fiber    = +(base.fiber    * multiplier).toFixed(1)
+    c.sugar    = +(base.sugar    * multiplier).toFixed(1)
+    // Update calorie display without full re-render
+    const calSpan = document.querySelector(`#comp-edit-${idx} span[style*="kcal"]`)
+    if (calSpan) calSpan.textContent = `= ${Math.round(c.calories)} kcal`
+    const macroDiv = document.querySelector(`#comp-edit-${idx}`)?.closest('div[style*="padding:9px"]')?.querySelector('.\\[font-size\\:11px\\]')
+    // Update macro line in parent
+    const rows = document.querySelectorAll('[id^="comp-edit-"]')
+    rows.forEach((_, i) => {
+      if (i !== idx) return
+      const parent = document.getElementById(`comp-edit-${idx}`)?.parentElement
+      if (parent) {
+        const macroLine = parent.querySelector('div[style*="color:var(--text3)"]')
+        if (macroLine) macroLine.textContent = `${Math.round(c.calories)} kcal · P${Math.round(c.protein)} C${Math.round(c.carbs)} F${Math.round(c.fat)}`
+      }
+    })
+    // Update totals
+    updateComponentTotals()
+  }
+
+  window.updateComponentUnit = (idx) => {
+    if (!state.editingComponents?.[idx]) return
+    state.editingComponents[idx].unit = document.getElementById(`comp-unit-${idx}`)?.value || 'serving'
+  }
+
+  function updateComponentTotals() {
+    const components = state.editingComponents || []
+    const totals = components.reduce((a, c) => ({
+      calories: a.calories + (c.calories||0),
+      protein:  a.protein  + (c.protein ||0),
+      carbs:    a.carbs    + (c.carbs   ||0),
+      fat:      a.fat      + (c.fat     ||0),
+    }), { calories:0, protein:0, carbs:0, fat:0 })
+    // Update total row and readonly macro fields
+    const totalRow = document.querySelector('[style*="background:var(--bg3)"] [style*="font-weight:500"]')
+    if (totalRow) totalRow.textContent = `${Math.round(totals.calories)} kcal · P${Math.round(totals.protein)} C${Math.round(totals.carbs)} F${Math.round(totals.fat)}`
+    const fields = { 'fi-cal': totals.calories, 'fi-protein': totals.protein, 'fi-carbs': totals.carbs, 'fi-fat': totals.fat }
+    Object.entries(fields).forEach(([id, val]) => { const el = document.getElementById(id); if (el) el.value = Math.round(val) })
+  }
+
+  window.updatePendingQty = () => {
+    if (!state.pendingComponent?._base) {
+      if (state.pendingComponent) {
+        state.pendingComponent._base = {
+          calories: state.pendingComponent.calories,
+          protein: state.pendingComponent.protein,
+          carbs: state.pendingComponent.carbs,
+          fat: state.pendingComponent.fat,
+          fiber: state.pendingComponent.fiber || 0,
+          sugar: state.pendingComponent.sugar || 0,
+        }
+      }
+    }
+    if (!state.pendingComponent) return
+    const qty = parseFloat(document.getElementById('comp-result-qty')?.value) || 1
+    const base = state.pendingComponent._base
+    state.pendingComponent.qty = qty
+    state.pendingComponent.calories = +(base.calories * qty).toFixed(1)
+    state.pendingComponent.protein  = +(base.protein  * qty).toFixed(1)
+    state.pendingComponent.carbs    = +(base.carbs    * qty).toFixed(1)
+    state.pendingComponent.fat      = +(base.fat      * qty).toFixed(1)
+    state.pendingComponent.fiber    = +(base.fiber    * qty).toFixed(1)
+    state.pendingComponent.sugar    = +(base.sugar    * qty).toFixed(1)
+    const macroEl = document.getElementById('comp-result-macros')
+    if (macroEl) macroEl.textContent = `${Math.round(state.pendingComponent.calories)} kcal · P${Math.round(state.pendingComponent.protein)}g C${Math.round(state.pendingComponent.carbs)}g F${Math.round(state.pendingComponent.fat)}g`
+  }
+
+  window.updatePendingUnit = () => {
+    if (!state.pendingComponent) return
+    state.pendingComponent.unit = document.getElementById('comp-result-unit')?.value || 'serving'
+  }
     const status = document.getElementById('comp-barcode-status')
     if (!file) return
     if (status) status.textContent = 'Reading barcode...'
