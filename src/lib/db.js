@@ -199,7 +199,9 @@ export async function addPlannerMeal(userId, weekStart, dayIdx, meal) {
       carbs: meal.carbs ?? 0,
       fat: meal.fat ?? 0,
       fiber: meal.fiber ?? 0,
-      is_leftover: meal.leftover ?? false
+      is_leftover: meal.leftover ?? false,
+      planned_servings: meal.planned_servings ?? null,
+      recipe_id: meal.id ?? null,
     })
     .select()
     .single()

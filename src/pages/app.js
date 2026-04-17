@@ -891,7 +891,8 @@ function collectAllIngredients(planner, rangeMeals) {
     const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
     const ingredients = recipe?.ingredients || []
     const baseServings = recipe?.servings || 1
-    const requestedServings = state.mealServings?.[m.id] || baseServings
+    // Priority: 1) user override in this session, 2) planned_servings from DB, 3) base recipe servings
+    const requestedServings = state.mealServings?.[m.id] ?? m.planned_servings ?? baseServings
     const multiplier = requestedServings / baseServings
     const dayLabel = m.actualDate
       ? new Date(m.actualDate + 'T00:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
@@ -1016,7 +1017,7 @@ function renderGroceryByMeal(planner, rangeMeals) {
               const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
               const ingredients = recipe?.ingredients || []
               const baseServings = recipe?.servings || 1
-              const requestedServings = state.mealServings[m.id] || baseServings
+              const requestedServings = state.mealServings[m.id] ?? m.planned_servings ?? baseServings
               const multiplier = requestedServings / baseServings
 
               return `
@@ -1708,6 +1709,16 @@ function renderPlanRecipeModal(recipe) {
 
       <!-- Selected days summary -->
       <div id="plan-selected-summary" style="font-size:12px;color:var(--text3);margin-bottom:16px;min-height:18px"></div>
+
+      <!-- Servings to make -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
+        <span style="font-size:13px;color:var(--text2)">Servings to make:</span>
+        <input type="number" id="plan-servings-input" min="1" step="1"
+          value="${recipe.servings || 4}"
+          oninput="state.planningRecipe && (state.planningRecipe.plannedServings = parseFloat(this.value) || ${recipe.servings || 4})"
+          style="width:65px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;text-align:center" />
+        <span style="font-size:12px;color:var(--text3)">(base recipe: ${recipe.servings || 4})</span>
+      </div>
 
       <!-- Add button -->
       <button id="plan-recipe-add-btn" onclick="confirmPlanRecipe('${recipe.id}')"
@@ -3459,7 +3470,7 @@ function wireGlobals() {
   window.openPlanRecipeModal = (recipeId) => {
     const recipe = state.recipes.find(r => r.id === recipeId)
     if (!recipe) return
-    state.planningRecipe = { recipe, selectedDays: [], cookOnceOpen: false }
+    state.planningRecipe = { recipe, selectedDays: [], cookOnceOpen: false, plannedServings: recipe.servings || 4 }
     document.getElementById('plan-recipe-modal-content').innerHTML = renderPlanRecipeModal(recipe)
     document.getElementById('recipe-modal')?.classList.remove('open')
     document.getElementById('plan-recipe-modal').classList.add('open')
@@ -3531,17 +3542,15 @@ function wireGlobals() {
   window.confirmPlanRecipe = async (recipeId) => {
     if (!state.planningRecipe?.selectedDays?.length) return
     const { recipe, selectedDays } = state.planningRecipe
+    const plannedServings = parseFloat(document.getElementById('plan-servings-input')?.value) || state.planningRecipe.plannedServings || recipe.servings || 4
     const btn = document.getElementById('plan-recipe-add-btn')
     if (btn) { btn.textContent = 'Adding...'; btn.style.opacity = '0.7' }
     try {
-      // First day = primary (ingredients counted), rest = cook-once leftovers
       for (let i = 0; i < selectedDays.length; i++) {
         const { dateStr } = selectedDays[i]
-        // Derive everything from dateStr directly — no stored weekStart to trust
         const [yr, mo, dy] = dateStr.split('-').map(Number)
         const d = new Date(yr, mo - 1, dy)
         const dayOfWeek = d.getDay()
-        // weekStart = the Sunday of this day's week
         const ws = new Date(yr, mo - 1, dy - dayOfWeek)
         const weekStart = `${ws.getFullYear()}-${String(ws.getMonth()+1).padStart(2,'0')}-${String(ws.getDate()).padStart(2,'0')}`
         console.log(`[plan] day ${i}: dateStr=${dateStr} dayOfWeek=${dayOfWeek} (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]}) weekStart=${weekStart}`)
@@ -3549,14 +3558,12 @@ function wireGlobals() {
           ? recipe.name
           : `${recipe.name} (leftovers)`
         const added = await addPlannerMeal(state.user.id, weekStart, dayOfWeek, {
-          ...recipe, name: mealName
+          ...recipe, name: mealName, planned_servings: plannedServings
         })
-        // Update state if this week is loaded
         if (weekStart === state.weekStart) {
           if (!state.planner) state.planner = { meals: Array(7).fill(null).map(() => []) }
           state.planner.meals[dayOfWeek].push(added)
         }
-        // Track this week as having meals
         if (!state.weeksWithMeals.includes(weekStart)) {
           state.weeksWithMeals = [weekStart, ...state.weeksWithMeals].sort().reverse()
         }
