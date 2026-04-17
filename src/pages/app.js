@@ -335,17 +335,20 @@ function renderDashboard(container) {
 
           <!-- Barcode scanner -->
           <div id="food-panel-barcode" style="${state.foodMode !== 'barcode' ? 'display:none' : ''}">
-            <div id="barcode-scanner-area" style="border:1.5px dashed var(--border2);border-radius:var(--r);overflow:hidden;position:relative;background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;cursor:pointer" onclick="startBarcodeScanner()">
+            <!-- Tap area opens camera on iOS via file input capture -->
+            <div id="barcode-scanner-area" style="border:1.5px dashed var(--border2);border-radius:var(--r);overflow:hidden;position:relative;background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;cursor:pointer"
+              onclick="document.getElementById('barcode-file-input').click()">
               <div id="barcode-scanner-inner" style="text-align:center;padding:20px">
                 <div style="font-size:28px;margin-bottom:6px">📷</div>
                 <div style="font-size:13px;color:var(--text2)">Tap to scan barcode</div>
-                <div style="font-size:11px;color:var(--text3);margin-top:3px">UPC, EAN, QR — any packaged food</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:3px">Opens camera — point at barcode</div>
               </div>
               <video id="barcode-video" style="display:none;width:100%;border-radius:var(--r)" autoplay playsinline muted></video>
-              <canvas id="barcode-canvas" style="display:none"></canvas>
             </div>
-            <div id="barcode-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center"></div>
-            <input id="barcode-manual-input" class="link-input" placeholder="Or type barcode number manually..." style="margin-top:8px"
+            <input type="file" id="barcode-file-input" accept="image/*" capture="environment" style="display:none"
+              onchange="handleBarcodeImage(this.files[0])" />
+            <div id="barcode-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center;min-height:18px"></div>
+            <input id="barcode-manual-input" class="link-input" placeholder="Or type barcode number..." style="margin-top:6px"
               onkeydown="if(event.key==='Enter')lookupBarcode(this.value)" />
           </div>
 
@@ -1778,10 +1781,17 @@ function wireGlobals() {
     const video = document.getElementById('barcode-video')
     const inner = document.getElementById('barcode-scanner-inner')
     const status = document.getElementById('barcode-status')
-    if (!video) return
 
-    // Try native BarcodeDetector first (Chrome/Safari iOS 17+)
-    if ('BarcodeDetector' in window) {
+    // iOS Safari doesn't support BarcodeDetector or getUserMedia reliably
+    // Best approach: use file input with camera capture, then decode with ZXing
+    const fileInput = document.getElementById('barcode-file-input')
+    if (fileInput) {
+      fileInput.click()
+      return
+    }
+
+    // Desktop/Android: try native BarcodeDetector with live camera
+    if ('BarcodeDetector' in window && navigator.mediaDevices?.getUserMedia) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment', width: { ideal: 1280 } }
@@ -1790,8 +1800,9 @@ function wireGlobals() {
         if (inner) inner.style.display = 'none'
         video.srcObject = stream
         if (status) status.textContent = 'Point camera at barcode...'
-
-        const detector = new window.BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code'] })
+        const detector = new window.BarcodeDetector({
+          formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code']
+        })
         state._barcodeStream = stream
         state._barcodeInterval = setInterval(async () => {
           try {
@@ -1801,30 +1812,69 @@ function wireGlobals() {
               stream.getTracks().forEach(t => t.stop())
               video.style.display = 'none'
               if (inner) inner.style.display = 'block'
-              const code = codes[0].rawValue
-              if (status) status.textContent = `Found: ${code} — looking up...`
-              await lookupBarcode(code)
+              if (status) status.textContent = `Found: ${codes[0].rawValue} — looking up...`
+              await lookupBarcode(codes[0].rawValue)
             }
           } catch {}
         }, 300)
         return
-      } catch (err) {
-        if (status) status.textContent = 'Camera not available — type barcode below'
-        return
-      }
+      } catch {}
     }
+
     // Fallback: focus manual input
-    if (status) status.textContent = 'Barcode scanning not supported — type barcode below'
+    if (status) status.textContent = ''
     document.getElementById('barcode-manual-input')?.focus()
   }
 
-  window.stopBarcodeScanner = () => {
-    clearInterval(state._barcodeInterval)
-    state._barcodeStream?.getTracks().forEach(t => t.stop())
+  window.handleBarcodeImage = async (file) => {
+    const status = document.getElementById('barcode-status')
+    const inner = document.getElementById('barcode-scanner-inner')
+    if (!file) return
+    if (status) status.textContent = 'Reading barcode...'
+    const reader = new FileReader()
+    reader.onload = async (ev) => {
+      if (inner) inner.innerHTML = `<img src="${ev.target.result}" style="max-height:140px;border-radius:var(--r);object-fit:contain" />`
+      try {
+        await loadQuagga()
+        Quagga.decodeSingle({
+          decoder: { readers: ['ean_reader','ean_8_reader','upc_reader','upc_e_reader','code_128_reader'] },
+          locate: true,
+          src: ev.target.result
+        }, async (result) => {
+          const resetInner = () => {
+            if (inner) inner.innerHTML = `<div style="font-size:28px;margin-bottom:6px">📷</div><div style="font-size:13px;color:var(--text2)">Tap to scan barcode</div><div style="font-size:11px;color:var(--text3);margin-top:3px">Opens camera — point at barcode</div>`
+          }
+          if (result?.codeResult?.code) {
+            const code = result.codeResult.code
+            if (status) status.textContent = `Found: ${code} — looking up...`
+            await lookupBarcode(code)
+          } else {
+            resetInner()
+            if (status) status.textContent = 'No barcode found — try a clearer photo or enter number below'
+            document.getElementById('barcode-manual-input')?.focus()
+          }
+        })
+      } catch (e) {
+        if (status) status.textContent = 'Scanner unavailable — enter barcode number below'
+        document.getElementById('barcode-manual-input')?.focus()
+      }
+    }
+    reader.readAsDataURL(file)
   }
 
+  function loadQuagga() {
+    if (window.Quagga) return Promise.resolve()
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script')
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js'
+      s.onload = resolve; s.onerror = reject
+      document.head.appendChild(s)
+    })
+  }
+
+
   window.lookupBarcode = async (code) => {
-    code = String(code).replace(/\D/g, '')
+    code = String(code).trim()
     if (!code) return
     const status = document.getElementById('barcode-status')
     if (status) status.textContent = `Looking up ${code}...`
