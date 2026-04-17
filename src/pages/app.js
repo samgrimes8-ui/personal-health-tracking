@@ -1016,111 +1016,141 @@ function renderRecipesPage(container) {
 function renderRecipeModalContent(recipe, mode = 'view') {
   const isNew = !recipe.id
   const ingredients = recipe.ingredients || []
+  const isView = mode === 'view' && !isNew
 
   return `
-    <div style="padding:28px;position:relative">
-      <button class="modal-close" onclick="closeRecipeModal()" style="top:14px;right:14px">×</button>
+    <div style="position:relative">
 
-      <!-- Name -->
-      <div style="margin-bottom:20px;margin-right:32px">
+      <!-- Sticky header: name + plan button -->
+      <div style="position:sticky;top:0;z-index:10;background:var(--bg2);border-bottom:1px solid var(--border);padding:16px 20px 14px">
+        <button class="modal-close" onclick="closeRecipeModal()" style="top:12px;right:14px">×</button>
+
         ${mode === 'edit' || isNew ? `
           <input type="text" id="recipe-name" value="${esc(recipe.name || '')}"
             placeholder="Recipe name..."
-            style="width:100%;background:none;border:none;border-bottom:1px solid var(--border2);outline:none;font-family:'DM Serif Display',serif;font-size:24px;color:var(--text);padding-bottom:6px" />
+            style="width:100%;background:none;border:none;border-bottom:1px solid var(--border2);outline:none;font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);padding-bottom:6px;margin-right:32px;display:block" />
         ` : `
-          <div style="font-family:'DM Serif Display',serif;font-size:24px;color:var(--text)">${esc(recipe.name)}</div>
+          <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-right:36px;line-height:1.2;margin-bottom:8px">${esc(recipe.name)}</div>
         `}
-      </div>
 
-      <!-- Description -->
-      ${mode === 'edit' || isNew ? `
-        <div class="modal-field">
-          <label>Description (optional)</label>
-          <input type="text" id="recipe-desc" value="${esc(recipe.description || '')}" placeholder="Brief description..." />
-        </div>
-      ` : recipe.description ? `<div style="font-size:13px;color:var(--text2);margin-bottom:16px">${esc(recipe.description)}</div>` : ''}
-
-      <!-- Servings -->
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;background:var(--bg3);border-radius:var(--r)">
-        <span style="font-size:13px;color:var(--text2)">Servings:</span>
-        ${mode === 'edit' || isNew ? `
-          <input type="number" id="recipe-servings" value="${recipe.servings || 4}" min="0.5" step="0.5"
-            style="width:70px;background:var(--bg4);border:1px solid var(--border2);border-radius:var(--r);padding:6px 10px;color:var(--text);font-size:14px;font-family:inherit;outline:none"
-            onchange="updateServingLabel()" />
-          <input type="text" id="recipe-serving-label" value="${esc(recipe.serving_label || 'serving')}"
-            placeholder="serving / slice / cup..."
-            style="flex:1;background:var(--bg4);border:1px solid var(--border2);border-radius:var(--r);padding:6px 10px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
-        ` : `
-          <span style="font-size:14px;font-weight:500;color:var(--text)">${recipe.servings} ${recipe.serving_label || 'servings'}</span>
-        `}
-        <span style="font-size:11px;color:var(--text3);margin-left:auto">Macros shown per 1 serving</span>
-      </div>
-
-      <!-- Macros -->
-      <div style="margin-bottom:20px">
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Macros per serving</div>
-        ${mode === 'edit' || isNew ? `
-          <div class="modal-grid">
-            <div class="modal-field"><label>Calories</label><input type="number" id="r-cal" value="${Math.round(recipe.calories || 0)}" /></div>
-            <div class="modal-field"><label>Protein (g)</label><input type="number" id="r-protein" value="${Math.round(recipe.protein || 0)}" /></div>
-            <div class="modal-field"><label>Carbs (g)</label><input type="number" id="r-carbs" value="${Math.round(recipe.carbs || 0)}" /></div>
-            <div class="modal-field"><label>Fat (g)</label><input type="number" id="r-fat" value="${Math.round(recipe.fat || 0)}" /></div>
-            <div class="modal-field"><label>Fiber (g)</label><input type="number" id="r-fiber" value="${Math.round(recipe.fiber || 0)}" /></div>
-            <div class="modal-field"><label>Sugar (g)</label><input type="number" id="r-sugar" value="${Math.round(recipe.sugar || 0)}" /></div>
-          </div>
-        ` : `
-          <div class="macro-pills">
-            <span class="macro-pill pill-cal">${Math.round(recipe.calories)} kcal</span>
-            <span class="macro-pill pill-p">${Math.round(recipe.protein)}g protein</span>
-            <span class="macro-pill pill-c">${Math.round(recipe.carbs)}g carbs</span>
-            <span class="macro-pill pill-f">${Math.round(recipe.fat)}g fat</span>
-            ${recipe.fiber ? `<span class="macro-pill pill-fiber">${Math.round(recipe.fiber)}g fiber</span>` : ''}
-          </div>
-        `}
-      </div>
-
-      <!-- Ingredients -->
-      <div style="margin-bottom:20px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">
-            Ingredients ${ingredients.length ? `(${ingredients.length})` : ''}
-          </div>
-          <div style="display:flex;gap:8px">
-            ${mode === 'edit' || isNew ? `<button class="clear-btn" style="color:var(--accent)" onclick="addIngredientRow()">+ Add</button>` : ''}
-            ${!isNew ? `<button class="clear-btn" style="color:var(--carbs)" onclick="fetchIngredients('${recipe.id}')">✨ AI extract</button>` : ''}
-          </div>
-        </div>
-        <div id="ingredient-list" style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
-          ${!ingredients.length ? `
-            <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3)">
-              No ingredients yet.
-              ${mode === 'edit' || isNew ? 'Add manually or click <b style="color:var(--carbs)">AI extract</b> to auto-fill.' : ''}
+        ${isView ? `
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;flex:1">
+              <span class="macro-pill pill-cal" style="font-size:11px;padding:3px 8px">${Math.round(recipe.calories)} kcal</span>
+              <span class="macro-pill pill-p" style="font-size:11px;padding:3px 8px">${Math.round(recipe.protein)}g P</span>
+              <span class="macro-pill pill-c" style="font-size:11px;padding:3px 8px">${Math.round(recipe.carbs)}g C</span>
+              <span class="macro-pill pill-f" style="font-size:11px;padding:3px 8px">${Math.round(recipe.fat)}g F</span>
             </div>
-          ` : ingredients.map((ing, i) => renderIngredientRow(ing, i, mode === 'edit' || isNew)).join('')}
-        </div>
+            <button onclick="openPlanRecipeModal('${recipe.id}')"
+              style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:8px 16px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
+              📅 Add to plan
+            </button>
+          </div>
+        ` : ''}
       </div>
 
-      <!-- Recalculate button (edit mode only, when ingredients exist) -->
-      ${(mode === 'edit' || isNew) && ingredients.length ? `
-        <div style="margin-bottom:20px">
-          <button class="pm-analyze-btn" id="recalc-btn" onclick="recalculateMacrosHandler()">
-            ✨ Recalculate macros from ingredients
-          </button>
-        </div>
-      ` : ''}
+      <!-- Scrollable body -->
+      <div style="padding:20px 20px 28px">
 
-      <!-- Actions -->
-      <div class="modal-actions">
-        ${!isNew && mode === 'view' ? `
-          <button class="btn-delete" onclick="deleteRecipeHandler('${recipe.id}')">Delete</button>
-          <button class="btn-cancel" onclick="closeRecipeModal()">Close</button>
-          <button class="btn-save" style="background:var(--bg3);color:var(--text);border:1px solid var(--border2)" onclick="openPlanRecipeModal('${recipe.id}')">📅 Add to plan</button>
-          <button class="btn-save" onclick="openRecipeModal('${recipe.id}', 'edit')">Edit recipe</button>
-        ` : `
-          ${!isNew ? `<button class="btn-delete" onclick="deleteRecipeHandler('${recipe.id}')">Delete</button>` : ''}
-          <button class="btn-cancel" onclick="${isNew ? 'closeRecipeModal()' : `openRecipeModal('${recipe.id}', 'view')`}">Cancel</button>
-          <button class="btn-save" id="recipe-save-btn" onclick="saveRecipeHandler()">Save recipe</button>
-        `}
+        <!-- Description -->
+        ${mode === 'edit' || isNew ? `
+          <div class="modal-field">
+            <label>Description (optional)</label>
+            <input type="text" id="recipe-desc" value="${esc(recipe.description || '')}" placeholder="Brief description..." />
+          </div>
+        ` : recipe.description ? `<div style="font-size:13px;color:var(--text2);margin-bottom:16px">${esc(recipe.description)}</div>` : ''}
+
+        <!-- Source URL -->
+        ${mode === 'edit' || isNew ? `
+          <div class="modal-field">
+            <label>Source URL (optional)</label>
+            <input type="url" id="recipe-source-url" value="${esc(recipe.source_url || '')}"
+              placeholder="https://... Instagram, YouTube, website..." />
+          </div>
+        ` : recipe.source_url ? `
+          <div style="margin-bottom:16px">
+            <a href="${esc(recipe.source_url)}" target="_blank" rel="noopener"
+              style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--accent);text-decoration:none;padding:8px 12px;background:rgba(232,197,71,0.08);border:1px solid rgba(232,197,71,0.2);border-radius:var(--r)">
+              <span>🔗</span>
+              <span>View original recipe</span>
+              <span style="font-size:11px;opacity:0.7">↗</span>
+            </a>
+          </div>
+        ` : ''}
+
+        <!-- Servings -->
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;background:var(--bg3);border-radius:var(--r)">
+          <span style="font-size:13px;color:var(--text2)">Servings:</span>
+          ${mode === 'edit' || isNew ? `
+            <input type="number" id="recipe-servings" value="${recipe.servings || 4}" min="0.5" step="0.5"
+              style="width:70px;background:var(--bg4);border:1px solid var(--border2);border-radius:var(--r);padding:6px 10px;color:var(--text);font-size:14px;font-family:inherit;outline:none"
+              onchange="updateServingLabel()" />
+            <input type="text" id="recipe-serving-label" value="${esc(recipe.serving_label || 'serving')}"
+              placeholder="serving / slice / cup..."
+              style="flex:1;background:var(--bg4);border:1px solid var(--border2);border-radius:var(--r);padding:6px 10px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+          ` : `
+            <span style="font-size:14px;font-weight:500;color:var(--text)">${recipe.servings} ${recipe.serving_label || 'servings'}</span>
+          `}
+          <span style="font-size:11px;color:var(--text3);margin-left:auto">per serving</span>
+        </div>
+
+        <!-- Macros (edit mode only — view mode shows in sticky header) -->
+        ${mode === 'edit' || isNew ? `
+          <div style="margin-bottom:20px">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Macros per serving</div>
+            <div class="modal-grid">
+              <div class="modal-field"><label>Calories</label><input type="number" id="r-cal" value="${Math.round(recipe.calories || 0)}" /></div>
+              <div class="modal-field"><label>Protein (g)</label><input type="number" id="r-protein" value="${Math.round(recipe.protein || 0)}" /></div>
+              <div class="modal-field"><label>Carbs (g)</label><input type="number" id="r-carbs" value="${Math.round(recipe.carbs || 0)}" /></div>
+              <div class="modal-field"><label>Fat (g)</label><input type="number" id="r-fat" value="${Math.round(recipe.fat || 0)}" /></div>
+              <div class="modal-field"><label>Fiber (g)</label><input type="number" id="r-fiber" value="${Math.round(recipe.fiber || 0)}" /></div>
+              <div class="modal-field"><label>Sugar (g)</label><input type="number" id="r-sugar" value="${Math.round(recipe.sugar || 0)}" /></div>
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Ingredients -->
+        <div style="margin-bottom:20px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">
+              Ingredients ${ingredients.length ? `(${ingredients.length})` : ''}
+            </div>
+            <div style="display:flex;gap:8px">
+              ${mode === 'edit' || isNew ? `<button class="clear-btn" style="color:var(--accent)" onclick="addIngredientRow()">+ Add</button>` : ''}
+              ${!isNew ? `<button class="clear-btn" style="color:var(--carbs)" onclick="fetchIngredients('${recipe.id}')">✨ AI extract</button>` : ''}
+            </div>
+          </div>
+          <div id="ingredient-list" style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+            ${!ingredients.length ? `
+              <div style="padding:20px;text-align:center;font-size:13px;color:var(--text3)">
+                No ingredients yet.
+                ${mode === 'edit' || isNew ? 'Add manually or click <b style="color:var(--carbs)">AI extract</b> to auto-fill.' : ''}
+              </div>
+            ` : ingredients.map((ing, i) => renderIngredientRow(ing, i, mode === 'edit' || isNew)).join('')}
+          </div>
+        </div>
+
+        <!-- Recalculate (edit only) -->
+        ${(mode === 'edit' || isNew) && ingredients.length ? `
+          <div style="margin-bottom:20px">
+            <button class="pm-analyze-btn" id="recalc-btn" onclick="recalculateMacrosHandler()">
+              ✨ Recalculate macros from ingredients
+            </button>
+          </div>
+        ` : ''}
+
+        <!-- Bottom actions — management only (Edit/Delete/Save) -->
+        <div class="modal-actions">
+          ${isView ? `
+            <button class="btn-delete" onclick="deleteRecipeHandler('${recipe.id}')">Delete</button>
+            <button class="btn-cancel" onclick="closeRecipeModal()">Close</button>
+            <button class="btn-save" onclick="openRecipeModal('${recipe.id}', 'edit')">Edit</button>
+          ` : `
+            ${!isNew ? `<button class="btn-delete" onclick="deleteRecipeHandler('${recipe.id}')">Delete</button>` : ''}
+            <button class="btn-cancel" onclick="${isNew ? 'closeRecipeModal()' : `openRecipeModal('${recipe.id}', 'view')`}">Cancel</button>
+            <button class="btn-save" id="recipe-save-btn" onclick="saveRecipeHandler()">Save recipe</button>
+          `}
+        </div>
       </div>
     </div>
   `
@@ -2446,6 +2476,7 @@ function wireGlobals() {
       ...state.editingRecipe,
       name: document.getElementById('recipe-name')?.value.trim() || state.editingRecipe.name,
       description: document.getElementById('recipe-desc')?.value.trim() || '',
+      source_url: document.getElementById('recipe-source-url')?.value.trim() || '',
       servings: parseFloat(document.getElementById('recipe-servings')?.value) || 4,
       serving_label: document.getElementById('recipe-serving-label')?.value.trim() || 'serving',
       calories: parseFloat(document.getElementById('r-cal')?.value) || 0,
