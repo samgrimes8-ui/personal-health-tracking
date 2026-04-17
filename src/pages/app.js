@@ -2616,10 +2616,11 @@ function wireGlobals() {
         descEl.value = result.description
       }
 
-      // Update servings if AI returned a different number
-      if (result.servings && result.servings !== servings) {
+      // Always apply AI's serving count
+      if (result.servings) {
         const servEl = document.getElementById('recipe-servings')
         if (servEl) servEl.value = result.servings
+        if (state.editingRecipe) state.editingRecipe.servings = result.servings
       }
 
       // Save ingredients to editing recipe and re-render ingredient list
