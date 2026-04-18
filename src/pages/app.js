@@ -2974,8 +2974,13 @@ function wireGlobals() {
       state.editingRecipe = { ...state.editingRecipe, instructions: result }
 
       // Save directly via targeted update — only touches instructions column
-      await saveRecipeInstructions(state.user.id, recipeId, result)
-      showToast('Instructions saved!', 'success')
+      try {
+        await saveRecipeInstructions(state.user.id, recipeId, result)
+        showToast('Instructions generated and saved!', 'success')
+      } catch (saveErr) {
+        console.error('Save failed:', saveErr)
+        showToast('Generated but save failed: ' + saveErr.message, 'error')
+      }
 
       state.recipeTab = 'instructions'
       document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'view')

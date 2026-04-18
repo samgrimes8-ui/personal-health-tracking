@@ -393,12 +393,24 @@ export async function saveRecipeInstructions(userId, recipeId, instructions) {
     if (idx !== -1) { all[idx].instructions = instructions; setLocalFallback('macrolens_recipes', all) }
     return
   }
-  const { error } = await supabase
+  // Ensure instructions is a plain object (not a Proxy or other wrapper)
+  const payload = JSON.parse(JSON.stringify(instructions))
+  const { data, error } = await supabase
     .from('recipes')
-    .update({ instructions, updated_at: new Date().toISOString() })
+    .update({ instructions: payload, updated_at: new Date().toISOString() })
     .eq('id', recipeId)
     .eq('user_id', userId)
-  if (error) throw error
+    .select('id, instructions')
+    .single()
+  if (error) {
+    console.error('saveRecipeInstructions error:', error)
+    throw new Error(error.message)
+  }
+  if (!data?.instructions) {
+    throw new Error('Save appeared to succeed but instructions not returned from DB')
+  }
+  console.log('Instructions saved OK:', recipeId)
+  return data
 }
 
 export async function deleteRecipe(userId, id) {
