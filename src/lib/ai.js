@@ -8,8 +8,23 @@ import { supabase } from './supabase.js'
 // ─── Core proxy caller ────────────────────────────────────────────────────────
 
 async function callProxy(feature, messages, options = {}) {
-  const { data: { session } } = await supabase.auth.getSession()
-  if (!session) throw new Error('Not signed in')
+  // Always refresh session to avoid expired JWT errors
+  let session
+  try {
+    const { data, error } = await supabase.auth.getSession()
+    if (error) throw error
+    session = data.session
+    // Refresh if expiring within 60 seconds
+    if (session && session.expires_at && session.expires_at * 1000 < Date.now() + 60000) {
+      const { data: refreshed } = await supabase.auth.refreshSession()
+      if (refreshed?.session) session = refreshed.session
+    }
+  } catch (e) {
+    // Session fetch failed — try forcing a refresh
+    const { data: refreshed } = await supabase.auth.refreshSession()
+    session = refreshed?.session
+  }
+  if (!session?.access_token) throw new Error('Session expired — please refresh the page')
 
   const res = await fetch('/api/analyze', {
     method: 'POST',
