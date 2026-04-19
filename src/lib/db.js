@@ -105,6 +105,8 @@ export async function addMealEntry(userId, entry) {
       servings_consumed: entry.servings_consumed ?? 1,
       confidence: entry.confidence ?? 'medium',
       notes: entry.notes ?? '',
+      food_item_id: entry.food_item_id ?? null,
+      recipe_id: entry.recipe_id ?? null,
       logged_at: new Date().toISOString()
     })
     .select()
@@ -503,6 +505,44 @@ export async function getPlannerRange(userId, fromDate, toDate) {
   })
 
   return { meals }
+}
+
+
+// Auto-save a food item if it doesn't exist yet, return its id
+// Skips recipes (they have their own table) and items with recipe_id
+export async function autoSaveFoodItem(userId, entry, foodItems) {
+  // Don't auto-save if it's already linked to a food or recipe
+  if (entry.food_item_id || entry.recipe_id) return entry.food_item_id ?? null
+  // Don't auto-save if it looks like a recipe (has ingredients)
+  if (entry.ingredients?.length) return null
+
+  // Check if already in local food items list by name
+  const existing = (foodItems || []).find(f =>
+    f.name.toLowerCase() === (entry.name || '').toLowerCase()
+  )
+  if (existing) return existing.id
+
+  // Create new food item
+  try {
+    const food = await upsertFoodItem(userId, {
+      name: entry.name,
+      brand: entry.brand || '',
+      serving_size: entry.serving_size || '1 serving',
+      calories: entry.base_calories ?? entry.calories ?? 0,
+      protein:  entry.base_protein  ?? entry.protein  ?? 0,
+      carbs:    entry.base_carbs    ?? entry.carbs    ?? 0,
+      fat:      entry.base_fat      ?? entry.fat      ?? 0,
+      fiber:    entry.base_fiber    ?? entry.fiber    ?? 0,
+      sugar:    entry.base_sugar    ?? entry.sugar    ?? 0,
+      sodium:   entry.sodium ?? 0,
+      components: [],
+      source: entry.source || 'log',
+    })
+    return food.id
+  } catch (err) {
+    console.warn('autoSaveFoodItem failed:', err.message)
+    return null
+  }
 }
 
 // ─── Food Items ───────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ import {
   getRecipes, upsertRecipe, deleteRecipe, getRecipeByName,
   getWeeksWithMeals, getPlannerRange,
   getFoodItems, upsertFoodItem, deleteFoodItem,
-  saveRecipeInstructions
+  saveRecipeInstructions, autoSaveFoodItem
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -2432,12 +2432,10 @@ function wireGlobals() {
   window.logCurrentEntryHandler = async () => {
     if (!state.currentEntry) return
     try {
-      const entry = await addMealEntry(state.user.id, state.currentEntry)
-      state.log.unshift(entry)
+      const e = state.currentEntry
 
-      // Auto-save recipe with ingredients if we have them (background, non-blocking)
-      if (state.currentEntry.ingredients?.length) {
-        const e = state.currentEntry
+      // Auto-save recipe with ingredients
+      if (e.ingredients?.length) {
         getRecipeByName(state.user.id, e.name).then(existing => {
           if (!existing) {
             upsertRecipe(state.user.id, {
@@ -2451,6 +2449,20 @@ function wireGlobals() {
           }
         }).catch(() => {})
       }
+
+      // Auto-save to food_items and get the id to link in the log
+      const food_item_id = e.ingredients?.length ? null
+        : await autoSaveFoodItem(state.user.id, e, state.foodItems).then(id => {
+            if (id) {
+              // Add to local state if new
+              const isNew = !state.foodItems.find(f => f.id === id)
+              if (isNew) getFoodItems(state.user.id).then(items => { state.foodItems = items }).catch(() => {})
+            }
+            return id
+          }).catch(() => null)
+
+      const entry = await addMealEntry(state.user.id, { ...e, food_item_id })
+      state.log.unshift(entry)
 
       state.currentEntry = null
       updateStats()
@@ -3469,7 +3481,14 @@ function wireGlobals() {
     const item = state.foodItems.find(f => f.id === id)
     if (!item) return
     try {
-      const entry = await addMealEntry(state.user.id, { ...item, base_calories: item.calories, base_protein: item.protein, base_carbs: item.carbs, base_fat: item.fat, base_fiber: item.fiber, base_sugar: item.sugar, servings_consumed: 1 })
+      const entry = await addMealEntry(state.user.id, {
+        ...item,
+        base_calories: item.calories, base_protein: item.protein,
+        base_carbs: item.carbs, base_fat: item.fat,
+        base_fiber: item.fiber, base_sugar: item.sugar,
+        servings_consumed: 1,
+        food_item_id: id  // always link back to the food item
+      })
       state.log.unshift(entry)
       updateStats()
       refreshTodayLog()
@@ -3980,7 +3999,31 @@ function filterQuickLog() {
     }
     if (!meal) return
     try {
-      const entry = await addMealEntry(state.user.id, meal)
+      // Link recipe_id if logging from a recipe
+      const isRecipe = id.startsWith('recipe::')
+      const recipe_id = isRecipe ? meal.id : (meal.recipe_id ?? null)
+
+      // Auto-save to foods if not a recipe and not already linked
+      const food_item_id = isRecipe ? null
+        : (meal.food_item_id ?? await autoSaveFoodItem(state.user.id, meal, state.foodItems).then(fid => {
+            if (fid && !state.foodItems.find(f => f.id === fid)) {
+              getFoodItems(state.user.id).then(items => { state.foodItems = items }).catch(() => {})
+            }
+            return fid
+          }).catch(() => null))
+
+      const entry = await addMealEntry(state.user.id, {
+        ...meal,
+        base_calories: meal.base_calories ?? meal.calories,
+        base_protein: meal.base_protein ?? meal.protein,
+        base_carbs: meal.base_carbs ?? meal.carbs,
+        base_fat: meal.base_fat ?? meal.fat,
+        base_fiber: meal.base_fiber ?? meal.fiber ?? 0,
+        base_sugar: meal.base_sugar ?? meal.sugar ?? 0,
+        servings_consumed: 1,
+        food_item_id,
+        recipe_id,
+      })
       state.log.unshift(entry)
       const input = document.getElementById('quick-log-search')
       if (input) input.value = ''
