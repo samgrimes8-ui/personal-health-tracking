@@ -204,6 +204,14 @@ function renderShell(container) {
           <button class="btn-cancel" onclick="closeEditModal()">Cancel</button>
           <button class="btn-save" onclick="saveEditEntry()">Save changes</button>
         </div>
+        <div style="margin-top:8px">
+          <button onclick="saveLogEntryToFoods()" id="save-to-foods-btn"
+            style="width:100%;background:none;border:1px solid var(--border2);border-radius:var(--r);padding:8px;font-size:13px;color:var(--text3);cursor:pointer;font-family:inherit"
+            onmouseover="this.style.color='var(--carbs)';this.style.borderColor='var(--carbs)'"
+            onmouseout="this.style.color='var(--text3)';this.style.borderColor='var(--border2)'">
+            🍎 Save to My Foods
+          </button>
+        </div>
       </div>
     </div>
 
@@ -3847,7 +3855,44 @@ function wireGlobals() {
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
-  window.refreshAdminPanel = () => loadAdminPanel()
+  window.saveLogEntryToFoods = async () => {
+    if (!state.editingEntry) return
+    const { id, source } = state.editingEntry
+    if (source !== 'log') { showToast('Only meal log entries can be saved to Foods', 'error'); return }
+    const entry = state.log.find(e => String(e.id) === String(id))
+    if (!entry) return
+    const name = document.getElementById('edit-name')?.value.trim() || entry.name
+    const base = state.editingBaseMacros || {}
+    const btn = document.getElementById('save-to-foods-btn')
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
+    try {
+      const existing = state.foodItems.find(f => f.name.toLowerCase() === name.toLowerCase())
+      if (existing) {
+        showToast(`"${name}" already in My Foods`, '')
+        if (btn) { btn.disabled = false; btn.textContent = '🍎 Save to My Foods' }
+        return
+      }
+      const food = await upsertFoodItem(state.user.id, {
+        name,
+        brand: entry.brand || '',
+        serving_size: entry.serving_size || '1 serving',
+        calories: base.calories || entry.calories || 0,
+        protein:  base.protein  || entry.protein  || 0,
+        carbs:    base.carbs    || entry.carbs    || 0,
+        fat:      base.fat      || entry.fat      || 0,
+        fiber:    base.fiber    || entry.fiber    || 0,
+        sugar:    base.sugar    || entry.sugar    || 0,
+        components: [],
+        source: 'log',
+      })
+      state.foodItems.unshift(food)
+      if (btn) { btn.textContent = '✓ Saved to My Foods'; btn.style.color = 'var(--carbs)' }
+      showToast(`"${name}" saved to My Foods!`, 'success')
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+      if (btn) { btn.disabled = false; btn.textContent = '🍎 Save to My Foods' }
+    }
+  }
 
   window.toggleUnlimited = async (userId, currentVal) => {
     try {
