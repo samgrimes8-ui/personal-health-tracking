@@ -369,7 +369,9 @@ function getMealTypeFromTime(date) {
 function getTodayPlannedMeals() {
   if (!state.planner?.meals) return []
   const dow = new Date().getDay()
-  return (state.planner.meals[dow] || []).filter(m => !m.is_leftover)
+  return (state.planner.meals[dow] || []).filter(m =>
+    !m.is_leftover && !m.leftover && !(m.meal_name || m.name || '').toLowerCase().includes('(leftover')
+  )
 }
 
 function renderDashboard(container) {
@@ -2625,7 +2627,7 @@ function wireGlobals() {
     }
   }
 
-  function wireBarcodeInput() {
+  window.wireBarcodeInput = function() {
     const input = document.getElementById('barcode-manual-input')
     if (!input || input._wired) return
     input._wired = true
@@ -2635,7 +2637,7 @@ function wireGlobals() {
   }
 
   // ── Nutrition label photo ───────────────────────────────────────
-  function wireLabelFileInput() {
+  window.wireLabelFileInput = function() {
     const fi = document.getElementById('label-file-input')
     const ua = document.getElementById('label-upload-area')
     if (!fi || !ua || ua._wired) return
