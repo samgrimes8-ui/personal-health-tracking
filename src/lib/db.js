@@ -716,3 +716,133 @@ export async function getScanUrl(path) {
   const { data } = await supabase.storage.from('body-scans').createSignedUrl(path, 60 * 60 * 24)
   return data?.signedUrl || null
 }
+
+// ─── Recipe Sharing ───────────────────────────────────────────────────────────
+
+export async function generateShareToken(userId, recipeId) {
+  if (!supabase) return null
+  // Generate a UUID token and make recipe public
+  const token = crypto.randomUUID()
+  const { data, error } = await supabase
+    .from('recipes')
+    .update({ share_token: token, is_public: true })
+    .eq('id', recipeId)
+    .eq('user_id', userId)
+    .select('share_token')
+    .single()
+  if (error) throw error
+  return data.share_token
+}
+
+export async function getRecipeByShareToken(token) {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('*')
+    .eq('share_token', token)
+    .eq('is_public', true)
+    .single()
+  if (error) return null
+  return data
+}
+
+export async function shareRecipeWithUser(fromUserId, recipeId, toEmail) {
+  if (!supabase) return null
+  // Look up recipient by email via user_profiles
+  const { data: profile } = await supabase
+    .from('user_profiles')
+    .select('user_id')
+    .eq('email', toEmail)
+    .maybeSingle()
+
+  const { data, error } = await supabase
+    .from('recipe_shares')
+    .insert({
+      recipe_id: recipeId,
+      from_user_id: fromUserId,
+      to_user_id: profile?.user_id || null,
+      to_email: toEmail,
+    })
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function getIncomingShares(userId) {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('recipe_shares')
+    .select('*, recipes(*)')
+    .eq('to_user_id', userId)
+    .order('created_at', { ascending: false })
+  if (error) return []
+  return data ?? []
+}
+
+export async function markShareRead(shareId) {
+  if (!supabase) return
+  await supabase.from('recipe_shares').update({ is_read: true }).eq('id', shareId)
+}
+
+export async function getUnreadShareCount(userId) {
+  if (!supabase) return 0
+  const { count } = await supabase
+    .from('recipe_shares')
+    .select('*', { count: 'exact', head: true })
+    .eq('to_user_id', userId)
+    .eq('is_read', false)
+  return count || 0
+}
+
+// ─── Recipe Sharing ───────────────────────────────────────────────────────────
+
+export async function enableRecipeSharing(userId, recipeId) {
+  if (!supabase) return null
+  // Generate a share token if not already set
+  const token = crypto.randomUUID()
+  const { data, error } = await supabase
+    .from('recipes')
+    .update({ share_token: token, is_shared: true })
+    .eq('id', recipeId)
+    .eq('user_id', userId)
+    .select('share_token')
+    .single()
+  if (error) throw error
+  return data.share_token
+}
+
+export async function disableRecipeSharing(userId, recipeId) {
+  if (!supabase) return
+  const { error } = await supabase
+    .from('recipes')
+    .update({ is_shared: false })
+    .eq('id', recipeId)
+    .eq('user_id', userId)
+  if (error) throw error
+}
+
+export async function getSharedRecipe(shareToken) {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('*')
+    .eq('share_token', shareToken)
+    .eq('is_shared', true)
+    .maybeSingle()
+  if (error) return null
+  return data
+}
+
+export async function saveSharedRecipeToLibrary(userId, recipe) {
+  if (!supabase) return null
+  // Copy recipe to user's library, stripping ownership fields
+  const { share_token, is_shared, id, user_id, created_at, updated_at, ...fields } = recipe
+  const { data, error } = await supabase
+    .from('recipes')
+    .insert({ ...fields, user_id: userId, share_token: null, is_shared: false })
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}

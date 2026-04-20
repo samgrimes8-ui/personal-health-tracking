@@ -9,7 +9,8 @@ import {
   getFoodItems, upsertFoodItem, deleteFoodItem,
   saveRecipeInstructions, autoSaveFoodItem,
   logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs,
-  getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, uploadScanFile, getScanUrl
+  getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, uploadScanFile, getScanUrl,
+  enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -1773,6 +1774,11 @@ function renderRecipeModalContent(recipe, mode = 'view') {
               style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:7px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
               📅 Plan
             </button>
+            <button onclick="shareRecipe('${recipe.id}')"
+              id="share-btn-${recipe.id}"
+              style="background:${recipe.is_shared ? 'rgba(76,175,130,0.15)' : 'var(--bg3)'};color:${recipe.is_shared ? 'var(--protein)' : 'var(--text3)'};border:1px solid ${recipe.is_shared ? 'var(--protein)' : 'var(--border2)'};border-radius:var(--r);padding:7px 10px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
+              ${recipe.is_shared ? '🔗 Shared' : '🔗 Share'}
+            </button>
           </div>
         ` : ''}
       </div>
@@ -3412,6 +3418,83 @@ function wireGlobals() {
   document.getElementById('methodology-modal')?.addEventListener('click', e => {
     if (e.target.id === 'methodology-modal') closeMethodologyModal()
   })
+
+  window.shareRecipe = async (recipeId) => {
+    const recipe = state.recipes.find(r => r.id === recipeId)
+    if (!recipe) return
+    const btn = document.getElementById('share-btn-' + recipeId)
+
+    // If already shared, show options: copy link or stop sharing
+    if (recipe.is_shared && recipe.share_token) {
+      const url = `${window.location.origin}/api/recipe/${recipe.share_token}`
+      // Show inline menu
+      const existing = document.getElementById('share-menu')
+      if (existing) { existing.remove(); return }
+      const menu = document.createElement('div')
+      menu.id = 'share-menu'
+      menu.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:16px;z-index:9999;width:280px;box-shadow:0 8px 32px rgba(0,0,0,0.5)'
+      menu.innerHTML = `
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">Share recipe</div>
+        <div style="font-size:12px;color:var(--text3);background:var(--bg3);padding:8px;border-radius:6px;margin-bottom:12px;word-break:break-all">${url}</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button onclick="navigator.clipboard.writeText('${url}').then(()=>showToast('Link copied!','success'));document.getElementById('share-menu').remove()"
+            style="padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+            Copy link
+          </button>
+          <button onclick="stopSharingRecipe('${recipeId}');document.getElementById('share-menu').remove()"
+            style="padding:10px;background:var(--bg3);color:var(--red);border:1px solid var(--border2);border-radius:var(--r);font-size:13px;font-family:inherit;cursor:pointer">
+            Stop sharing
+          </button>
+          <button onclick="document.getElementById('share-menu').remove()"
+            style="padding:10px;background:none;color:var(--text3);border:none;font-size:13px;font-family:inherit;cursor:pointer">
+            Cancel
+          </button>
+        </div>`
+      document.body.appendChild(menu)
+      // Close on outside click
+      setTimeout(() => document.addEventListener('click', function h(e) {
+        if (!menu.contains(e.target) && e.target !== btn) { menu.remove(); document.removeEventListener('click', h) }
+      }), 100)
+      return
+    }
+
+    // Not yet shared — enable sharing
+    try {
+      if (btn) { btn.textContent = '⏳'; btn.disabled = true }
+      const token = await enableRecipeSharing(state.user.id, recipeId)
+      recipe.is_shared = true
+      recipe.share_token = token
+      const url = `${window.location.origin}/api/recipe/${token}`
+      await navigator.clipboard.writeText(url)
+      showToast('Link copied to clipboard!', 'success')
+      if (btn) {
+        btn.textContent = '🔗 Shared'
+        btn.style.background = 'rgba(76,175,130,0.15)'
+        btn.style.color = 'var(--protein)'
+        btn.style.borderColor = 'var(--protein)'
+        btn.disabled = false
+      }
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+      if (btn) { btn.textContent = '🔗 Share'; btn.disabled = false }
+    }
+  }
+
+  window.stopSharingRecipe = async (recipeId) => {
+    try {
+      await disableRecipeSharing(state.user.id, recipeId)
+      const recipe = state.recipes.find(r => r.id === recipeId)
+      if (recipe) { recipe.is_shared = false }
+      showToast('Recipe is no longer shared', '')
+      const btn = document.getElementById('share-btn-' + recipeId)
+      if (btn) {
+        btn.textContent = '🔗 Share'
+        btn.style.background = 'var(--bg3)'
+        btn.style.color = 'var(--text3)'
+        btn.style.borderColor = 'var(--border2)'
+      }
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
 
   window.openCheckinModal = () => {
     state.pendingCheckinScan = null
