@@ -354,10 +354,14 @@ function renderShell(container) {
         <button class="modal-close" onclick="closeCheckinModal()">×</button>
         <h3>Weekly check-in</h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-          <div class="modal-field"><label id="ci-weight-label">Weight</label><input type="number" step="0.1" id="ci-weight" placeholder="175" /></div>
+          <div class="modal-field"><label id="ci-weight-label">Weight (lbs)</label><input type="number" step="0.1" id="ci-weight" placeholder="175" /></div>
           <div class="modal-field"><label>Body fat %</label><input type="number" step="0.1" id="ci-bf" placeholder="20" /></div>
-          <div class="modal-field"><label>Muscle mass (kg)</label><input type="number" step="0.1" id="ci-muscle" placeholder="" /></div>
-          <div class="modal-field"><label>Date</label><input type="date" id="ci-date" /></div>
+          <div class="modal-field"><label>Muscle mass (lbs)</label><input type="number" step="0.1" id="ci-muscle" placeholder="" /></div>
+          <div class="modal-field"><label>Check-in date</label><input type="date" id="ci-date" /></div>
+        </div>
+        <div class="modal-field" style="margin-bottom:14px">
+          <label>Scan date <span style="font-weight:400;color:var(--text3)">(if uploading old scan)</span></label>
+          <input type="date" id="ci-scan-date" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none" />
         </div>
         <div class="modal-field">
           <label>Notes (optional)</label>
@@ -2056,8 +2060,10 @@ function renderIngredientRow(ing, idx, editable, targetServings, baseServings) {
 function buildCheckinRow(c, isImperial) {
   const toDisp = (kg) => kg ? (isImperial ? +(kg*2.20462).toFixed(1)+'lbs' : kg+'kg') : null
   const hasSegmental = c.seg_lean_trunk_kg || c.seg_lean_left_arm_kg
-  const hasExtended  = c.total_body_water_kg || c.visceral_fat_level || c.inbody_score || c.bmr
+  const hasExtended  = c.total_body_water_kg || c.visceral_fat_level || c.visceral_fat || c.inbody_score || c.bmr
   const hasDexa      = c.bone_mineral_density || c.android_fat_pct
+  const visceralVal  = c.visceral_fat_level || c.visceral_fat  // handle both column names
+  const displayDate  = c.scan_date || c.checked_in_at
 
   const pill = (label, val) => val != null
     ? `<div style="background:var(--bg3);border-radius:4px;padding:3px 8px;font-size:11px;white-space:nowrap">
@@ -2085,7 +2091,7 @@ function buildCheckinRow(c, isImperial) {
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--bg3)">
       <div>
         <span style="font-size:13px;font-weight:600;color:var(--text)">
-          ${new Date(c.checked_in_at).toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})}
+          ${new Date(displayDate + 'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})}
         </span>
         ${c.scan_type ? `<span style="font-size:10px;color:var(--text3);margin-left:6px;text-transform:uppercase;background:var(--bg4);padding:2px 5px;border-radius:3px">${c.scan_type}</span>` : ''}
         ${c.notes ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${c.notes}</div>` : ''}
@@ -2104,7 +2110,7 @@ function buildCheckinRow(c, isImperial) {
       <div style="display:flex;flex-wrap:wrap;gap:6px">
         ${pill('TBW', toDisp(c.total_body_water_kg))}
         ${pill('Fat Mass', toDisp(c.body_fat_mass_kg))}
-        ${pill('Visceral Fat', c.visceral_fat_level ? 'Level '+c.visceral_fat_level : null)}
+        ${pill('Visceral Fat', visceralVal ? 'Level '+visceralVal : null)}
         ${pill('ECW/TBW', c.ecw_tbw_ratio)}
         ${pill('InBody Score', c.inbody_score ? c.inbody_score+'/100' : null)}
         ${pill('SMI', c.smi ? c.smi+' kg/m²' : null)}
@@ -2384,7 +2390,8 @@ function renderGoalsPage(container) {
               const minW = Math.min(...allW), maxW = Math.max(...allW)
               const range = maxW - minW || 1
               const pct = c.weight_kg ? Math.round(((c.weight_kg - minW) / range) * 50 + 10) : 10
-              return `<div style="flex:1;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:4px;opacity:0.7" title="${c.weight_kg}kg"></div>`
+              const label = (c.scan_date || c.checked_in_at) + ': ' + (c.weight_kg ? (isImperial ? +(c.weight_kg*2.20462).toFixed(1)+'lbs' : c.weight_kg+'kg') : '?')
+              return `<div style="flex:1;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:4px;opacity:0.7" title="${label}"></div>`
             }).join('')}
           </div>
         </div>
@@ -3267,6 +3274,7 @@ function wireGlobals() {
     const isImperial = state.units === 'imperial'
     const today = new Date().toISOString().split('T')[0]
     document.getElementById('ci-date').value = today
+    document.getElementById('ci-scan-date').value = today
     const wLabel = document.getElementById('ci-weight-label')
     if (wLabel) wLabel.textContent = isImperial ? 'Weight (lbs)' : 'Weight (kg)'
     const mLabel = document.querySelector('#checkin-modal label[for-muscle]') || 
@@ -3376,7 +3384,10 @@ function wireGlobals() {
         set('ci-weight', isImperial && w ? +(w * 2.20462).toFixed(1) : w)
         set('ci-bf', extracted.body_fat_pct)
         set('ci-muscle', isImperial && mu ? +(mu * 2.20462).toFixed(1) : mu)
-        if (extracted.scan_date) set('ci-date', extracted.scan_date)
+        if (extracted.scan_date) {
+          set('ci-scan-date', extracted.scan_date)
+          set('ci-date', extracted.scan_date) // also set checkin date to scan date
+        }
       }
 
       if (inner) inner.innerHTML = '<div style="font-size:24px">✓</div><div style="font-size:13px;color:var(--protein)">' + esc(file.name) + '</div>'
@@ -3402,6 +3413,7 @@ function wireGlobals() {
       const bf = parseFloat(document.getElementById('ci-bf')?.value) || null
       const muscle = rawMuscle ? (isImperial ? +(rawMuscle / 2.20462).toFixed(2) : rawMuscle) : null
       const date = document.getElementById('ci-date')?.value || new Date().toISOString().split('T')[0]
+      const scanDate = document.getElementById('ci-scan-date')?.value || date
       const notes = document.getElementById('ci-notes')?.value?.trim() || ''
 
       // Upload scan file if present — non-blocking, never fails the checkin
@@ -3418,6 +3430,7 @@ function wireGlobals() {
       // Always save the checkin regardless of file upload outcome
       const checkin = await saveCheckin(state.user.id, {
         checked_in_at: date,
+        scan_date: scanDate,
         weight_kg: weight,
         body_fat_pct: bf,
         muscle_mass_kg: muscle,
