@@ -125,6 +125,7 @@ export async function initApp(user, container) {
   }
 }
 
+async function loadAll() {
   const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
 
   const [goals, log, usage, recipes, weeksWithMeals, foodItems] = await Promise.all([
