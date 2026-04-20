@@ -364,37 +364,3 @@ Return ONLY this JSON object, no markdown, no extra text:
   }], { max_tokens: 800 })
   return parseJSON(data)
 }
-dy_water_kg": null,
-  "intracellular_water_kg": null,
-  "extracellular_water_kg": null,
-  "ecw_tbw_ratio": null,
-  "protein_kg": null,
-  "minerals_kg": null,
-  "bmr": null,
-  "bmi": null,
-  "inbody_score": null,
-  "visceral_fat_level": null,
-  "body_cell_mass_kg": null,
-  "smi": null,
-  "seg_lean_left_arm_kg": null,
-  "seg_lean_right_arm_kg": null,
-  "seg_lean_trunk_kg": null,
-  "seg_lean_left_leg_kg": null,
-  "seg_lean_right_leg_kg": null,
-  "seg_lean_left_arm_pct": null,
-  "seg_lean_right_arm_pct": null,
-  "seg_lean_trunk_pct": null,
-  "seg_lean_left_leg_pct": null,
-  "seg_lean_right_leg_pct": null,
-  "bone_mineral_density": null,
-  "t_score": null,
-  "z_score": null,
-  "android_fat_pct": null,
-  "gynoid_fat_pct": null,
-  "android_gynoid_ratio": null,
-  "vat_area_cm2": null
-}` }
-    ]
-  }], { max_tokens: 800 })
-  return parseJSON(data)
-}
