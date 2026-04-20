@@ -312,21 +312,89 @@ export async function extractBodyScan(imageBase64, mediaType = 'image/jpeg') {
     role: 'user',
     content: [
       fileBlock,
-      { type: 'text', text: `Read this InBody body composition scan.
+      { type: 'text', text: `You are reading a body composition scan (InBody or DEXA). Extract every numeric value you can find.
 
-Extract EXACTLY these values:
-1. Weight — total body weight in lbs or kg
-2. PBF — "Percent Body Fat" percentage (e.g. 17.0). This is NOT the same as Body Fat Mass in lbs.
-3. SMM — "Skeletal Muscle Mass" in lbs or kg  
-4. BMR — "Basal Metabolic Rate" in kcal
-5. Scan date
+KEY RULES:
+- Values may be in lbs OR kg. If weight > 100 it is likely lbs — convert to kg (divide by 2.20462)
+- PBF / body_fat_pct is a PERCENTAGE (e.g. 17.0), NOT body fat mass in lbs
+- Segmental values: extract both the weight (lbs/kg) and the % of normal shown
+- Return null for any field not visible in the scan
 
-CRITICAL: PBF/body_fat_pct must be a PERCENTAGE (typically 10-40%), NOT body fat mass in lbs.
-If values are in lbs, convert weight and muscle to kg by dividing by 2.20462.
-
-Return ONLY this JSON, no markdown, no explanation:
-{"scan_type":"inbody","weight_kg":null,"body_fat_pct":null,"muscle_mass_kg":null,"bmr":null,"scan_date":null}` }
+Return ONLY this JSON object, no markdown, no extra text:
+{
+  "scan_type": "inbody or dexa",
+  "scan_date": "YYYY-MM-DD or null",
+  "weight_kg": null,
+  "body_fat_pct": null,
+  "body_fat_mass_kg": null,
+  "muscle_mass_kg": null,
+  "lean_body_mass_kg": null,
+  "bone_mass_kg": null,
+  "total_body_water_kg": null,
+  "intracellular_water_kg": null,
+  "extracellular_water_kg": null,
+  "ecw_tbw_ratio": null,
+  "protein_kg": null,
+  "minerals_kg": null,
+  "bmr": null,
+  "bmi": null,
+  "inbody_score": null,
+  "visceral_fat_level": null,
+  "body_cell_mass_kg": null,
+  "smi": null,
+  "seg_lean_left_arm_kg": null,
+  "seg_lean_right_arm_kg": null,
+  "seg_lean_trunk_kg": null,
+  "seg_lean_left_leg_kg": null,
+  "seg_lean_right_leg_kg": null,
+  "seg_lean_left_arm_pct": null,
+  "seg_lean_right_arm_pct": null,
+  "seg_lean_trunk_pct": null,
+  "seg_lean_left_leg_pct": null,
+  "seg_lean_right_leg_pct": null,
+  "bone_mineral_density": null,
+  "t_score": null,
+  "z_score": null,
+  "android_fat_pct": null,
+  "gynoid_fat_pct": null,
+  "android_gynoid_ratio": null,
+  "vat_area_cm2": null
+}` }
     ]
-  }], { max_tokens: 400 })
+  }], { max_tokens: 800 })
+  return parseJSON(data)
+}
+dy_water_kg": null,
+  "intracellular_water_kg": null,
+  "extracellular_water_kg": null,
+  "ecw_tbw_ratio": null,
+  "protein_kg": null,
+  "minerals_kg": null,
+  "bmr": null,
+  "bmi": null,
+  "inbody_score": null,
+  "visceral_fat_level": null,
+  "body_cell_mass_kg": null,
+  "smi": null,
+  "seg_lean_left_arm_kg": null,
+  "seg_lean_right_arm_kg": null,
+  "seg_lean_trunk_kg": null,
+  "seg_lean_left_leg_kg": null,
+  "seg_lean_right_leg_kg": null,
+  "seg_lean_left_arm_pct": null,
+  "seg_lean_right_arm_pct": null,
+  "seg_lean_trunk_pct": null,
+  "seg_lean_left_leg_pct": null,
+  "seg_lean_right_leg_pct": null,
+  "bone_mineral_density": null,
+  "t_score": null,
+  "z_score": null,
+  "android_fat_pct": null,
+  "gynoid_fat_pct": null,
+  "android_gynoid_ratio": null,
+  "vat_area_cm2": null
+}` }
+    ]
+  }], { max_tokens: 800 })
   return parseJSON(data)
 }

@@ -2053,7 +2053,102 @@ function renderIngredientRow(ing, idx, editable, targetServings, baseServings) {
 }
 
 // ─── Goals Page ───────────────────────────────────────────────────────────────
-// ─── Goals & Body Metrics Page ────────────────────────────────────────────────
+function buildCheckinRow(c, isImperial) {
+  const toDisp = (kg) => kg ? (isImperial ? +(kg*2.20462).toFixed(1)+'lbs' : kg+'kg') : null
+  const hasSegmental = c.seg_lean_trunk_kg || c.seg_lean_left_arm_kg
+  const hasExtended  = c.total_body_water_kg || c.visceral_fat_level || c.inbody_score || c.bmr
+  const hasDexa      = c.bone_mineral_density || c.android_fat_pct
+
+  const pill = (label, val) => val != null
+    ? `<div style="background:var(--bg3);border-radius:4px;padding:3px 8px;font-size:11px;white-space:nowrap">
+        <span style="color:var(--text3)">${label}: </span>
+        <span style="color:var(--text);font-weight:500">${val}</span>
+       </div>` : ''
+
+  const cell = (val, label, color) => val != null
+    ? `<div style="padding:8px 4px;background:var(--bg2);text-align:center">
+        <div style="font-size:13px;font-weight:600;color:${color}">${val}</div>
+        <div style="font-size:10px;color:var(--text3)">${label}</div>
+       </div>` : ''
+
+  const coreMetrics = [
+    [toDisp(c.weight_kg), 'Weight', 'var(--accent)'],
+    [c.body_fat_pct != null ? c.body_fat_pct+'%' : null, 'Body Fat', 'var(--fat)'],
+    [toDisp(c.muscle_mass_kg), 'Muscle', 'var(--protein)'],
+    [toDisp(c.lean_body_mass_kg), 'Lean Mass', 'var(--protein)'],
+    [c.bmr ? c.bmr+' kcal' : null, 'BMR', 'var(--carbs)'],
+    [c.bmi ? String(c.bmi) : null, 'BMI', 'var(--text2)'],
+  ].filter(([v]) => v)
+
+  return `
+  <div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:8px">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--bg3)">
+      <div>
+        <span style="font-size:13px;font-weight:600;color:var(--text)">
+          ${new Date(c.checked_in_at).toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})}
+        </span>
+        ${c.scan_type ? `<span style="font-size:10px;color:var(--text3);margin-left:6px;text-transform:uppercase;background:var(--bg4);padding:2px 5px;border-radius:3px">${c.scan_type}</span>` : ''}
+        ${c.notes ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${c.notes}</div>` : ''}
+      </div>
+      ${c.scan_file_path ? '<span style="font-size:20px" title="Scan attached">📄</span>' : ''}
+    </div>
+
+    ${coreMetrics.length ? `
+    <div style="display:grid;grid-template-columns:repeat(${Math.min(coreMetrics.length,3)},1fr);gap:1px;background:var(--border)">
+      ${coreMetrics.map(([v,l,col]) => cell(v,l,col)).join('')}
+    </div>` : ''}
+
+    ${hasExtended ? `
+    <div style="padding:8px 12px;border-top:1px solid var(--border)">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Body Composition</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${pill('TBW', toDisp(c.total_body_water_kg))}
+        ${pill('Fat Mass', toDisp(c.body_fat_mass_kg))}
+        ${pill('Visceral Fat', c.visceral_fat_level ? 'Level '+c.visceral_fat_level : null)}
+        ${pill('ECW/TBW', c.ecw_tbw_ratio)}
+        ${pill('InBody Score', c.inbody_score ? c.inbody_score+'/100' : null)}
+        ${pill('SMI', c.smi ? c.smi+' kg/m²' : null)}
+        ${pill('Protein', c.protein_kg ? c.protein_kg+'kg' : null)}
+        ${pill('Minerals', c.minerals_kg ? c.minerals_kg+'kg' : null)}
+        ${pill('BCM', toDisp(c.body_cell_mass_kg))}
+      </div>
+    </div>` : ''}
+
+    ${hasSegmental ? `
+    <div style="padding:8px 12px;border-top:1px solid var(--border)">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Segmental Lean Mass</div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;text-align:center">
+        ${[['L Arm',c.seg_lean_left_arm_kg,c.seg_lean_left_arm_pct],
+           ['R Arm',c.seg_lean_right_arm_kg,c.seg_lean_right_arm_pct],
+           ['Trunk',c.seg_lean_trunk_kg,c.seg_lean_trunk_pct],
+           ['L Leg',c.seg_lean_left_leg_kg,c.seg_lean_left_leg_pct],
+           ['R Leg',c.seg_lean_right_leg_kg,c.seg_lean_right_leg_pct]
+          ].map(([lbl,kg,pct]) => `
+          <div style="background:var(--bg3);border-radius:4px;padding:4px 2px">
+            <div style="font-size:11px;font-weight:500;color:var(--text)">${toDisp(kg)||'—'}</div>
+            <div style="font-size:10px;color:${!pct?'var(--text3)':pct>=100?'var(--protein)':'var(--fat)'}">${pct?pct+'%':''}</div>
+            <div style="font-size:9px;color:var(--text3)">${lbl}</div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    ${hasDexa ? `
+    <div style="padding:8px 12px;border-top:1px solid var(--border)">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">DEXA Analysis</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${pill('BMD', c.bone_mineral_density ? c.bone_mineral_density+' g/cm²' : null)}
+        ${pill('T-score', c.t_score)}
+        ${pill('Z-score', c.z_score)}
+        ${pill('Android Fat', c.android_fat_pct ? c.android_fat_pct+'%' : null)}
+        ${pill('Gynoid Fat', c.gynoid_fat_pct ? c.gynoid_fat_pct+'%' : null)}
+        ${pill('A/G Ratio', c.android_gynoid_ratio)}
+        ${pill('VAT', c.vat_area_cm2 ? c.vat_area_cm2+' cm²' : null)}
+      </div>
+    </div>` : ''}
+  </div>`
+}
+
+
 function calcBMR(m) {
   if (!m?.weight_kg || !m?.height_cm || !m?.age) return null
   const base = 10 * m.weight_kg + 6.25 * m.height_cm - 5 * m.age
@@ -2294,20 +2389,7 @@ function renderGoalsPage(container) {
           </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:8px">
-          ${checkins.slice(0,8).map(c => `
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
-              <div>
-                <div style="font-size:13px;color:var(--text);font-weight:500">
-                  ${new Date(c.checked_in_at).toLocaleDateString([], {month:'short',day:'numeric',year:'numeric'})}
-                </div>
-                <div style="font-size:11px;color:var(--text3);margin-top:2px">${c.notes || ''}</div>
-              </div>
-              <div style="text-align:right;font-size:12px;display:flex;gap:12px">
-                ${c.weight_kg ? `<div><div style="color:var(--accent);font-weight:600">${isImperial ? +(c.weight_kg*2.20462).toFixed(1) + 'lbs' : c.weight_kg + 'kg'}</div><div style="color:var(--text3)">weight</div></div>` : ''}
-                ${c.body_fat_pct ? `<div><div style="color:var(--protein);font-weight:600">${c.body_fat_pct}%</div><div style="color:var(--text3)">body fat</div></div>` : ''}
-                ${c.scan_file_path ? `<div><div style="color:var(--carbs)">📄</div><div style="color:var(--text3)">scan</div></div>` : ''}
-              </div>
-            </div>`).join('')}
+          ${checkins.slice(0,8).map(c => buildCheckinRow(c, isImperial)).join('')}
         </div>
       `}
     </div>
@@ -3342,6 +3424,46 @@ function wireGlobals() {
         notes,
         scan_file_path: scanPath,
         scan_extracted: state.pendingCheckinScan?.extracted || null,
+        // Map all extracted scan fields directly to columns
+        ...(state.pendingCheckinScan?.extracted ? (() => {
+          const e = state.pendingCheckinScan.extracted
+          return {
+            scan_type: e.scan_type || null,
+            scan_date: e.scan_date || null,
+            lean_body_mass_kg: e.lean_body_mass_kg || null,
+            body_fat_mass_kg: e.body_fat_mass_kg || null,
+            bone_mass_kg: e.bone_mass_kg || null,
+            total_body_water_kg: e.total_body_water_kg || null,
+            intracellular_water_kg: e.intracellular_water_kg || null,
+            extracellular_water_kg: e.extracellular_water_kg || null,
+            ecw_tbw_ratio: e.ecw_tbw_ratio || null,
+            protein_kg: e.protein_kg || null,
+            minerals_kg: e.minerals_kg || null,
+            bmr: e.bmr || null,
+            bmi: e.bmi || null,
+            inbody_score: e.inbody_score || null,
+            visceral_fat_level: e.visceral_fat_level || null,
+            body_cell_mass_kg: e.body_cell_mass_kg || null,
+            smi: e.smi || null,
+            seg_lean_left_arm_kg: e.seg_lean_left_arm_kg || null,
+            seg_lean_right_arm_kg: e.seg_lean_right_arm_kg || null,
+            seg_lean_trunk_kg: e.seg_lean_trunk_kg || null,
+            seg_lean_left_leg_kg: e.seg_lean_left_leg_kg || null,
+            seg_lean_right_leg_kg: e.seg_lean_right_leg_kg || null,
+            seg_lean_left_arm_pct: e.seg_lean_left_arm_pct || null,
+            seg_lean_right_arm_pct: e.seg_lean_right_arm_pct || null,
+            seg_lean_trunk_pct: e.seg_lean_trunk_pct || null,
+            seg_lean_left_leg_pct: e.seg_lean_left_leg_pct || null,
+            seg_lean_right_leg_pct: e.seg_lean_right_leg_pct || null,
+            bone_mineral_density: e.bone_mineral_density || null,
+            t_score: e.t_score || null,
+            z_score: e.z_score || null,
+            android_fat_pct: e.android_fat_pct || null,
+            gynoid_fat_pct: e.gynoid_fat_pct || null,
+            android_gynoid_ratio: e.android_gynoid_ratio || null,
+            vat_area_cm2: e.vat_area_cm2 || null,
+          }
+        })() : {})
       })
       state.checkins.unshift(checkin)
 
