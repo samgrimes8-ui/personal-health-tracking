@@ -3248,9 +3248,11 @@ function wireGlobals() {
           new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30000))
         ])
       } catch (aiErr) {
-        // AI failed or timed out — still allow saving without extraction
+        // AI failed or timed out — keep file attached but let user fill manually
         console.warn('Scan extraction failed:', aiErr.message)
-        resetUpload('Could not extract metrics — fill in manually above')
+        state.pendingCheckinScan = { file, extracted: null }
+        if (inner) inner.innerHTML = '<div style="font-size:20px">📄</div><div style="font-size:12px;color:var(--protein)">' + esc(file.name) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px">File attached — fill in values above manually</div>'
+        if (status) status.textContent = 'Auto-extract failed — enter values manually then Save'
         return
       }
 

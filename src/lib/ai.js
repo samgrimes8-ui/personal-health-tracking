@@ -312,25 +312,23 @@ export async function extractBodyScan(imageBase64, mediaType = 'image/jpeg') {
     role: 'user',
     content: [
       fileBlock,
-      { type: 'text', text: `This is a body composition report (InBody, DEXA, or similar scan). Extract all numeric metrics you can find.
+      { type: 'text', text: `Read all the numbers from this body composition scan image.
 
-InBody typically shows: Weight, Skeletal Muscle Mass, Body Fat Mass, PBF (body fat %), Visceral Fat Level, BMR, ECW/TBW ratio.
-DEXA typically shows: Total mass, Fat mass, Lean mass, bone density, regional fat.
+Look for these specific values (they may be in lbs or kg):
+- Weight (total body weight)
+- SMM or Skeletal Muscle Mass
+- Body Fat Mass
+- PBF or Percent Body Fat (%)
+- BMR or Basal Metabolic Rate (kcal)
+- Total Body Water
+- Visceral Fat Level or Area
+- Scan date
 
-Return ONLY this JSON (null for anything not found):
-{
-  "scan_type": "inbody|dexa|other",
-  "weight_kg": number|null,
-  "body_fat_pct": number|null,
-  "muscle_mass_kg": number|null,
-  "bone_mass_kg": number|null,
-  "water_pct": number|null,
-  "visceral_fat": number|null,
-  "bmr": number|null,
-  "scan_date": "YYYY-MM-DD"|null,
-  "notes": "key findings in one sentence"
-}` }
+IMPORTANT: The values may be in POUNDS (lbs) not kg. If they appear to be in lbs (e.g. Weight > 100), convert to kg by dividing by 2.20462.
+
+Return ONLY valid JSON, no other text:
+{"scan_type":"inbody","weight_kg":null,"body_fat_pct":null,"muscle_mass_kg":null,"bone_mass_kg":null,"water_pct":null,"visceral_fat":null,"bmr":null,"scan_date":null,"notes":""}` }
     ]
-  }], { max_tokens: 600 })
+  }], { max_tokens: 400 })
   return parseJSON(data)
 }
