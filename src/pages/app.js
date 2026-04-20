@@ -24,6 +24,7 @@ let state = {
   log: [],
   recipes: [],
   foodItems: [],
+  newUsersCount: 0,
   editingFoodItem: null,
   editingComponents: null,
   pendingComponent: null,
@@ -96,6 +97,28 @@ export async function initApp(user, container) {
     _appInitialized = true
   }
   renderPage()
+  // Load new user badge for admins (background, non-blocking)
+  if (state.usage?.isAdmin) {
+    getAdminUserOverview().then(users => {
+      const now = new Date()
+      state.newUsersCount = users.filter(u => {
+        if (!u.created_at) return false
+        return (now - new Date(u.created_at)) < 7 * 24 * 60 * 60 * 1000
+      }).length
+      // Re-render just the nav badge
+      const navAccount = document.getElementById('nav-account')
+      if (navAccount && state.newUsersCount > 0) {
+        const badge = navAccount.querySelector('span[style*="border-radius:999px"]')
+        if (!badge) {
+          const b = document.createElement('span')
+          b.style.cssText = 'position:absolute;top:4px;right:4px;background:var(--red);color:white;border-radius:999px;font-size:9px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center'
+          b.textContent = state.newUsersCount
+          navAccount.style.position = 'relative'
+          navAccount.appendChild(b)
+        }
+      }
+    }).catch(() => {})
+  }
 }
 
 async function loadAll() {
@@ -154,9 +177,10 @@ function renderShell(container) {
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
             Foods
           </div>
-          <div class="nav-item ${state.currentPage === 'account' ? 'active' : ''}" id="nav-account" onclick="switchPage('account')">
+          <div class="nav-item ${state.currentPage === 'account' ? 'active' : ''}" id="nav-account" onclick="switchPage('account')" style="position:relative">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
             Account
+            ${state.usage?.isAdmin && state.newUsersCount > 0 ? `<span style="position:absolute;top:4px;right:4px;background:var(--red);color:white;border-radius:999px;font-size:9px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center">${state.newUsersCount}</span>` : ''}
           </div>
         </nav>
         <div class="goal-widget">
@@ -1910,60 +1934,99 @@ function renderAccount(container) {
 }
 
 async function loadAdminPanel() {
+  const el = document.getElementById('admin-panel-content')
+  if (!el) return
+  el.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:20px 0">Loading...</div>'
   try {
     const users = await getAdminUserOverview()
-    const el = document.getElementById('admin-panel-content')
-    if (!el) return
     if (!users.length) { el.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:20px 0">No users yet.</div>'; return }
+
+    // Aggregate stats
+    const totalUsers = users.length
+    const activeUsers = users.filter(u => u.account_status === 'active').length
+    const totalSpentMonth = users.reduce((a, u) => a + Number(u.spent_this_month_usd ?? 0), 0)
+    const totalSpentAllTime = users.reduce((a, u) => a + Number(u.total_spent_usd ?? 0), 0)
+    const totalLogs = users.reduce((a, u) => a + Number(u.log_entries_total ?? 0), 0)
+    const totalLogsMonth = users.reduce((a, u) => a + Number(u.log_entries_this_month ?? 0), 0)
+    const totalTokensMonth = users.reduce((a, u) => a + Number(u.tokens_this_month ?? 0), 0)
+
+    // New users this month
+    const newThisMonth = users.filter(u => {
+      if (!u.created_at) return false
+      const joined = new Date(u.created_at)
+      const now = new Date()
+      return joined.getMonth() === now.getMonth() && joined.getFullYear() === now.getFullYear()
+    }).length
+
     el.innerHTML = `
-      <div style="overflow-x:auto">
-        <table class="log-table" style="min-width:700px">
-          <thead>
-            <tr>
-              <th>Email</th><th>Plan</th><th>This month</th><th>Total spent</th><th>Status</th><th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${users.map(u => `
-              <tr>
-                <td class="td-name" style="font-size:12px">
+      <!-- Summary metrics -->
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:20px">
+        ${[
+          { label: 'Total users', value: totalUsers, sub: `${newThisMonth} new this month`, color: 'var(--accent)' },
+          { label: 'Active', value: activeUsers, sub: `${totalUsers - activeUsers} inactive`, color: 'var(--protein)' },
+          { label: 'Spend this month', value: '$' + totalSpentMonth.toFixed(3), sub: '$' + totalSpentAllTime.toFixed(3) + ' all time', color: 'var(--cal)' },
+          { label: 'AI tokens (month)', value: Math.round(totalTokensMonth/1000) + 'k', sub: totalLogsMonth + ' meals logged', color: 'var(--carbs)' },
+        ].map(s => `
+          <div style="background:var(--bg3);border-radius:var(--r);padding:12px;border:1px solid var(--border)">
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">${s.label}</div>
+            <div style="font-size:22px;font-weight:700;color:${s.color}">${s.value}</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">${s.sub}</div>
+          </div>`).join('')}
+      </div>
+
+      <!-- User list -->
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">
+        All users — ${totalUsers} total
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${users.map(u => {
+          const spentPct = Math.min(100, (Number(u.spent_this_month_usd ?? 0) / Number(u.spending_limit_usd ?? 10)) * 100)
+          const joinDate = u.created_at ? new Date(u.created_at).toLocaleDateString([], {month:'short', day:'numeric', year:'numeric'}) : '?'
+          const lastActive = u.last_active ? new Date(u.last_active).toLocaleDateString([], {month:'short', day:'numeric'}) : 'never'
+          const isNew = u.created_at && (() => { const d = new Date(u.created_at); const n = new Date(); return d.getMonth()===n.getMonth()&&d.getFullYear()===n.getFullYear() })()
+          return `
+          <div style="background:var(--bg3);border-radius:var(--r);padding:12px;border:1px solid var(--border)">
+            <div style="display:flex;align-items:start;justify-content:space-between;gap:8px;margin-bottom:8px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;font-weight:500;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                   ${esc(u.email)}
-                  ${u.is_admin ? '<span style="font-size:10px;background:rgba(232,197,71,0.15);color:var(--accent);border-radius:4px;padding:1px 6px;margin-left:6px">admin</span>' : ''}
-                  ${u.unlimited_access ? '<span style="font-size:10px;background:rgba(126,200,160,0.15);color:var(--protein);border-radius:4px;padding:1px 6px;margin-left:4px">unlimited</span>' : ''}
-                </td>
-                <td style="font-size:12px;color:var(--text2)">${u.plan ?? 'free'}</td>
-                <td style="font-size:12px">
-                  <span style="color:var(--cal)">$${Number(u.spent_this_month_usd ?? 0).toFixed(4)}</span>
-                  <span style="color:var(--text3)"> / $${Number(u.spending_limit_usd ?? 10).toFixed(2)}</span>
-                  <br><span style="color:var(--text3);font-size:10px">${u.requests_this_month ?? 0} requests · ${Math.round((u.tokens_this_month ?? 0)/1000)}k tokens</span>
-                </td>
-                <td style="font-size:12px;color:var(--text2)">$${Number(u.total_spent_usd ?? 0).toFixed(4)}</td>
-                <td>
-                  <span style="font-size:11px;padding:2px 8px;border-radius:999px;${u.account_status === 'active' ? 'background:rgba(90,173,122,0.15);color:var(--green)' : 'background:rgba(217,96,96,0.15);color:var(--red)'}">
-                    ${u.account_status ?? 'active'}
-                  </span>
-                </td>
-                <td style="white-space:nowrap">
-                  <button class="td-act" title="Toggle unlimited" onclick="toggleUnlimited('${u.user_id}', ${u.unlimited_access})">
-                    ${u.unlimited_access ? '🔓' : '🔒'}
-                  </button>
-                  <button class="td-act" title="Toggle admin" onclick="toggleAdmin('${u.user_id}', ${u.is_admin})">
-                    ${u.is_admin ? '👑' : '👤'}
-                  </button>
-                  <button class="td-act" title="${u.account_status === 'active' ? 'Suspend' : 'Activate'}"
-                    onclick="toggleSuspend('${u.user_id}', '${u.account_status}')"
-                    style="color:${u.account_status === 'active' ? 'var(--text3)' : 'var(--green)'}">
-                    ${u.account_status === 'active' ? '⏸' : '▶'}
-                  </button>
-                </td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
+                  ${u.is_admin ? '<span style="font-size:10px;background:rgba(232,197,71,0.15);color:var(--accent);border-radius:4px;padding:1px 5px">admin</span>' : ''}
+                  ${u.unlimited_access ? '<span style="font-size:10px;background:rgba(126,200,160,0.15);color:var(--protein);border-radius:4px;padding:1px 5px">unlimited</span>' : ''}
+                  ${isNew ? '<span style="font-size:10px;background:rgba(126,200,160,0.2);color:var(--protein);border-radius:4px;padding:1px 5px">🆕 new</span>' : ''}
+                </div>
+                <div style="font-size:11px;color:var(--text3);margin-top:3px">
+                  Joined ${joinDate} · Last active ${lastActive} · ${u.log_entries_total ?? 0} meals · ${u.recipe_count ?? 0} recipes · ${u.food_item_count ?? 0} foods
+                </div>
+              </div>
+              <div style="display:flex;gap:4px;flex-shrink:0">
+                <button class="td-act" title="Toggle unlimited" onclick="toggleUnlimited('${u.user_id}', ${u.unlimited_access})">
+                  ${u.unlimited_access ? '🔓' : '🔒'}
+                </button>
+                <button class="td-act" title="Toggle admin" onclick="toggleAdmin('${u.user_id}', ${u.is_admin})">
+                  ${u.is_admin ? '👑' : '👤'}
+                </button>
+                <button class="td-act" title="${u.account_status === 'active' ? 'Suspend' : 'Activate'}"
+                  onclick="toggleSuspend('${u.user_id}', '${u.account_status}')"
+                  style="color:${u.account_status === 'active' ? 'var(--text3)' : 'var(--green)'}">
+                  ${u.account_status === 'active' ? '⏸' : '▶'}
+                </button>
+              </div>
+            </div>
+            <!-- Spend bar -->
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="flex:1;height:4px;background:var(--bg4);border-radius:2px;overflow:hidden">
+                <div style="width:${spentPct}%;height:100%;background:${spentPct > 80 ? 'var(--red)' : spentPct > 50 ? 'var(--cal)' : 'var(--protein)'};border-radius:2px"></div>
+              </div>
+              <span style="font-size:11px;color:var(--text3);white-space:nowrap">
+                $${Number(u.spent_this_month_usd??0).toFixed(3)} / $${Number(u.spending_limit_usd??10).toFixed(0)} · ${u.requests_this_month??0} req · ${Math.round((u.tokens_this_month??0)/1000)}k tokens
+              </span>
+            </div>
+          </div>`
+        }).join('')}
       </div>
     `
   } catch (err) {
-    const el = document.getElementById('admin-panel-content')
-    if (el) el.innerHTML = `<div style="color:var(--red);font-size:13px">Error loading users: ${err.message}</div>`
+    if (el) el.innerHTML = `<div style="color:var(--red);font-size:13px">Error: ${err.message}</div>`
   }
 }
 
