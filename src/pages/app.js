@@ -92,11 +92,15 @@ export async function initApp(user, container) {
     state.weeksWithMeals = state.weeksWithMeals || []
   }
   if (!_appInitialized) {
+    // Restore page BEFORE renderShell so nav active class is correct on first render
+    const savedPage = sessionStorage.getItem('macrolens_page')
+    const validPages = ['log','planner','history','goals','recipes','foods','account']
+    if (savedPage && validPages.includes(savedPage)) state.currentPage = savedPage
     renderShell(container)
     wireGlobals()
     _appInitialized = true
   }
-  // Restore last visited page from sessionStorage (persists across refreshes)
+  // Also sync on re-init (auth refresh etc) without full shell re-render
   const savedPage = sessionStorage.getItem('macrolens_page')
   const validPages = ['log','planner','history','goals','recipes','foods','account']
   if (savedPage && validPages.includes(savedPage)) state.currentPage = savedPage
@@ -2067,6 +2071,12 @@ async function doAnalyze() {
 
 // ─── Sidebar Stats ────────────────────────────────────────────────────────────
 function updateSidebar() {
+  // Always keep nav active state in sync with current page
+  document.querySelectorAll('.nav-item[id^="nav-"]').forEach(el => {
+    const page = el.id.replace('nav-', '')
+    el.classList.toggle('active', page === state.currentPage)
+  })
+
   const today = getTodayLog()
   const t = totals(today)
   const g = state.goals
