@@ -39,6 +39,7 @@ let state = {
   currentEntry: null,
   editingEntry: null,
   editingBaseMacros: null,
+  editingMealType: null,
   planningRecipe: null,
   plannerTarget: null,
   plannerTab: 'history',
@@ -213,6 +214,14 @@ function renderShell(container) {
         <button class="modal-close" onclick="closeEditModal()">×</button>
         <h3>Edit meal</h3>
         <div class="modal-field"><label>Meal name</label><input type="text" id="edit-name" /></div>
+        <!-- Meal type -->
+        <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+          ${['Breakfast','Lunch','Snack','Dinner'].map(t => `
+            <button id="meal-type-btn-${t}" onclick="setEditMealType('${t}')"
+              style="flex:1;padding:6px 4px;border-radius:var(--r);font-size:12px;font-family:inherit;cursor:pointer;border:1px solid var(--border);background:var(--bg3);color:var(--text3)">
+              ${{'Breakfast':'🌅','Lunch':'☀️','Snack':'🍎','Dinner':'🌙'}[t]} ${t}
+            </button>`).join('')}
+        </div>
 
         <!-- Servings multiplier -->
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
@@ -357,10 +366,8 @@ function getMealTypeFromTime(date) {
 
 function getTodayPlannedMeals() {
   if (!state.planner?.meals) return []
-  const today = new Date()
-  const dow = today.getDay()
-  const meals = state.planner.meals[dow] || []
-  return meals.filter(m => !m.is_leftover)
+  const dow = new Date().getDay()
+  return (state.planner.meals[dow] || []).filter(m => !m.is_leftover)
 }
 
 function renderDashboard(container) {
@@ -533,6 +540,8 @@ function renderDashboard(container) {
 
   updateStats()
   wireFileInput()
+  // Wire today log click delegation after render
+  setTimeout(() => wireTodayLogClicks(document.getElementById('today-log-body')), 0)
   if (state.currentMode === 'food') {
     if (state.foodMode === 'label') wireLabelFileInput()
     if (state.foodMode === 'barcode') wireBarcodeInput()
@@ -582,7 +591,7 @@ function renderTodayMeals(logEntries) {
     return '<div class="log-empty">No meals yet today. Analyze a meal or check off a planned meal.</div>'
   }
 
-  const d = document.createElement('div')
+  let html = ''
   activeMealTypes.forEach(mealType => {
     const logs = grouped[mealType]
     const plans = plannedByType[mealType]
@@ -592,73 +601,61 @@ function renderTodayMeals(logEntries) {
     const mealF   = logs.reduce((a, e) => a + (e.fat      || 0), 0)
     const icon = MEAL_TYPE_ICONS[mealType] || ''
 
-    const section = document.createElement('div')
-    section.style.marginBottom = '4px'
-
+    html += '<div style="margin-bottom:4px">'
     // Header
-    const header = document.createElement('div')
-    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px;background:var(--bg3)'
-    header.innerHTML = '<span style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px">'
-      + icon + ' ' + mealType + '</span>'
-      + (logs.length ? '<span style="font-size:11px;color:var(--text3)">'
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px;background:var(--bg3)">'
+    html += '<span style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px">' + icon + ' ' + mealType + '</span>'
+    if (logs.length) {
+      html += '<span style="font-size:11px;color:var(--text3)">'
         + '<span style="color:var(--accent)">' + Math.round(mealCal) + '</span> kcal'
         + ' <span style="color:var(--protein)">P' + Math.round(mealP) + '</span>'
         + ' <span style="color:var(--carbs)">C' + Math.round(mealC) + '</span>'
         + ' <span style="color:var(--fat)">F' + Math.round(mealF) + '</span>'
-        + '</span>' : '')
-    section.appendChild(header)
+        + '</span>'
+    }
+    html += '</div>'
 
-    // Planned meals
+    // Planned rows — data-plan-id for click delegation
     plans.forEach(m => {
-      const mealName = m.meal_name || m.name || ''
-      const isLogged = loggedNames.has(mealName.toLowerCase())
-      const row = document.createElement('div')
-      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer;opacity:' + (isLogged ? '0.45' : '1')
-      row.innerHTML = '<div style="width:20px;height:20px;border-radius:50%;border:2px solid ' + (isLogged ? 'var(--protein)' : 'var(--border2)') + ';background:' + (isLogged ? 'var(--protein)' : 'none') + ';flex-shrink:0;display:flex;align-items:center;justify-content:center">'
-        + (isLogged ? '<svg width="10" height="10" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>' : '')
+      const mealName = esc(m.meal_name || m.name || '')
+      const isLogged = loggedNames.has((m.meal_name || m.name || '').toLowerCase())
+      const check = isLogged
+        ? '<svg width="10" height="10" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>' : ''
+      html += '<div data-plan-id="' + m.id + '" data-meal-type="' + mealType + '" style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer;opacity:' + (isLogged ? '0.5' : '1') + '">'
+        + '<div style="width:20px;height:20px;border-radius:50%;border:2px solid ' + (isLogged ? 'var(--protein)' : 'var(--border2)') + ';background:' + (isLogged ? 'var(--protein)' : 'none') + ';flex-shrink:0;display:flex;align-items:center;justify-content:center">' + check + '</div>'
+        + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:13px;color:var(--text2)' + (isLogged ? ';text-decoration:line-through' : '') + '">' + mealName + '</div>'
+        + '<div style="font-size:11px;color:var(--text3)">Planned · ' + Math.round(m.calories || 0) + ' kcal</div>'
         + '</div>'
-        + '<div style="flex:1;min-width:0"><div style="font-size:13px;color:var(--text2)' + (isLogged ? ';text-decoration:line-through' : '') + '">' + esc(mealName) + '</div>'
-        + '<div style="font-size:11px;color:var(--text3)">Planned · ' + Math.round(m.calories || 0) + ' kcal</div></div>'
-        + (!isLogged ? '<span style="font-size:11px;color:var(--text3);flex-shrink:0">Log it \u2192</span>' : '')
-      row.addEventListener('click', () => window.logPlannedMeal(m.id, mealType))
-      section.appendChild(row)
+        + (!isLogged ? '<span style="font-size:11px;color:var(--text3);flex-shrink:0">Log it →</span>' : '')
+        + '</div>'
     })
 
-    // Logged entries
+    // Logged rows — data-log-id for click delegation
     logs.forEach(e => {
-      const d2 = new Date(e.logged_at || e.timestamp)
-      const timeStr = d2.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      const servingTxt = e.servings_consumed && e.servings_consumed != 1 ? ' \xd7' + e.servings_consumed : ''
+      const timeStr = new Date(e.logged_at || e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      const servingTxt = e.servings_consumed && e.servings_consumed != 1
+        ? '<span style="font-size:10px;color:var(--text3);margin-left:4px">×' + e.servings_consumed + '</span>' : ''
       const entryIcon = MEAL_TYPE_ICONS[e._mealType] || ''
-      const row = document.createElement('div')
-      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer'
-      row.onmouseover = () => { row.style.background = 'var(--bg3)' }
-      row.onmouseout  = () => { row.style.background = '' }
-      row.innerHTML = '<div style="flex:1;min-width:0">'
-        + '<div style="font-size:13px;color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(e.name) + (servingTxt ? '<span style="font-size:10px;color:var(--text3);margin-left:4px">' + servingTxt + '</span>' : '') + '</div>'
+      html += '<div data-log-id="' + e.id + '" style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer">'
+        + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:13px;color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(e.name) + servingTxt + '</div>'
         + '<div style="font-size:11px;color:var(--text3);margin-top:1px;display:flex;align-items:center;gap:6px">'
         + '<span>' + timeStr + '</span>'
-        + '<button data-meal-type-btn style="background:none;border:none;font-size:10px;color:var(--text3);cursor:pointer;padding:0;font-family:inherit">' + entryIcon + ' ' + e._mealType + ' \u25be</button>'
+        + '<span data-type-btn="' + e.id + '" data-current-type="' + e._mealType + '" style="cursor:pointer;color:var(--text3);font-size:10px;padding:1px 4px;border-radius:3px;border:1px solid var(--border)">'
+        + entryIcon + ' ' + e._mealType + ' ▾</span>'
         + '</div></div>'
         + '<div style="text-align:right;flex-shrink:0;font-size:12px">'
         + '<div style="color:var(--accent);font-weight:600">' + Math.round(e.calories) + ' kcal</div>'
         + '<div style="color:var(--text3)">P' + Math.round(e.protein) + ' C' + Math.round(e.carbs) + ' F' + Math.round(e.fat) + '</div>'
-        + '</div>'
-      row.addEventListener('click', (ev) => {
-        if (ev.target.closest('[data-meal-type-btn]')) {
-          window.changeMealType(e.id, e._mealType)
-        } else {
-          window.openEditModal(e.id, 'log')
-        }
-      })
-      section.appendChild(row)
+        + '</div></div>'
     })
 
-    d.appendChild(section)
+    html += '</div>'
   })
-
-  return d.innerHTML
+  return html
 }
+
 
 function renderLogTable(entries, isToday) {
   if (!entries.length) return `<div class="log-empty">${isToday ? 'No entries yet. Analyze a meal to get started.' : 'No history yet.'}</div>`
@@ -669,6 +666,7 @@ function renderLogTable(entries, isToday) {
           <tr>
             <th style="text-align:left">Meal</th>
             <th>${isToday ? 'Time' : 'Date'}</th>
+            ${!isToday ? '<th>Type</th>' : ''}
             <th>Cal</th>
             <th>P</th>
             <th>C</th>
@@ -681,7 +679,9 @@ function renderLogTable(entries, isToday) {
             const d = new Date(e.logged_at || e.timestamp)
             const timeStr = isToday
               ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+              : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+            const mealType = e.meal_type || getMealTypeFromTime(d)
+            const mealIcon = MEAL_TYPE_ICONS[mealType] || ''
             const servingBadge = e.servings_consumed && e.servings_consumed != 1
               ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">×${e.servings_consumed}</span>` : ''
             return `<tr style="cursor:pointer" onclick="openEditModal('${e.id}', 'log')">
@@ -689,6 +689,7 @@ function renderLogTable(entries, isToday) {
                 ${esc(e.name)}${servingBadge}
               </td>
               <td class="td-time">${timeStr}</td>
+              ${!isToday ? `<td style="font-size:11px;white-space:nowrap">${mealIcon} ${mealType}</td>` : ''}
               <td class="td-cal" style="color:var(--accent);font-weight:600">${Math.round(e.calories)}</td>
               <td class="td-p" style="color:var(--protein)">${Math.round(e.protein)}g</td>
               <td class="td-c" style="color:var(--carbs)">${Math.round(e.carbs)}g</td>
@@ -2341,6 +2342,33 @@ function refreshTodayLog() {
   const el = document.getElementById('today-log-body')
   if (!el) return
   el.innerHTML = renderTodayMeals(getTodayLog())
+  el._todayWired = false
+  wireTodayLogClicks(el)
+}
+
+function wireTodayLogClicks(container) {
+  if (!container || container._todayWired) return
+  container._todayWired = true
+  container.addEventListener('click', e => {
+    // Logged entry — meal type toggle button
+    const typeBtn = e.target.closest('[data-type-btn]')
+    if (typeBtn) {
+      e.stopPropagation()
+      window.changeMealType(typeBtn.dataset.typeBtn, typeBtn.dataset.currentType)
+      return
+    }
+    // Logged entry row — open edit modal
+    const logRow = e.target.closest('[data-log-id]')
+    if (logRow) {
+      window.openEditModal(logRow.dataset.logId, 'log')
+      return
+    }
+    // Planned meal row — log it
+    const planRow = e.target.closest('[data-plan-id]')
+    if (planRow) {
+      window.logPlannedMeal(planRow.dataset.planId, planRow.dataset.mealType)
+    }
+  })
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -2768,6 +2796,10 @@ function wireGlobals() {
 
     document.getElementById('edit-name').value = entry.name || ''
     document.getElementById('edit-servings').value = consumed
+    // Set meal type button
+    const mealType = entry.meal_type || getMealTypeFromTime(new Date(entry.logged_at || entry.timestamp))
+    state.editingMealType = mealType
+    setTimeout(() => window.setEditMealType(mealType), 0)
     // Show consumed (already-multiplied) values in fields
     document.getElementById('edit-cal').value = Math.round(entry.calories || 0)
     document.getElementById('edit-protein').value = Math.round(entry.protein || 0)
@@ -2776,6 +2808,18 @@ function wireGlobals() {
     document.getElementById('edit-fiber').value = Math.round(entry.fiber || 0)
     document.getElementById('edit-sugar').value = Math.round(entry.sugar || 0)
     document.getElementById('edit-modal').classList.add('open')
+  }
+
+  window.setEditMealType = (type) => {
+    state.editingMealType = type
+    ;['Breakfast','Lunch','Snack','Dinner'].forEach(t => {
+      const btn = document.getElementById('meal-type-btn-' + t)
+      if (!btn) return
+      btn.style.background = t === type ? 'var(--accent)' : 'var(--bg3)'
+      btn.style.color = t === type ? '#1a1500' : 'var(--text3)'
+      btn.style.borderColor = t === type ? 'var(--accent)' : 'var(--border)'
+      btn.style.fontWeight = t === type ? '600' : '400'
+    })
   }
 
   window.closeEditModal = () => {
@@ -2819,6 +2863,7 @@ function wireGlobals() {
       base_fiber:    base.fiber    || 0,
       base_sugar:    base.sugar    || 0,
       servings_consumed: servings,
+      meal_type: state.editingMealType || null,
     }
     try {
       if (source === 'log') {
