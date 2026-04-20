@@ -339,6 +339,30 @@ function renderPage() {
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
+
+// ─── Meal type helpers ────────────────────────────────────────────────────────
+const MEAL_TYPES = ['Breakfast', 'Lunch', 'Snack', 'Dinner']
+const MEAL_TYPE_ICONS = { Breakfast: '🌅', Lunch: '☀️', Snack: '🍎', Dinner: '🌙' }
+window.MEAL_TYPES = MEAL_TYPES
+window.MEAL_TYPE_ICONS = MEAL_TYPE_ICONS
+
+function getMealTypeFromTime(date) {
+  const h = (date instanceof Date ? date : new Date(date)).getHours()
+  if (h >= 5  && h < 10) return 'Breakfast'
+  if (h >= 10 && h < 14) return 'Lunch'
+  if (h >= 14 && h < 17) return 'Snack'
+  if (h >= 17 && h < 22) return 'Dinner'
+  return 'Snack'
+}
+
+function getTodayPlannedMeals() {
+  if (!state.planner?.meals) return []
+  const today = new Date()
+  const dow = today.getDay()
+  const meals = state.planner.meals[dow] || []
+  return meals.filter(m => !m.is_leftover)
+}
+
 function renderDashboard(container) {
   const h = new Date().getHours()
   const greeting = h < 12 ? 'Good morning.' : h < 17 ? 'Good afternoon.' : 'Good evening.'
@@ -499,8 +523,11 @@ function renderDashboard(container) {
     </div>
 
     <div class="log-card">
-      <div class="log-header"><span class="log-header-title">Today's log</span><button class="clear-btn" onclick="clearTodayLog()">Clear today</button></div>
-      <div id="today-log-body">${renderLogTable(todayLog, true)}</div>
+      <div class="log-header">
+        <span class="log-header-title">Today's meals</span>
+        <button class="clear-btn" onclick="clearTodayLog()">Clear today</button>
+      </div>
+      <div id="today-log-body">${renderTodayMeals(todayLog)}</div>
     </div>
   `
 
@@ -534,7 +561,114 @@ function renderHistory(container) {
   `
 }
 
-function renderLogTable(entries, isToday) {
+function renderTodayMeals(logEntries) {
+  const planned = getTodayPlannedMeals()
+  const enriched = logEntries.map(e => ({
+    ...e,
+    _mealType: e.meal_type || getMealTypeFromTime(new Date(e.logged_at || e.timestamp))
+  }))
+  const loggedNames = new Set(logEntries.map(e => (e.name || '').toLowerCase()))
+  const grouped = {}
+  MEAL_TYPES.forEach(t => { grouped[t] = [] })
+  enriched.forEach(e => { if (grouped[e._mealType]) grouped[e._mealType].push(e) })
+  const plannedByType = {}
+  MEAL_TYPES.forEach(t => { plannedByType[t] = [] })
+  planned.forEach((m, i) => {
+    const type = m.meal_type || MEAL_TYPES[Math.min(i, MEAL_TYPES.length - 1)]
+    if (plannedByType[type]) plannedByType[type].push(m)
+  })
+  const activeMealTypes = MEAL_TYPES.filter(t => grouped[t].length > 0 || plannedByType[t].length > 0)
+  if (!activeMealTypes.length) {
+    return '<div class="log-empty">No meals yet today. Analyze a meal or check off a planned meal to get started.</div>'
+  }
+
+  const html = []
+  activeMealTypes.forEach(mealType => {
+    const logs = grouped[mealType]
+    const plans = plannedByType[mealType]
+    const mealCal = logs.reduce((a, e) => a + (e.calories || 0), 0)
+    const mealP   = logs.reduce((a, e) => a + (e.protein  || 0), 0)
+    const mealC   = logs.reduce((a, e) => a + (e.carbs    || 0), 0)
+    const mealF   = logs.reduce((a, e) => a + (e.fat      || 0), 0)
+    const icon = MEAL_TYPE_ICONS[mealType] || ''
+
+    const macroSummary = logs.length
+      ? '<span style="font-size:11px;color:var(--text3)">'
+        + '<span style="color:var(--accent)">' + Math.round(mealCal) + '</span> kcal'
+        + '<span style="color:var(--protein);margin-left:6px">P' + Math.round(mealP) + '</span>'
+        + '<span style="color:var(--carbs);margin-left:4px">C' + Math.round(mealC) + '</span>'
+        + '<span style="color:var(--fat);margin-left:4px">F' + Math.round(mealF) + '</span>'
+        + '</span>'
+      : ''
+
+    html.push(
+      '<div style="margin-bottom:4px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px;background:var(--bg3)">'
+      + '<span style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px">' + icon + ' ' + mealType + '</span>'
+      + macroSummary
+      + '</div>'
+    )
+
+    // Planned meals
+    plans.forEach(m => {
+      const mealName = m.meal_name || m.name || ''
+      const isLogged = loggedNames.has(mealName.toLowerCase())
+      const checkmark = isLogged
+        ? '<svg width="10" height="10" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>'
+        : ''
+      html.push(
+        '<div style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);opacity:' + (isLogged ? '0.45' : '1') + ';cursor:pointer"'
+        + ' onclick="logPlannedMeal('' + m.id + '', '' + mealType + '')">'
+        + '<div style="width:20px;height:20px;border-radius:50%;border:2px solid ' + (isLogged ? 'var(--protein)' : 'var(--border2)') + ';background:' + (isLogged ? 'var(--protein)' : 'none') + ';flex-shrink:0;display:flex;align-items:center;justify-content:center">'
+        + checkmark + '</div>'
+        + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:13px;color:var(--text2)' + (isLogged ? ';text-decoration:line-through' : '') + '">' + esc(mealName) + '</div>'
+        + '<div style="font-size:11px;color:var(--text3)">Planned · ' + Math.round(m.calories || 0) + ' kcal</div>'
+        + '</div>'
+        + (!isLogged ? '<span style="font-size:11px;color:var(--text3);flex-shrink:0">Log it →</span>' : '')
+        + '</div>'
+      )
+    })
+
+    // Logged entries
+    logs.forEach(e => {
+      const d = new Date(e.logged_at || e.timestamp)
+      const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      const servingBadge = e.servings_consumed && e.servings_consumed != 1
+        ? '<span style="font-size:10px;color:var(--text3);margin-left:4px">x' + e.servings_consumed + '</span>' : ''
+      const entryIcon = MEAL_TYPE_ICONS[e._mealType] || ''
+      html.push(
+        '<div onclick="openEditModal('' + e.id + '', 'log')"'
+        + ' style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer"'
+        + ' onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">'
+        + '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:13px;color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(e.name) + servingBadge + '</div>'
+        + '<div style="font-size:11px;color:var(--text3);margin-top:1px;display:flex;align-items:center;gap:6px">'
+        + '<span>' + timeStr + '</span>'
+        + '<button onclick="changeMealType('' + e.id + '', '' + e._mealType + '');event.stopPropagation()"'
+        + ' style="background:none;border:none;font-size:10px;color:var(--text3);cursor:pointer;padding:0;font-family:inherit"'
+        + ' onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text3)'">'
+        + entryIcon + ' ' + e._mealType + ' ▾</button>'
+        + '</div></div>'
+        + '<div style="text-align:right;flex-shrink:0;font-size:12px">'
+        + '<div style="color:var(--accent);font-weight:600">' + Math.round(e.calories) + ' kcal</div>'
+        + '<div style="color:var(--text3)">P' + Math.round(e.protein) + ' C' + Math.round(e.carbs) + ' F' + Math.round(e.fat) + '</div>'
+        + '</div></div>'
+      )
+    })
+
+    if (!plans.length && !logs.length) {
+      html.push('<div style="padding:10px 16px;font-size:12px;color:var(--text3)">Nothing logged yet</div>')
+    }
+
+    html.push('</div>')
+  })
+
+  return html.join('')
+}
+
+
+
   if (!entries.length) return `<div class="log-empty">${isToday ? 'No entries yet. Analyze a meal to get started.' : 'No history yet.'}</div>`
   return `
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
@@ -2212,10 +2346,9 @@ function showResult(r) {
 }
 
 function refreshTodayLog() {
-  // Update just the today's log table without re-rendering the whole dashboard
   const el = document.getElementById('today-log-body')
   if (!el) return
-  el.innerHTML = renderLogTable(getTodayLog(), true)
+  el.innerHTML = renderTodayMeals(getTodayLog())
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -2570,7 +2703,7 @@ function wireGlobals() {
             return id
           }).catch(() => null)
 
-      const entry = await addMealEntry(state.user.id, { ...e, food_item_id })
+      const entry = await addMealEntry(state.user.id, { ...e, food_item_id, meal_type: getMealTypeFromTime(new Date()) })
       state.log.unshift(entry)
 
       state.currentEntry = null
@@ -4020,6 +4153,45 @@ function wireGlobals() {
       showToast('Error: ' + err.message, 'error')
       if (btn) { btn.disabled = false; btn.textContent = '🍎 Save to My Foods' }
     }
+  }
+
+  window.logPlannedMeal = async (plannerMealId, mealType) => {
+    const allMeals = (state.planner?.meals || []).flat()
+    const m = allMeals.find(x => String(x.id) === String(plannerMealId))
+    if (!m) return
+    const mealName = m.meal_name || m.name || ''
+    const todayLog = getTodayLog()
+    if (todayLog.some(e => (e.name||'').toLowerCase() === mealName.toLowerCase())) {
+      showToast('Already logged today', ''); return
+    }
+    try {
+      const recipe = state.recipes.find(r => r.name?.toLowerCase() === mealName.toLowerCase())
+      const food_item_id = !recipe
+        ? await autoSaveFoodItem(state.user.id, { name: mealName, calories: m.calories, protein: m.protein, carbs: m.carbs, fat: m.fat, fiber: m.fiber||0, sugar: m.sugar||0 }, state.foodItems).catch(() => null)
+        : null
+      const entry = await addMealEntry(state.user.id, {
+        name: mealName, calories: m.calories||0, protein: m.protein||0,
+        carbs: m.carbs||0, fat: m.fat||0, fiber: m.fiber||0, sugar: m.sugar||0,
+        base_calories: m.calories||0, base_protein: m.protein||0,
+        base_carbs: m.carbs||0, base_fat: m.fat||0,
+        base_fiber: m.fiber||0, base_sugar: m.sugar||0,
+        servings_consumed: 1, meal_type: mealType,
+        recipe_id: recipe?.id || null, food_item_id,
+      })
+      state.log.unshift(entry)
+      updateStats()
+      refreshTodayLog()
+      showToast(`${mealName} logged!`, 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.changeMealType = (logId, currentType) => {
+    const idx = MEAL_TYPES.indexOf(currentType)
+    const next = MEAL_TYPES[(idx + 1) % MEAL_TYPES.length]
+    const entry = state.log.find(e => String(e.id) === String(logId))
+    if (entry) entry.meal_type = next
+    updateMealEntry(state.user.id, logId, { meal_type: next }).catch(() => {})
+    refreshTodayLog()
   }
 
   window.toggleUnlimited = async (userId, currentVal) => {

@@ -107,6 +107,7 @@ export async function addMealEntry(userId, entry) {
       notes: entry.notes ?? '',
       food_item_id: entry.food_item_id ?? null,
       recipe_id: entry.recipe_id ?? null,
+      meal_type: entry.meal_type ?? null,
       logged_at: new Date().toISOString()
     })
     .select()
@@ -204,6 +205,7 @@ export async function addPlannerMeal(userId, weekStart, dayIdx, meal) {
       is_leftover: meal.leftover ?? false,
       planned_servings: meal.planned_servings ?? null,
       recipe_id: meal.id ?? null,
+      meal_type: meal.meal_type ?? null,
     })
     .select()
     .single()
