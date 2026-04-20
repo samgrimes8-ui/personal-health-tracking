@@ -133,13 +133,14 @@ export async function initApp(user, container) {
 async function loadAll() {
   const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
 
-  const [goals, log, usage, recipes, weeksWithMeals, foodItems] = await Promise.all([
+  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner] = await Promise.all([
     safe(() => getGoals(state.user.id)),
     safe(() => getMealLog(state.user.id, { limit: 300 })),
     safe(() => getUsageSummary(state.user.id)),
     safe(() => getRecipes(state.user.id)),
     safe(() => getWeeksWithMeals(state.user.id)),
-    safe(() => getFoodItems(state.user.id))
+    safe(() => getFoodItems(state.user.id)),
+    safe(() => getPlannerWeek(state.user.id, getWeekStart()))
   ])
   state.goals = { calories: goals?.calories ?? 2000, protein: goals?.protein ?? 150, carbs: goals?.carbs ?? 200, fat: goals?.fat ?? 65 }
   state.log = log ?? []
@@ -147,6 +148,7 @@ async function loadAll() {
   state.recipes = recipes ?? []
   state.weeksWithMeals = weeksWithMeals ?? []
   state.foodItems = foodItems ?? []
+  if (todayPlanner) state.planner = todayPlanner
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
@@ -2826,6 +2828,7 @@ function wireGlobals() {
     document.getElementById('edit-modal').classList.remove('open')
     state.editingEntry = null
     state.editingBaseMacros = null
+    state.editingMealType = null
   }
 
   window.applyServingsMultiplier = () => {
