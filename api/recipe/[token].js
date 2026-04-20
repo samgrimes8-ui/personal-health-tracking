@@ -1,3 +1,33 @@
+function buildSourceCard(url, og) {
+  if (!url) return ''
+  const domain = (() => { try { return new URL(url).hostname.replace('www.','') } catch { return url } })()
+  const isInstagram = domain.includes('instagram.com')
+  const isTikTok = domain.includes('tiktok.com')
+  const isBlocked = og?.blocked || isInstagram || isTikTok
+  const hasImage = og?.image && !isBlocked
+
+  if (!og || isBlocked || !og.title) {
+    return `<a href="${esc(url)}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:#1E1E1E;border:1px solid #2A2A2A;border-radius:12px;text-decoration:none;color:inherit;margin-bottom:16px">
+      <span style="font-size:20px">${isInstagram ? '📸' : isTikTok ? '🎵' : '🔗'}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;color:#E8C547;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${isInstagram ? 'View on Instagram' : isTikTok ? 'View on TikTok' : 'View original recipe'}</div>
+        <div style="font-size:11px;color:#666;margin-top:1px">${esc(domain)}</div>
+      </div>
+      <span style="color:#666;font-size:13px">↗</span>
+    </a>`
+  }
+
+  return `<a href="${esc(url)}" target="_blank" rel="noopener" style="display:block;border:1px solid #2A2A2A;border-radius:12px;overflow:hidden;text-decoration:none;color:inherit;background:#1E1E1E;margin-bottom:16px">
+    ${hasImage ? `<div style="width:100%;height:180px;overflow:hidden;background:#222"><img src="${esc(og.image)}" alt="" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.style.display='none'" /></div>` : ''}
+    <div style="padding:12px 14px">
+      ${og.siteName ? `<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#666;margin-bottom:4px">${esc(og.siteName)}</div>` : ''}
+      ${og.title ? `<div style="font-size:14px;font-weight:600;color:#F0F0F0;line-height:1.3;margin-bottom:4px">${esc(og.title)}</div>` : ''}
+      ${og.description ? `<div style="font-size:12px;color:#888;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${esc(og.description)}</div>` : ''}
+      <div style="font-size:11px;color:#E8C547;margin-top:8px">View original recipe ↗</div>
+    </div>
+  </a>`
+}
+
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -156,7 +186,7 @@ function renderPage(recipe) {
   <div class="container">
     <h1>${esc(recipe.name)}</h1>
     ${recipe.description ? `<div class="meta">${esc(recipe.description)}</div>` : ''}
-    ${recipe.source_url ? `<div class="meta" style="margin-top:4px">Source: <a href="${esc(recipe.source_url)}" style="color:#E8C547" target="_blank" rel="noopener">${esc(recipe.source_url)}</a></div>` : ''}
+    ${recipe.source_url ? buildSourceCard(recipe.source_url, recipe.og_cache) : ''}
 
     ${(prepTime || cookTime) ? `
     <div class="time-row">

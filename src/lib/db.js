@@ -846,3 +846,11 @@ export async function saveSharedRecipeToLibrary(userId, recipe) {
   if (error) throw error
   return data
 }
+
+export async function saveRecipeOgCache(userId, recipeId, ogData) {
+  if (!supabase) return
+  await supabase.from('recipes')
+    .update({ og_cache: ogData })
+    .eq('id', recipeId)
+    .eq('user_id', userId)
+}

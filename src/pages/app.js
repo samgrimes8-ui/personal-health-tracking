@@ -11,12 +11,13 @@ import {
   logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs,
   getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, uploadScanFile, getScanUrl,
   generateShareToken, shareRecipeWithUser, getIncomingShares, markShareRead, getUnreadShareCount,
-  enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary
+  enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary,
+  saveRecipeOgCache
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
-  generateRecipeInstructions, extractBodyScan
+  generateRecipeInstructions, extractBodyScan, fetchOgMetadata
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -1824,6 +1825,39 @@ function renderRecipesPage(container) {
   })
 }
 
+function buildOgCard(url, og) {
+  if (!url) return ''
+  const domain = (() => { try { return new URL(url).hostname.replace('www.','') } catch { return url } })()
+  const isInstagram = domain.includes('instagram.com')
+  const isTikTok    = domain.includes('tiktok.com')
+  const isBlocked   = isInstagram || isTikTok || og?.blocked
+
+  // No OG data yet — show loading state or clean link fallback
+  if (!og || og.error === 'timeout') {
+    return `<a href="${esc(url)}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);text-decoration:none;color:inherit">
+      <span style="font-size:20px">${isInstagram ? '📸' : isTikTok ? '🎵' : '🔗'}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${isBlocked ? (isInstagram ? 'View on Instagram' : 'View on TikTok') : 'View original recipe'}</div>
+        <div style="font-size:11px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(domain)}</div>
+      </div>
+      <span style="font-size:12px;color:var(--text3)">↗</span>
+    </a>`
+  }
+
+  const hasImage = og.image && !isBlocked
+  return `<a href="${esc(url)}" target="_blank" rel="noopener" style="display:block;border:1px solid var(--border2);border-radius:var(--r);overflow:hidden;text-decoration:none;color:inherit;background:var(--bg3)">
+    ${hasImage ? `<div style="width:100%;height:160px;overflow:hidden;background:var(--bg4)"><img src="${esc(og.image)}" alt="" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.style.display='none'" /></div>` : ''}
+    <div style="padding:12px 14px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+      <div style="flex:1;min-width:0">
+        ${og.siteName ? `<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:4px">${esc(og.siteName)}</div>` : ''}
+        ${og.title ? `<div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.3;margin-bottom:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${esc(og.title)}</div>` : ''}
+        ${og.description ? `<div style="font-size:12px;color:var(--text3);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4">${esc(og.description)}</div>` : ''}
+        <div style="font-size:11px;color:var(--accent);margin-top:6px">View original ↗</div>
+      </div>
+    </div>
+  </a>`
+}
+
 function renderRecipeModalContent(recipe, mode = 'view') {
   const isNew = !recipe.id
   const ingredients = recipe.ingredients || []
@@ -1884,13 +1918,8 @@ function renderRecipeModalContent(recipe, mode = 'view') {
               placeholder="https://... Instagram, YouTube, website..." />
           </div>
         ` : recipe.source_url ? `
-          <div style="margin-bottom:16px">
-            <a href="${esc(recipe.source_url)}" target="_blank" rel="noopener"
-              style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--accent);text-decoration:none;padding:8px 12px;background:rgba(232,197,71,0.08);border:1px solid rgba(232,197,71,0.2);border-radius:var(--r)">
-              <span>🔗</span>
-              <span>View original recipe</span>
-              <span style="font-size:11px;opacity:0.7">↗</span>
-            </a>
+          <div id="og-preview-card" style="margin-bottom:16px">
+            ${buildOgCard(recipe.source_url, recipe.og_cache)}
           </div>
         ` : ''}
 
@@ -4598,6 +4627,20 @@ function wireGlobals() {
     state.editingRecipe = JSON.parse(JSON.stringify(recipe))
     document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, mode)
     document.getElementById('recipe-modal').classList.add('open')
+
+    // Background OG fetch — only if has URL, not yet cached, and in view mode
+    if (mode === 'view' && recipe.source_url && !recipe.og_cache) {
+      fetchOgMetadata(recipe.source_url).then(og => {
+        if (!og) return
+        // Cache in state and DB
+        recipe.og_cache = og
+        state.editingRecipe.og_cache = og
+        saveRecipeOgCache(state.user.id, recipe.id, og).catch(() => {})
+        // Update the card in place if modal still open
+        const card = document.getElementById('og-preview-card')
+        if (card) card.innerHTML = buildOgCard(recipe.source_url, og)
+      }).catch(() => {})
+    }
   }
 
   window.closeRecipeModal = () => {

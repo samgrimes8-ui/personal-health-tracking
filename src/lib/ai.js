@@ -364,3 +364,10 @@ Return ONLY this JSON object, no markdown, no extra text:
   }], { max_tokens: 800 })
   return parseJSON(data)
 }
+export async function fetchOgMetadata(url) {
+  try {
+    const res = await fetch(`/api/og?url=${encodeURIComponent(url)}`)
+    if (!res.ok) return null
+    return await res.json()
+  } catch { return null }
+}
