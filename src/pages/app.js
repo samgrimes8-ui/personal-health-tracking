@@ -10,6 +10,7 @@ import {
   saveRecipeInstructions, autoSaveFoodItem,
   logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs,
   getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, uploadScanFile, getScanUrl,
+  generateShareToken, shareRecipeWithUser, getIncomingShares, markShareRead, getUnreadShareCount,
   enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary
 } from '../lib/db.js'
 import {
@@ -29,6 +30,7 @@ let state = {
   foodItems: [],
   bodyMetrics: null,
   checkins: [],
+  incomingShares: [],
   units: null, // set on init from locale
   newUsersCount: 0,
   editingFoodItem: null,
@@ -162,7 +164,7 @@ export async function initApp(user, container) {
 async function loadAll() {
   const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
 
-  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner, bodyMetrics, checkins] = await Promise.all([
+  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner, bodyMetrics, checkins, incomingShares] = await Promise.all([
     safe(() => getGoals(state.user.id)),
     safe(() => getMealLog(state.user.id, { limit: 300 })),
     safe(() => getUsageSummary(state.user.id)),
@@ -171,7 +173,8 @@ async function loadAll() {
     safe(() => getFoodItems(state.user.id)),
     safe(() => getPlannerWeek(state.user.id, getWeekStart())),
     safe(() => getBodyMetrics(state.user.id)),
-    safe(() => getCheckins(state.user.id))
+    safe(() => getCheckins(state.user.id)),
+    safe(() => getIncomingShares(state.user.id))
   ])
   state.goals = { calories: goals?.calories ?? 2000, protein: goals?.protein ?? 150, carbs: goals?.carbs ?? 200, fat: goals?.fat ?? 65 }
   state.log = log ?? []
@@ -182,6 +185,7 @@ async function loadAll() {
   if (todayPlanner) state.planner = todayPlanner
   state.bodyMetrics = bodyMetrics
   state.checkins = checkins ?? []
+  state.incomingShares = incomingShares ?? []
   // Auto-detect units from locale (US = imperial, rest = metric)
   if (!state.units) {
     const locale = navigator.language || 'en-US'
@@ -346,6 +350,51 @@ function renderShell(container) {
             Will also be added to <span id="leftover-day-label">Monday</span> as lunch
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Recipe share modal -->
+    <div class="modal-overlay" id="share-modal">
+      <div class="modal-box" style="max-width:440px">
+        <button class="modal-close" onclick="closeShareModal()">×</button>
+        <h3>Share recipe</h3>
+        <div style="font-size:13px;color:var(--text3);margin-bottom:16px" id="share-recipe-name"></div>
+
+        <!-- Public link -->
+        <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:16px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">🔗 Public link</div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Anyone with this link can view the recipe — no account needed.</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <div id="share-link-display" style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              Tap Generate to create a link
+            </div>
+            <button id="share-link-btn" onclick="generateShareLink()"
+              style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:9px 14px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">
+              Generate
+            </button>
+          </div>
+          <div id="share-link-actions" style="display:none;gap:8px;margin-top:8px">
+            <button onclick="copyShareLink()" style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px;font-size:12px;font-family:inherit;cursor:pointer;color:var(--text)">📋 Copy link</button>
+            <button onclick="nativeShareRecipe()" style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px;font-size:12px;font-family:inherit;cursor:pointer;color:var(--text)">↗ Share</button>
+          </div>
+        </div>
+
+        <!-- Send to user -->
+        <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:16px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">👤 Send to MacroLens user</div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Recipe will appear in their Recipes page.</div>
+          <div style="display:flex;gap:8px">
+            <input type="email" id="share-email-input" placeholder="their@email.com"
+              style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+            <button onclick="sendRecipeToUser()"
+              style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:9px 14px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer">
+              Send
+            </button>
+          </div>
+          <div id="share-send-status" style="font-size:12px;color:var(--text3);margin-top:6px;min-height:18px"></div>
+        </div>
+
+        <button onclick="closeShareModal()" class="btn-cancel" style="width:100%">Done</button>
       </div>
     </div>
 
@@ -1698,9 +1747,35 @@ function renderFoodItemModal(item, editingComponents) {
 // ─── Recipes Page ─────────────────────────────────────────────────────────────
 function renderRecipesPage(container) {
   const recipes = state.recipes
+  const unreadShares = (state.incomingShares || []).filter(s => !s.is_read)
+  const allShares = state.incomingShares || []
+
   container.innerHTML = `
     <div class="greeting">Recipes</div>
     <div class="greeting-sub">Saved recipes with ingredients and macros per serving.</div>
+
+    ${allShares.length ? `
+    <div class="log-card" style="margin-bottom:16px">
+      <div class="log-header">
+        <span class="log-header-title">📬 Shared with me ${unreadShares.length ? `<span style="background:var(--red);color:white;border-radius:999px;font-size:10px;padding:1px 6px;margin-left:6px">${unreadShares.length} new</span>` : ''}</span>
+      </div>
+      <div style="padding:4px 0">
+        ${allShares.map(s => {
+          const r = s.recipes
+          if (!r) return ''
+          return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);${!s.is_read ? 'background:rgba(232,197,71,0.04)' : ''}">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:${s.is_read ? '400' : '600'};color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name || 'Recipe')}</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:2px">${Math.round(r.calories||0)} kcal · ${Math.round(r.protein||0)}g P · shared ${new Date(s.created_at).toLocaleDateString()}</div>
+            </div>
+            <button onclick="saveSharedRecipe('${s.id}','${r.id}')"
+              style="margin-left:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:6px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
+              Save to mine
+            </button>
+          </div>`
+        }).join('')}
+      </div>
+    </div>` : ''}
 
     <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">
       <button class="analyze-btn" style="width:auto;padding:10px 20px" onclick="openNewRecipeModal()">+ New recipe</button>
@@ -1719,7 +1794,14 @@ function renderRecipesPage(container) {
           <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openRecipeModal('${r.id}')">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
               <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);flex:1;margin-right:12px">${esc(r.name)}</div>
-              <span style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:4px;padding:2px 7px;white-space:nowrap">${r.servings} serving${r.servings !== 1 ? 's' : ''}</span>
+              <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+                <button onclick="openShareModal('${r.id}');event.stopPropagation()"
+                  title="Share recipe"
+                  style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
+                  onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+                  onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text3)'">↗ Share</button>
+                <span style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:4px;padding:2px 7px;white-space:nowrap">${r.servings} serving${r.servings !== 1 ? 's' : ''}</span>
+              </div>
             </div>
             ${r.description ? `<div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.5">${esc(r.description)}</div>` : ''}
             <div class="macro-pills" style="margin-bottom:10px">
@@ -3407,6 +3489,156 @@ function wireGlobals() {
     setVal('goal-cal', cal); setVal('goal-p', protein)
     setVal('goal-c', carbs); setVal('goal-f', fat)
     showToast('Targets applied — tap Save to confirm', 'success')
+  }
+
+  // ── Recipe Sharing ──────────────────────────────────────────────────────
+  window.saveSharedRecipe = async (shareId, recipeId) => {
+    try {
+      // Fetch the shared recipe and copy it to user's recipes
+      const { data: orig } = await supabase
+        .from('recipes')
+        .select('*')
+        .eq('id', recipeId)
+        .single()
+      if (!orig) throw new Error('Recipe not found')
+
+      // Save as new recipe for this user
+      const { data: saved } = await supabase
+        .from('recipes')
+        .insert({
+          user_id: state.user.id,
+          name: orig.name,
+          description: orig.description,
+          servings: orig.servings,
+          calories: orig.calories,
+          protein: orig.protein,
+          carbs: orig.carbs,
+          fat: orig.fat,
+          fiber: orig.fiber,
+          sugar: orig.sugar,
+          ingredients: orig.ingredients,
+          instructions: orig.instructions,
+          source_url: orig.source_url,
+          notes: orig.notes,
+        })
+        .select()
+        .single()
+      if (saved) state.recipes.unshift(saved)
+
+      // Mark share as read
+      await markShareRead(shareId)
+      const share = state.incomingShares.find(s => s.id === shareId)
+      if (share) share.is_read = true
+
+      renderPage()
+      showToast(`"${orig.name}" saved to your recipes!`, 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.openShareModal = (recipeId) => {
+    const recipe = state.recipes.find(r => r.id === recipeId)
+    if (!recipe) return
+    state.sharingRecipeId = recipeId
+    state.sharingToken = recipe.share_token || null
+    document.getElementById('share-recipe-name').textContent = recipe.name
+    document.getElementById('share-email-input').value = ''
+    document.getElementById('share-send-status').textContent = ''
+    const linkDisplay = document.getElementById('share-link-display')
+    const linkActions = document.getElementById('share-link-actions')
+    const linkBtn = document.getElementById('share-link-btn')
+    if (recipe.share_token) {
+      const url = `${location.origin}/api/recipe?token=${recipe.share_token}`
+      linkDisplay.textContent = url
+      linkDisplay.style.color = 'var(--text)'
+      linkBtn.textContent = 'Regenerate'
+      linkActions.style.display = 'flex'
+    } else {
+      linkDisplay.textContent = 'Tap Generate to create a link'
+      linkDisplay.style.color = 'var(--text3)'
+      linkBtn.textContent = 'Generate'
+      linkActions.style.display = 'none'
+    }
+    document.getElementById('share-modal').classList.add('open')
+  }
+
+  window.closeShareModal = () => {
+    document.getElementById('share-modal').classList.remove('open')
+    state.sharingRecipeId = null
+  }
+
+  window.generateShareLink = async () => {
+    const btn = document.getElementById('share-link-btn')
+    btn.textContent = 'Generating...'
+    btn.disabled = true
+    try {
+      const token = await generateShareToken(state.user.id, state.sharingRecipeId)
+      const recipe = state.recipes.find(r => r.id === state.sharingRecipeId)
+      if (recipe) { recipe.share_token = token; recipe.is_public = true }
+      state.sharingToken = token
+      const url = `${location.origin}/api/recipe?token=${token}`
+      const linkDisplay = document.getElementById('share-link-display')
+      linkDisplay.textContent = url
+      linkDisplay.style.color = 'var(--text)'
+      document.getElementById('share-link-actions').style.display = 'flex'
+      btn.textContent = 'Regenerate'
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+    btn.disabled = false
+  }
+
+  window.copyShareLink = async () => {
+    const url = `${location.origin}/api/recipe?token=${state.sharingToken}`
+    try {
+      await navigator.clipboard.writeText(url)
+      showToast('Link copied!', 'success')
+    } catch { showToast('Copy: ' + url, '') }
+  }
+
+  window.nativeShareRecipe = async () => {
+    const recipe = state.recipes.find(r => r.id === state.sharingRecipeId)
+    const url = `${location.origin}/api/recipe?token=${state.sharingToken}`
+    if (navigator.share) {
+      await navigator.share({ title: recipe?.name || 'Recipe', text: `Check out this recipe on MacroLens`, url })
+    } else {
+      copyShareLink()
+    }
+  }
+
+  window.sendRecipeToUser = async () => {
+    const email = document.getElementById('share-email-input').value.trim()
+    const status = document.getElementById('share-send-status')
+    if (!email) { status.textContent = 'Enter an email address'; return }
+    status.textContent = 'Sending...'
+    try {
+      await shareRecipeWithUser(state.user.id, state.sharingRecipeId, email)
+      status.style.color = 'var(--protein)'
+      status.textContent = `✓ Sent to ${email}`
+      document.getElementById('share-email-input').value = ''
+    } catch (err) {
+      status.style.color = 'var(--red)'
+      status.textContent = 'Error: ' + err.message
+    }
+  }
+
+  document.getElementById('share-modal')?.addEventListener('click', e => {
+    if (e.target.id === 'share-modal') closeShareModal()
+  })
+
+  // Check for incoming shared recipes and show notification
+  const unreadShares = (state.incomingShares || []).filter(s => !s.is_read)
+  if (unreadShares.length) {
+    setTimeout(() => {
+      showToast(`📬 ${unreadShares.length} recipe${unreadShares.length > 1 ? 's' : ''} shared with you — check Recipes!`, 'success')
+      // Show badge on Recipes nav item
+      const navRecipes = document.getElementById('nav-recipes')
+      if (navRecipes && !navRecipes.querySelector('.share-badge')) {
+        const badge = document.createElement('span')
+        badge.className = 'share-badge'
+        badge.textContent = unreadShares.length
+        badge.style.cssText = 'position:absolute;top:4px;right:4px;background:var(--red);color:white;border-radius:999px;font-size:9px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center'
+        navRecipes.style.position = 'relative'
+        navRecipes.appendChild(badge)
+      }
+    }, 2000)
   }
 
   window.showMethodologyModal = () => {
@@ -5226,6 +5458,22 @@ function wireGlobals() {
     if (entry) entry.meal_type = next
     updateMealEntry(state.user.id, logId, { meal_type: next }).catch(() => {})
     refreshTodayLog()
+  }
+
+  // Check if user arrived via a "Save recipe" from a shared link
+  const pendingRecipe = localStorage.getItem('macrolens_save_recipe')
+  if (pendingRecipe) {
+    localStorage.removeItem('macrolens_save_recipe')
+    try {
+      const recipeData = JSON.parse(pendingRecipe)
+      const saved = await saveSharedRecipeToLibrary(state.user.id, recipeData)
+      state.recipes.unshift(saved)
+      showToast(`"${saved.name}" saved to your recipes!`, 'success')
+      state.currentPage = 'recipes'
+      sessionStorage.setItem('macrolens_page', 'recipes')
+    } catch (e) {
+      console.warn('Failed to save shared recipe:', e.message)
+    }
   }
 
   window.refreshAdminPanel = () => loadAdminPanel()
