@@ -536,30 +536,44 @@ function renderHistory(container) {
 
 function renderLogTable(entries, isToday) {
   if (!entries.length) return `<div class="log-empty">${isToday ? 'No entries yet. Analyze a meal to get started.' : 'No history yet.'}</div>`
-  return entries.map(e => {
-    const d = new Date(e.logged_at || e.timestamp)
-    const timeStr = isToday
-      ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-    const servingBadge = e.servings_consumed && e.servings_consumed != 1
-      ? `<span style="font-size:10px;color:var(--text3);margin-left:5px">×${e.servings_consumed}</span>` : ''
-    return `
-      <div onclick="openEditModal('${e.id}', 'log')" style="display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--border);cursor:pointer"
-        onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='none'">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:14px;color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-            ${esc(e.name)}${servingBadge}
-          </div>
-          <div style="font-size:11px;color:var(--text3);margin-top:2px">${timeStr}</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;font-size:12px">
-          <span style="color:var(--accent);font-weight:600">${Math.round(e.calories)}</span>
-          <span style="color:var(--protein)">P${Math.round(e.protein)}</span>
-          <span style="color:var(--carbs)">C${Math.round(e.carbs)}</span>
-          <span style="color:var(--fat)">F${Math.round(e.fat)}</span>
-        </div>
-      </div>`
-  }).join('')
+  return `
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table class="log-table" style="min-width:480px;width:100%">
+        <thead>
+          <tr>
+            <th style="text-align:left">Meal</th>
+            <th>${isToday ? 'Time' : 'Date'}</th>
+            <th>Cal</th>
+            <th>P</th>
+            <th>C</th>
+            <th>F</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${entries.map(e => {
+            const d = new Date(e.logged_at || e.timestamp)
+            const timeStr = isToday
+              ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+            const servingBadge = e.servings_consumed && e.servings_consumed != 1
+              ? `<span style="font-size:10px;color:var(--text3);margin-left:4px">×${e.servings_consumed}</span>` : ''
+            return `<tr style="cursor:pointer" onclick="openEditModal('${e.id}', 'log')">
+              <td class="td-name" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${esc(e.name)}${servingBadge}
+              </td>
+              <td class="td-time">${timeStr}</td>
+              <td class="td-cal" style="color:var(--accent);font-weight:600">${Math.round(e.calories)}</td>
+              <td class="td-p" style="color:var(--protein)">${Math.round(e.protein)}g</td>
+              <td class="td-c" style="color:var(--carbs)">${Math.round(e.carbs)}g</td>
+              <td class="td-f" style="color:var(--fat)">${Math.round(e.fat)}g</td>
+              <td><button class="td-act" onclick="openEditModal('${e.id}','log');event.stopPropagation()">✎</button></td>
+            </tr>`
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `
 }
 
 // ─── Planner ──────────────────────────────────────────────────────────────────
