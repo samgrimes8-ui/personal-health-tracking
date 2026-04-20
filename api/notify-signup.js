@@ -9,7 +9,8 @@ export const config = { runtime: 'edge' }
 export default async function handler(req) {
   // Verify this is from Supabase (shared secret)
   const secret = req.headers.get('x-webhook-secret')
-  if (secret !== process.env.WEBHOOK_SECRET) {
+  const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'macrolens-c9524079d80852f403308a0a83c150cd'
+  if (secret !== WEBHOOK_SECRET) {
     return new Response('Unauthorized', { status: 401 })
   }
 
@@ -22,7 +23,7 @@ export default async function handler(req) {
   const joinedAt = user?.created_at ? new Date(user.created_at).toLocaleString('en-US', { timeZone: 'America/Chicago' }) : 'now'
 
   // Send email via Resend
-  const RESEND_API_KEY = process.env.RESEND_API_KEY
+  const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_3mqB6y1N_5DiZWBUVtU9iKT1o2qcJKbiM'
   if (!RESEND_API_KEY) return new Response('No Resend key', { status: 500 })
 
   const emailRes = await fetch('https://api.resend.com/emails', {
@@ -32,7 +33,7 @@ export default async function handler(req) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: 'MacroLens <notifications@macrolens.app>',
+      from: 'MacroLens <onboarding@resend.dev>',
       to: ['sam.grimes8@gmail.com'],
       subject: `🎉 New MacroLens user: ${email}`,
       html: `
