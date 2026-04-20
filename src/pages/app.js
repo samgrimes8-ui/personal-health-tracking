@@ -3230,9 +3230,15 @@ function wireGlobals() {
         reader.readAsDataURL(file)
       })
       const b64 = dataUrl.split(',')[1]
-      // Normalize media type — Claude doesn't support heic, treat as jpeg
-      const rawType = file.type || 'image/jpeg'
-      const mediaType = rawType === 'image/heic' || rawType === 'image/heif' ? 'image/jpeg' : rawType
+      // Detect media type — iOS often gives empty type or heic
+      // Claude supports: image/jpeg, image/png, image/gif, image/webp, application/pdf
+      const rawType = file.type || ''
+      let mediaType = 'image/jpeg' // safe default
+      if (rawType === 'application/pdf') mediaType = 'application/pdf'
+      else if (rawType === 'image/png') mediaType = 'image/png'
+      else if (rawType === 'image/webp') mediaType = 'image/webp'
+      else if (rawType === 'image/gif') mediaType = 'image/gif'
+      // heic/heif → jpeg (Claude doesn't support heic, but FileReader converts it)
 
       // Extract with 30s timeout
       let extracted = null
@@ -3286,16 +3292,18 @@ function wireGlobals() {
       const date = document.getElementById('ci-date')?.value || new Date().toISOString().split('T')[0]
       const notes = document.getElementById('ci-notes')?.value?.trim() || ''
 
-      // Upload scan file if present
+      // Upload scan file if present — non-blocking, never fails the checkin
       let scanPath = null
       if (state.pendingCheckinScan?.file) {
         try {
           scanPath = await uploadScanFile(state.user.id, state.pendingCheckinScan.file)
         } catch (e) {
-          showToast('Scan upload failed — saving check-in without file', '')
+          console.warn('Scan upload failed (storage not configured?):', e.message)
+          // Continue saving checkin without the file — data is what matters
         }
       }
 
+      // Always save the checkin regardless of file upload outcome
       const checkin = await saveCheckin(state.user.id, {
         checked_in_at: date,
         weight_kg: weight,
