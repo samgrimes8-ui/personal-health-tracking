@@ -348,6 +348,78 @@ function renderShell(container) {
       </div>
     </div>
 
+    <!-- Methodology modal -->
+    <div class="modal-overlay" id="methodology-modal">
+      <div class="modal-box" style="max-width:560px;max-height:85vh;overflow-y:auto">
+        <button class="modal-close" onclick="closeMethodologyModal()">×</button>
+        <h3 style="color:var(--accent);margin-bottom:4px">How macros are calculated</h3>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:20px">Based on peer-reviewed nutrition science</div>
+
+        <div style="display:flex;flex-direction:column;gap:16px;font-size:13px">
+
+          <div>
+            <div style="font-weight:600;color:var(--text);margin-bottom:6px">Step 1 — Basal Metabolic Rate (BMR)</div>
+            <div style="color:var(--text3);margin-bottom:8px">Calories your body burns at complete rest. Two formulas are used:</div>
+            <div style="background:var(--bg3);border-radius:var(--r);padding:10px 12px;margin-bottom:6px">
+              <div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:4px">✓ Katch-McArdle (when body fat % is known — most accurate)</div>
+              <div style="font-family:monospace;font-size:12px;color:var(--text)">BMR = 370 + (21.6 × Lean Body Mass kg)</div>
+            </div>
+            <div style="background:var(--bg3);border-radius:var(--r);padding:10px 12px">
+              <div style="font-size:11px;font-weight:600;color:var(--text3);margin-bottom:4px">⚠ Mifflin-St Jeor (fallback without body fat %)</div>
+              <div style="font-family:monospace;font-size:12px;color:var(--text)">BMR = (10 × kg) + (6.25 × cm) − (5 × age) ± 5</div>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-weight:600;color:var(--text);margin-bottom:6px">Step 2 — Total Daily Energy Expenditure (TDEE)</div>
+            <div style="color:var(--text3);margin-bottom:8px">BMR × activity multiplier (Harris-Benedict scale):</div>
+            <div style="background:var(--bg3);border-radius:var(--r);padding:10px 12px">
+              <div style="display:flex;flex-direction:column;gap:4px;font-size:12px">
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Sedentary</span><span style="font-family:monospace;color:var(--text)">× 1.20</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Lightly active (1–3x/wk)</span><span style="font-family:monospace;color:var(--text)">× 1.375</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Moderately active (3–5x/wk)</span><span style="font-family:monospace;color:var(--text)">× 1.55</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Very active (6–7x/wk)</span><span style="font-family:monospace;color:var(--text)">× 1.725</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Extremely active</span><span style="font-family:monospace;color:var(--text)">× 1.90</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-weight:600;color:var(--text);margin-bottom:6px">Step 3 — Calorie Target</div>
+            <div style="background:var(--bg3);border-radius:var(--r);padding:10px 12px;font-size:12px">
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Lose fat — Slow</span><span style="font-family:monospace;color:var(--text)">TDEE − 250 kcal</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Lose fat — Moderate</span><span style="font-family:monospace;color:var(--text)">TDEE − 400 kcal</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Lose fat — Aggressive</span><span style="font-family:monospace;color:var(--text)">TDEE − 600 kcal</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Maintain</span><span style="font-family:monospace;color:var(--text)">TDEE</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Build muscle</span><span style="font-family:monospace;color:var(--text)">TDEE + 250–400 kcal</span></div>
+              </div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text3)">Minimum 1,200 kcal/day floor enforced.</div>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-weight:600;color:var(--text);margin-bottom:6px">Step 4 — Macro Distribution</div>
+            <div style="background:var(--bg3);border-radius:var(--r);padding:10px 12px;font-size:12px;display:flex;flex-direction:column;gap:6px">
+              <div><span style="color:var(--protein);font-weight:600">Protein: </span><span style="color:var(--text3)">1.0 g per lb of lean body mass (or 0.75× total weight if BF% unknown)</span></div>
+              <div><span style="color:var(--fat);font-weight:600">Fat: </span><span style="color:var(--text3)">25% of total calorie target ÷ 9</span></div>
+              <div><span style="color:var(--carbs);font-weight:600">Carbs: </span><span style="color:var(--text3)">Remaining calories ÷ 4 (min 50g/day)</span></div>
+            </div>
+          </div>
+
+          <div style="padding:10px 12px;background:rgba(232,197,71,0.08);border:1px solid rgba(232,197,71,0.2);border-radius:var(--r);font-size:11px;color:var(--text3)">
+            <strong style="color:var(--accent)">References:</strong> Mifflin et al. (1990) AJCN; Katch-McArdle (2011); Harris-Benedict activity factors; ISSN Protein Position Stand (2017); Dietary Reference Intakes, National Academies (2005).
+          </div>
+
+          <button onclick="closeMethodologyModal()"
+            style="width:100%;padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Methodology modal -->
     <!-- Check-in modal -->
     <div class="modal-overlay" id="checkin-modal">
       <div class="modal-box" style="max-width:480px">
@@ -2370,9 +2442,13 @@ function renderGoalsPage(container) {
       <div id="calc-targets">
       ${targets ? `
         <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:12px">
-          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;display:flex;align-items:center;gap:6px">
             Calculated daily targets
-            ${weeks ? `<span style="font-weight:400;color:var(--text3);margin-left:8px">~${weeks} weeks to goal</span>` : ''}
+            ${weeks ? `<span style="font-weight:400;color:var(--text3)">~${weeks} weeks to goal</span>` : ''}
+            <button onclick="showMethodologyModal()" title="How are these calculated?"
+              style="background:none;border:1px solid var(--border2);border-radius:50%;width:18px;height:18px;cursor:pointer;font-size:11px;color:var(--text3);display:inline-flex;align-items:center;justify-content:center;padding:0;font-family:inherit;flex-shrink:0;margin-left:auto"
+              onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+              onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text3)'">i</button>
           </div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center">
             <div><div style="font-size:18px;font-weight:700;color:var(--accent)">${targets.calories}</div><div style="font-size:10px;color:var(--text3)">kcal</div></div>
@@ -3246,9 +3322,11 @@ function wireGlobals() {
       if (targets) {
         targEl.innerHTML = `
           <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:12px">
-            <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">
+            <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;display:flex;align-items:center;gap:6px">
               Calculated daily targets
-              ${weeks ? `<span style="font-weight:400;color:var(--text3);margin-left:8px">~${weeks} weeks to goal</span>` : ''}
+              ${weeks ? `<span style="font-weight:400;color:var(--text3)">~${weeks} weeks to goal</span>` : ''}
+              <button onclick="showMethodologyModal()" title="How are these calculated?"
+                style="background:none;border:1px solid var(--border2);border-radius:50%;width:18px;height:18px;cursor:pointer;font-size:11px;color:var(--text3);display:inline-flex;align-items:center;justify-content:center;padding:0;font-family:inherit;flex-shrink:0;margin-left:auto">i</button>
             </div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center">
               <div><div style="font-size:18px;font-weight:700;color:var(--accent)">${targets.calories}</div><div style="font-size:10px;color:var(--text3)">kcal</div></div>
@@ -3309,6 +3387,16 @@ function wireGlobals() {
     setVal('goal-c', carbs); setVal('goal-f', fat)
     showToast('Targets applied — tap Save to confirm', 'success')
   }
+
+  window.showMethodologyModal = () => {
+    document.getElementById('methodology-modal')?.classList.add('open')
+  }
+  window.closeMethodologyModal = () => {
+    document.getElementById('methodology-modal')?.classList.remove('open')
+  }
+  document.getElementById('methodology-modal')?.addEventListener('click', e => {
+    if (e.target.id === 'methodology-modal') closeMethodologyModal()
+  })
 
   window.openCheckinModal = () => {
     state.pendingCheckinScan = null
