@@ -353,35 +353,47 @@ function renderShell(container) {
       <div class="modal-box" style="max-width:480px">
         <button class="modal-close" onclick="closeCheckinModal()">×</button>
         <h3>Weekly check-in</h3>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-          <div class="modal-field"><label id="ci-weight-label">Weight (lbs)</label><input type="number" step="0.1" id="ci-weight" placeholder="175" /></div>
-          <div class="modal-field"><label>Body fat %</label><input type="number" step="0.1" id="ci-bf" placeholder="20" /></div>
-          <div class="modal-field"><label>Muscle mass (lbs)</label><input type="number" step="0.1" id="ci-muscle" placeholder="" /></div>
-          <div class="modal-field"><label>Check-in date</label><input type="date" id="ci-date" /></div>
+
+        <!-- Section 1: Manual metrics -->
+        <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:14px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">📊 Measurements</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="modal-field"><label id="ci-weight-label">Weight (lbs)</label><input type="number" step="0.1" id="ci-weight" placeholder="210" /></div>
+            <div class="modal-field"><label>Body fat %</label><input type="number" step="0.1" id="ci-bf" placeholder="17" /></div>
+            <div class="modal-field"><label>Muscle mass (lbs)</label><input type="number" step="0.1" id="ci-muscle" placeholder="101" /></div>
+            <div class="modal-field"><label>Check-in date</label><input type="date" id="ci-date" /></div>
+          </div>
         </div>
-        <div class="modal-field" style="margin-bottom:14px">
-          <label>Scan date <span style="font-weight:400;color:var(--text3)">(if uploading old scan)</span></label>
-          <input type="date" id="ci-scan-date" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none" />
-        </div>
-        <div class="modal-field">
-          <label>Notes (optional)</label>
-          <textarea id="ci-notes" placeholder="How are you feeling? Any observations..."
-            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none;resize:none;min-height:60px"></textarea>
-        </div>
-        <!-- Scan upload -->
-        <div style="margin-bottom:16px">
-          <label style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:8px">InBody / DEXA scan (optional)</label>
+
+        <!-- Section 2: Scan upload -->
+        <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:14px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">📄 InBody / DEXA scan</div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Upload your scan and AI will extract all metrics automatically — or fill in manually above.</div>
           <div id="scan-upload-area" onclick="document.getElementById('scan-file-input').click()"
-            style="border:1.5px dashed var(--border2);border-radius:var(--r);padding:16px;text-align:center;cursor:pointer;background:var(--bg3)">
+            style="border:1.5px dashed var(--border2);border-radius:var(--r);padding:14px;text-align:center;cursor:pointer;background:var(--bg2);transition:border-color 0.2s"
+            onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
             <div id="scan-upload-inner">
-              <div style="font-size:24px;margin-bottom:4px">📄</div>
-              <div style="font-size:13px;color:var(--text2)">Upload scan (PDF or image)</div>
-              <div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract your metrics automatically</div>
+              <div style="font-size:28px;margin-bottom:4px">📷</div>
+              <div style="font-size:13px;color:var(--accent);font-weight:500">Tap to upload scan</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:2px">Photo, screenshot, or PDF · AI reads all values</div>
             </div>
           </div>
           <input type="file" id="scan-file-input" accept="application/pdf,image/*" style="display:none" onchange="handleScanUpload(this.files[0])" />
-          <div id="scan-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center"></div>
+          <div id="scan-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center;min-height:18px"></div>
+          <!-- Scan date — only shown after upload or manually -->
+          <div class="modal-field" style="margin-top:10px">
+            <label>Scan date <span style="font-weight:400;color:var(--text3);font-size:10px">(date on the report)</span></label>
+            <input type="date" id="ci-scan-date" style="width:100%;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none" />
+          </div>
         </div>
+
+        <!-- Notes -->
+        <div class="modal-field" style="margin-bottom:16px">
+          <label>Notes (optional)</label>
+          <textarea id="ci-notes" placeholder="How are you feeling? Energy levels, sleep, observations..."
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none;resize:none;min-height:56px"></textarea>
+        </div>
+
         <div class="modal-actions">
           <button class="btn-cancel" onclick="closeCheckinModal()">Cancel</button>
           <button class="btn-save" onclick="saveCheckinHandler()">Save check-in</button>
@@ -2365,7 +2377,7 @@ function renderGoalsPage(container) {
         <div><label class="field-label">Carbs (g)</label>${inp('goal-c','number',state.goals.carbs)}</div>
         <div><label class="field-label">Fat (g)</label>${inp('goal-f','number',state.goals.fat)}</div>
       </div>
-      <button class="analyze-btn" onclick="saveGoalsHandler()">Save all settings</button>
+      <button class="analyze-btn" onclick="saveGoalsHandler()">Calculate &amp; Save</button>
     </div>
 
     <!-- Weekly check-in -->

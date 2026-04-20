@@ -50,7 +50,10 @@ export async function saveGoals(userId, goals) {
   if (!supabase) { setLocalFallback('macrolens_goals', goals); return goals }
   const { data, error } = await supabase
     .from('goals')
-    .upsert({ user_id: userId, ...goals, updated_at: new Date().toISOString() })
+    .upsert(
+      { user_id: userId, ...goals, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id' }
+    )
     .select()
     .single()
   if (error) throw error
