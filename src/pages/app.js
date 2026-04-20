@@ -2502,14 +2502,27 @@ function wireGlobals() {
   }
 
   window.toggleSidebar = () => {
-    document.getElementById('sidebar')?.classList.toggle('open')
-    document.getElementById('sidebar-overlay')?.classList.toggle('visible')
+    const sb = document.getElementById('sidebar')
+    const ov = document.getElementById('sidebar-overlay')
+    const isOpen = sb?.classList.contains('open')
+    if (isOpen) {
+      closeSidebar()
+    } else {
+      sb?.classList.add('open')
+      ov?.classList.add('visible')
+    }
   }
   window.closeSidebar = () => {
     const sb = document.getElementById('sidebar')
     const ov = document.getElementById('sidebar-overlay')
-    if (sb) { sb.classList.remove('open'); sb.style.transform = '' }
-    if (ov) { ov.classList.remove('visible'); ov.style.opacity = ''; ov.style.pointerEvents = '' }
+    if (!sb) return
+    sb.classList.remove('open')
+    // Force inline transform to match closed state — prevents transition fighting
+    if (window.innerWidth <= 768) {
+      sb.style.transform = 'translateX(-100%)'
+      setTimeout(() => { if (sb) sb.style.transform = '' }, 300)
+    }
+    if (ov) { ov.classList.remove('visible') }
   }
 
   window.analyzeFoodHandler = async () => {
