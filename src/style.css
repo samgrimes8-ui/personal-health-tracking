@@ -297,3 +297,33 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
 
 .field-label { font-size: 12px; color: var(--text3); display: block; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
 
+
+/* ─── Capacitor / PWA Safe Areas ────────────────────────────────────────────── */
+/* Handles iPhone notch, Dynamic Island, and Android gesture bar */
+
+.app {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.sidebar {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Fixed bottom modals need bottom safe area */
+.modal-box {
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+}
+
+/* CTA bars on shared recipe page */
+.cta {
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+/* Hamburger needs to clear status bar on native */
+@supports (padding-top: env(safe-area-inset-top)) {
+  .hamburger {
+    top: calc(12px + env(safe-area-inset-top));
+  }
+}
