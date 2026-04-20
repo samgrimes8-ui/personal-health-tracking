@@ -3240,11 +3240,39 @@ function wireGlobals() {
       else if (rawType === 'image/gif') mediaType = 'image/gif'
       // heic/heif → jpeg (Claude doesn't support heic, but FileReader converts it)
 
+      // Resize image to max 1500px — Claude has a 5MB limit and iPhone photos are 5-8MB
+      let finalB64 = b64
+      if (mediaType !== 'application/pdf') {
+        try {
+          finalB64 = await new Promise((res, rej) => {
+            const img = new Image()
+            img.onload = () => {
+              const MAX = 1500
+              let { width: w, height: h } = img
+              if (w > MAX || h > MAX) {
+                const scale = MAX / Math.max(w, h)
+                w = Math.round(w * scale)
+                h = Math.round(h * scale)
+              }
+              const canvas = document.createElement('canvas')
+              canvas.width = w; canvas.height = h
+              canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+              // Export as jpeg quality 85
+              const resized = canvas.toDataURL('image/jpeg', 0.85)
+              res(resized.split(',')[1])
+            }
+            img.onerror = () => res(b64) // fall back to original on error
+            img.src = dataUrl
+          })
+          mediaType = 'image/jpeg' // after resize always jpeg
+        } catch { finalB64 = b64 }
+      }
+
       // Extract with 30s timeout
       let extracted = null
       try {
         extracted = await Promise.race([
-          extractBodyScan(b64, mediaType),
+          extractBodyScan(finalB64, mediaType),
           new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30000))
         ])
       } catch (aiErr) {

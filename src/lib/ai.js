@@ -312,22 +312,20 @@ export async function extractBodyScan(imageBase64, mediaType = 'image/jpeg') {
     role: 'user',
     content: [
       fileBlock,
-      { type: 'text', text: `Read all the numbers from this body composition scan image.
+      { type: 'text', text: `Read this InBody body composition scan.
 
-Look for these specific values (they may be in lbs or kg):
-- Weight (total body weight)
-- SMM or Skeletal Muscle Mass
-- Body Fat Mass
-- PBF or Percent Body Fat (%)
-- BMR or Basal Metabolic Rate (kcal)
-- Total Body Water
-- Visceral Fat Level or Area
-- Scan date
+Extract EXACTLY these values:
+1. Weight — total body weight in lbs or kg
+2. PBF — "Percent Body Fat" percentage (e.g. 17.0). This is NOT the same as Body Fat Mass in lbs.
+3. SMM — "Skeletal Muscle Mass" in lbs or kg  
+4. BMR — "Basal Metabolic Rate" in kcal
+5. Scan date
 
-IMPORTANT: The values may be in POUNDS (lbs) not kg. If they appear to be in lbs (e.g. Weight > 100), convert to kg by dividing by 2.20462.
+CRITICAL: PBF/body_fat_pct must be a PERCENTAGE (typically 10-40%), NOT body fat mass in lbs.
+If values are in lbs, convert weight and muscle to kg by dividing by 2.20462.
 
-Return ONLY valid JSON, no other text:
-{"scan_type":"inbody","weight_kg":null,"body_fat_pct":null,"muscle_mass_kg":null,"bone_mass_kg":null,"water_pct":null,"visceral_fat":null,"bmr":null,"scan_date":null,"notes":""}` }
+Return ONLY this JSON, no markdown, no explanation:
+{"scan_type":"inbody","weight_kg":null,"body_fat_pct":null,"muscle_mass_kg":null,"bmr":null,"scan_date":null}` }
     ]
   }], { max_tokens: 400 })
   return parseJSON(data)
