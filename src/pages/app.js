@@ -28,6 +28,7 @@ let state = {
   foodItems: [],
   bodyMetrics: null,
   checkins: [],
+  units: null, // set on init from locale
   newUsersCount: 0,
   editingFoodItem: null,
   editingComponents: null,
@@ -180,6 +181,14 @@ async function loadAll() {
   if (todayPlanner) state.planner = todayPlanner
   state.bodyMetrics = bodyMetrics
   state.checkins = checkins ?? []
+  // Auto-detect units from locale (US = imperial, rest = metric)
+  if (!state.units) {
+    const locale = navigator.language || 'en-US'
+    const savedUnits = localStorage.getItem('macrolens_units')
+    // US English → imperial by default
+    const defaultImperial = locale === 'en-US' || locale.startsWith('en-US')
+    state.units = savedUnits || (defaultImperial ? 'imperial' : 'metric')
+  }
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
@@ -345,7 +354,7 @@ function renderShell(container) {
         <button class="modal-close" onclick="closeCheckinModal()">×</button>
         <h3>Weekly check-in</h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-          <div class="modal-field"><label>Weight (kg)</label><input type="number" step="0.1" id="ci-weight" placeholder="80.5" /></div>
+          <div class="modal-field"><label id="ci-weight-label">Weight</label><input type="number" step="0.1" id="ci-weight" placeholder="175" /></div>
           <div class="modal-field"><label>Body fat %</label><input type="number" step="0.1" id="ci-bf" placeholder="20" /></div>
           <div class="modal-field"><label>Muscle mass (kg)</label><input type="number" step="0.1" id="ci-muscle" placeholder="" /></div>
           <div class="modal-field"><label>Date</label><input type="date" id="ci-date" /></div>
@@ -2085,6 +2094,23 @@ function renderGoalsPage(container) {
   const targets = calcTargetMacros(m, tdee)
   const weeks = weeksToGoal(m)
   const checkins = state.checkins || []
+  const isImperial = state.units === 'imperial'
+
+  // Conversion helpers
+  const kgToLbs = kg => kg ? +(kg * 2.20462).toFixed(1) : ''
+  const cmToFtIn = cm => {
+    if (!cm) return { ft: '', inches: '' }
+    const totalIn = cm / 2.54
+    return { ft: Math.floor(totalIn / 12), inches: +(totalIn % 12).toFixed(1) }
+  }
+  const lbsToKg = lbs => lbs ? +(lbs / 2.20462).toFixed(2) : null
+  const ftInToCm = (ft, inches) => ft ? +((parseFloat(ft)*12 + parseFloat(inches||0)) * 2.54).toFixed(1) : null
+
+  const ftIn = cmToFtIn(m.height_cm)
+  const weightDisplay = isImperial ? kgToLbs(m.weight_kg) : m.weight_kg
+  const muscleDisplay = isImperial ? kgToLbs(m.muscle_mass_kg) : m.muscle_mass_kg
+  const goalWeightDisplay = isImperial ? kgToLbs(m.goal_weight_kg) : m.goal_weight_kg
+
   const inp = (id, type, val, placeholder='') =>
     `<input type="${type}" id="${id}" value="${val ?? ''}" placeholder="${placeholder}"
       style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none">`
@@ -2097,9 +2123,18 @@ function renderGoalsPage(container) {
     <div class="greeting">Goals & Body</div>
     <div class="greeting-sub">Track your metrics, calculate your targets, log your progress.</div>
 
-    <!-- Body metrics form -->
     <div class="upload-card" style="margin-bottom:16px">
-      <div class="section-title">Body metrics</div>
+      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Body metrics</span>
+        <div style="display:flex;gap:4px;background:var(--bg3);border-radius:var(--r);padding:3px;border:1px solid var(--border)">
+          <button onclick="setUnits('imperial')"
+            style="padding:4px 10px;border:none;border-radius:calc(var(--r) - 2px);font-size:11px;font-family:inherit;cursor:pointer;font-weight:500;
+              background:${isImperial ? 'var(--bg2)' : 'none'};color:${isImperial ? 'var(--text)' : 'var(--text3)'}">lbs / ft</button>
+          <button onclick="setUnits('metric')"
+            style="padding:4px 10px;border:none;border-radius:calc(var(--r) - 2px);font-size:11px;font-family:inherit;cursor:pointer;font-weight:500;
+              background:${!isImperial ? 'var(--bg2)' : 'none'};color:${!isImperial ? 'var(--text)' : 'var(--text3)'}">kg / cm</button>
+        </div>
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
         <div>
           <label class="field-label">Sex</label>
@@ -2109,21 +2144,36 @@ function renderGoalsPage(container) {
           <label class="field-label">Age</label>
           ${inp('bm-age','number', m.age, '30')}
         </div>
+        ${isImperial ? `
+        <div>
+          <label class="field-label">Height (ft)</label>
+          ${inp('bm-ft','number', ftIn.ft, '5')}
+        </div>
+        <div>
+          <label class="field-label">Height (in)</label>
+          ${inp('bm-in','number', ftIn.inches, '10')}
+        </div>
+        <div>
+          <label class="field-label">Current weight (lbs)</label>
+          ${inp('bm-weight','number', weightDisplay, '175')}
+        </div>
+        ` : `
         <div>
           <label class="field-label">Height (cm)</label>
           ${inp('bm-height','number', m.height_cm, '175')}
         </div>
         <div>
           <label class="field-label">Current weight (kg)</label>
-          ${inp('bm-weight','number', m.weight_kg, '80')}
+          ${inp('bm-weight','number', weightDisplay, '80')}
         </div>
+        `}
         <div>
           <label class="field-label">Body fat %</label>
           ${inp('bm-bf','number', m.body_fat_pct, '20')}
         </div>
         <div>
-          <label class="field-label">Muscle mass (kg)</label>
-          ${inp('bm-muscle','number', m.muscle_mass_kg, '')}
+          <label class="field-label">Muscle mass (${isImperial ? 'lbs' : 'kg'})</label>
+          ${inp('bm-muscle','number', muscleDisplay, '')}
         </div>
       </div>
       <div style="margin-bottom:12px">
@@ -2158,8 +2208,8 @@ function renderGoalsPage(container) {
       <div class="section-title">Goal settings</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
         <div>
-          <label class="field-label">Goal weight (kg)</label>
-          ${inp('bm-goal-weight','number', m.goal_weight_kg, '75')}
+          <label class="field-label">Goal weight (${isImperial ? 'lbs' : 'kg'})</label>
+          ${inp('bm-goal-weight','number', goalWeightDisplay, isImperial ? '165' : '75')}
         </div>
         <div>
           <label class="field-label">Goal body fat %</label>
@@ -2219,9 +2269,13 @@ function renderGoalsPage(container) {
 
     <!-- Weekly check-in -->
     <div class="upload-card" style="margin-bottom:16px">
-      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
-        <span>Weekly check-in</span>
-        <button onclick="openCheckinModal()" class="clear-btn" style="color:var(--accent)">+ Log check-in</button>
+      <div class="section-title">Weekly check-in</div>
+      <button onclick="openCheckinModal()"
+        style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:8px">
+        📊 Log this week's check-in
+      </button>
+      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:12px">
+        Upload your InBody or DEXA scan to auto-extract body composition data
       </div>
       ${!checkins.length ? `
         <div style="font-size:13px;color:var(--text3);padding:12px 0">No check-ins yet. Log your first weekly weigh-in!</div>
@@ -2249,7 +2303,7 @@ function renderGoalsPage(container) {
                 <div style="font-size:11px;color:var(--text3);margin-top:2px">${c.notes || ''}</div>
               </div>
               <div style="text-align:right;font-size:12px;display:flex;gap:12px">
-                ${c.weight_kg ? `<div><div style="color:var(--accent);font-weight:600">${c.weight_kg}kg</div><div style="color:var(--text3)">weight</div></div>` : ''}
+                ${c.weight_kg ? `<div><div style="color:var(--accent);font-weight:600">${isImperial ? +(c.weight_kg*2.20462).toFixed(1) + 'lbs' : c.weight_kg + 'kg'}</div><div style="color:var(--text3)">weight</div></div>` : ''}
                 ${c.body_fat_pct ? `<div><div style="color:var(--protein);font-weight:600">${c.body_fat_pct}%</div><div style="color:var(--text3)">body fat</div></div>` : ''}
                 ${c.scan_file_path ? `<div><div style="color:var(--carbs)">📄</div><div style="color:var(--text3)">scan</div></div>` : ''}
               </div>
@@ -3083,16 +3137,36 @@ function wireGlobals() {
     }
   }
 
+  window.setUnits = (units) => {
+    state.units = units
+    localStorage.setItem('macrolens_units', units)
+    renderPage()
+  }
+
   function readBodyMetricsForm() {
+    const isImperial = state.units === 'imperial'
+    const rawWeight = parseFloat(document.getElementById('bm-weight')?.value) || null
+    const rawMuscle = parseFloat(document.getElementById('bm-muscle')?.value) || null
+    const rawGoalWeight = parseFloat(document.getElementById('bm-goal-weight')?.value) || null
+
+    let height_cm = null
+    if (isImperial) {
+      const ft = parseFloat(document.getElementById('bm-ft')?.value) || 0
+      const inches = parseFloat(document.getElementById('bm-in')?.value) || 0
+      height_cm = ft || inches ? +((ft * 12 + inches) * 2.54).toFixed(1) : null
+    } else {
+      height_cm = parseFloat(document.getElementById('bm-height')?.value) || null
+    }
+
     return {
       sex: document.getElementById('bm-sex')?.value || 'male',
       age: parseFloat(document.getElementById('bm-age')?.value) || null,
-      height_cm: parseFloat(document.getElementById('bm-height')?.value) || null,
-      weight_kg: parseFloat(document.getElementById('bm-weight')?.value) || null,
+      height_cm,
+      weight_kg: isImperial && rawWeight ? +(rawWeight / 2.20462).toFixed(2) : rawWeight,
       body_fat_pct: parseFloat(document.getElementById('bm-bf')?.value) || null,
-      muscle_mass_kg: parseFloat(document.getElementById('bm-muscle')?.value) || null,
+      muscle_mass_kg: isImperial && rawMuscle ? +(rawMuscle / 2.20462).toFixed(2) : rawMuscle,
       activity_level: document.getElementById('bm-activity')?.value || 'moderate',
-      goal_weight_kg: parseFloat(document.getElementById('bm-goal-weight')?.value) || null,
+      goal_weight_kg: isImperial && rawGoalWeight ? +(rawGoalWeight / 2.20462).toFixed(2) : rawGoalWeight,
       goal_body_fat_pct: parseFloat(document.getElementById('bm-goal-bf')?.value) || null,
       weight_goal: document.getElementById('bm-direction')?.value || 'lose',
       pace: document.getElementById('bm-pace')?.value || 'moderate',
@@ -3108,11 +3182,17 @@ function wireGlobals() {
 
   window.openCheckinModal = () => {
     state.pendingCheckinScan = null
+    const isImperial = state.units === 'imperial'
     const today = new Date().toISOString().split('T')[0]
     document.getElementById('ci-date').value = today
-    document.getElementById('ci-weight').value = state.bodyMetrics?.weight_kg || ''
-    document.getElementById('ci-bf').value = state.bodyMetrics?.body_fat_pct || ''
-    document.getElementById('ci-muscle').value = state.bodyMetrics?.muscle_mass_kg || ''
+    const wLabel = document.getElementById('ci-weight-label')
+    if (wLabel) wLabel.textContent = isImperial ? 'Weight (lbs)' : 'Weight (kg)'
+    const bm = state.bodyMetrics
+    document.getElementById('ci-weight').value = bm?.weight_kg
+      ? (isImperial ? +(bm.weight_kg * 2.20462).toFixed(1) : bm.weight_kg) : ''
+    document.getElementById('ci-bf').value = bm?.body_fat_pct || ''
+    document.getElementById('ci-muscle').value = bm?.muscle_mass_kg
+      ? (isImperial ? +(bm.muscle_mass_kg * 2.20462).toFixed(1) : bm.muscle_mass_kg) : ''
     document.getElementById('ci-notes').value = ''
     document.getElementById('scan-status').textContent = ''
     document.getElementById('scan-upload-inner').innerHTML = '<div style="font-size:24px;margin-bottom:4px">📄</div><div style="font-size:13px;color:var(--text2)">Upload scan (PDF or image)</div><div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract your metrics automatically</div>'
