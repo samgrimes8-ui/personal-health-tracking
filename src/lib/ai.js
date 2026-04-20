@@ -8,21 +8,21 @@ import { supabase } from './supabase.js'
 // ─── Core proxy caller ────────────────────────────────────────────────────────
 
 async function callProxy(feature, messages, options = {}) {
-  // Always refresh session to avoid expired JWT errors
+  // Always force-refresh the session token before AI calls
+  // This prevents "string did not match expected pattern" expired JWT errors
   let session
   try {
-    const { data, error } = await supabase.auth.getSession()
-    if (error) throw error
-    session = data.session
-    // Refresh if expiring within 60 seconds
-    if (session && session.expires_at && session.expires_at * 1000 < Date.now() + 60000) {
-      const { data: refreshed } = await supabase.auth.refreshSession()
-      if (refreshed?.session) session = refreshed.session
+    const { data: refreshed, error } = await supabase.auth.refreshSession()
+    if (refreshed?.session) {
+      session = refreshed.session
+    } else {
+      // Refresh failed or no session — fall back to getSession
+      const { data } = await supabase.auth.getSession()
+      session = data?.session
     }
   } catch (e) {
-    // Session fetch failed — try forcing a refresh
-    const { data: refreshed } = await supabase.auth.refreshSession()
-    session = refreshed?.session
+    const { data } = await supabase.auth.getSession()
+    session = data?.session
   }
   if (!session?.access_token) throw new Error('Session expired — please refresh the page')
 
