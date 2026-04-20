@@ -2141,12 +2141,12 @@ function renderGoalsPage(container) {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;padding:12px;background:var(--bg3);border-radius:var(--r)">
           <div style="text-align:center">
             <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">BMR</div>
-            <div style="font-size:22px;font-weight:700;color:var(--accent)">${bmr}</div>
+            <div style="font-size:22px;font-weight:700;color:var(--accent)" id="calc-bmr">${bmr}</div>
             <div style="font-size:11px;color:var(--text3)">kcal at rest</div>
           </div>
           <div style="text-align:center">
             <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">TDEE</div>
-            <div style="font-size:22px;font-weight:700;color:var(--protein)">${tdee}</div>
+            <div style="font-size:22px;font-weight:700;color:var(--protein)" id="calc-tdee">${tdee}</div>
             <div style="font-size:11px;color:var(--text3)">maintenance</div>
           </div>
         </div>
@@ -2181,6 +2181,7 @@ function renderGoalsPage(container) {
         </div>
       </div>
 
+      <div id="calc-targets">
       ${targets ? `
         <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:12px">
           <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">
@@ -2203,6 +2204,7 @@ function renderGoalsPage(container) {
           Fill in your body metrics above to calculate personalized macro targets.
         </div>
       `}
+      </div>
 
       <!-- Manual override -->
       <div style="font-size:11px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px">Manual targets</div>
@@ -3038,10 +3040,47 @@ function wireGlobals() {
 
   // ── Goals & Body Metrics ───────────────────────────────────────
   window.previewGoalsCalc = () => {
-    // Re-render the goals page with current input values
     const m = readBodyMetricsForm()
-    state.bodyMetrics = { ...state.bodyMetrics, ...m }
-    renderPage()
+    const bmr = calcBMR(m)
+    const tdee = calcTDEE(bmr, m.activity_level)
+    const targets = calcTargetMacros(m, tdee)
+    const weeks = m.weight_kg && m.goal_weight_kg ? (() => {
+      const diff = Math.abs(m.weight_kg - m.goal_weight_kg)
+      const pace = { slow: 0.25, moderate: 0.4, aggressive: 0.6 }
+      return Math.ceil(diff / (pace[m.pace] || 0.4))
+    })() : null
+
+    // Update BMR/TDEE display
+    const bmrEl = document.getElementById('calc-bmr')
+    const tdeeEl = document.getElementById('calc-tdee')
+    if (bmrEl) bmrEl.textContent = bmr || '—'
+    if (tdeeEl) tdeeEl.textContent = tdee || '—'
+
+    // Update target macros display
+    const targEl = document.getElementById('calc-targets')
+    if (targEl) {
+      if (targets) {
+        targEl.innerHTML = `
+          <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:12px">
+            <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">
+              Calculated daily targets
+              ${weeks ? `<span style="font-weight:400;color:var(--text3);margin-left:8px">~${weeks} weeks to goal</span>` : ''}
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center">
+              <div><div style="font-size:18px;font-weight:700;color:var(--accent)">${targets.calories}</div><div style="font-size:10px;color:var(--text3)">kcal</div></div>
+              <div><div style="font-size:18px;font-weight:700;color:var(--protein)">${targets.protein}g</div><div style="font-size:10px;color:var(--text3)">protein</div></div>
+              <div><div style="font-size:18px;font-weight:700;color:var(--carbs)">${targets.carbs}g</div><div style="font-size:10px;color:var(--text3)">carbs</div></div>
+              <div><div style="font-size:18px;font-weight:700;color:var(--fat)">${targets.fat}g</div><div style="font-size:10px;color:var(--text3)">fat</div></div>
+            </div>
+            <button onclick="applyCalculatedTargets(${targets.calories},${targets.protein},${targets.carbs},${targets.fat})"
+              style="width:100%;margin-top:10px;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+              Apply these targets to my daily goals →
+            </button>
+          </div>`
+      } else {
+        targEl.innerHTML = `<div style="padding:12px;background:var(--bg3);border-radius:var(--r);font-size:13px;color:var(--text3);margin-bottom:12px">Fill in body metrics above to calculate targets.</div>`
+      }
+    }
   }
 
   function readBodyMetricsForm() {
