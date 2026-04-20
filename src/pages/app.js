@@ -5463,17 +5463,18 @@ function wireGlobals() {
   // Check if user arrived via a "Save recipe" from a shared link
   const pendingRecipe = localStorage.getItem('macrolens_save_recipe')
   if (pendingRecipe) {
-    localStorage.removeItem('macrolens_save_recipe')
-    try {
-      const recipeData = JSON.parse(pendingRecipe)
-      const saved = await saveSharedRecipeToLibrary(state.user.id, recipeData)
-      state.recipes.unshift(saved)
-      showToast(`"${saved.name}" saved to your recipes!`, 'success')
-      state.currentPage = 'recipes'
-      sessionStorage.setItem('macrolens_page', 'recipes')
-    } catch (e) {
-      console.warn('Failed to save shared recipe:', e.message)
-    }
+    localStorage.removeItem('macrolens_save_recipe');
+    (async () => {
+      try {
+        const recipeData = JSON.parse(pendingRecipe)
+        const saved = await saveSharedRecipeToLibrary(state.user.id, recipeData)
+        state.recipes.unshift(saved)
+        showToast(`"${saved.name}" saved to your recipes!`, 'success')
+        state.currentPage = 'recipes'
+        sessionStorage.setItem('macrolens_page', 'recipes')
+        renderPage()
+      } catch (e) { console.warn('Failed to save shared recipe:', e.message) }
+    })()
   }
 
   window.refreshAdminPanel = () => loadAdminPanel()
