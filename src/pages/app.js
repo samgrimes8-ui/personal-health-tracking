@@ -3230,7 +3230,9 @@ function wireGlobals() {
         reader.readAsDataURL(file)
       })
       const b64 = dataUrl.split(',')[1]
-      const mediaType = file.type || 'image/jpeg'
+      // Normalize media type — Claude doesn't support heic, treat as jpeg
+      const rawType = file.type || 'image/jpeg'
+      const mediaType = rawType === 'image/heic' || rawType === 'image/heif' ? 'image/jpeg' : rawType
 
       // Extract with 30s timeout
       let extracted = null

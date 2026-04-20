@@ -303,13 +303,21 @@ Return ONLY the steps as a JSON array:
 }
 
 export async function extractBodyScan(imageBase64, mediaType = 'image/jpeg') {
+  const isPdf = mediaType === 'application/pdf'
+  const fileBlock = isPdf
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: imageBase64 } }
+    : { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } }
+
   const data = await callProxy('food', [{
     role: 'user',
     content: [
-      { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
-      { type: 'text', text: `This is a body composition scan (InBody, DEXA, or similar). Extract all available metrics.
+      fileBlock,
+      { type: 'text', text: `This is a body composition report (InBody, DEXA, or similar scan). Extract all numeric metrics you can find.
 
-Return ONLY this JSON:
+InBody typically shows: Weight, Skeletal Muscle Mass, Body Fat Mass, PBF (body fat %), Visceral Fat Level, BMR, ECW/TBW ratio.
+DEXA typically shows: Total mass, Fat mass, Lean mass, bone density, regional fat.
+
+Return ONLY this JSON (null for anything not found):
 {
   "scan_type": "inbody|dexa|other",
   "weight_kg": number|null,
@@ -320,9 +328,9 @@ Return ONLY this JSON:
   "visceral_fat": number|null,
   "bmr": number|null,
   "scan_date": "YYYY-MM-DD"|null,
-  "notes": "any other notable findings"
+  "notes": "key findings in one sentence"
 }` }
     ]
-  }], { max_tokens: 500 })
+  }], { max_tokens: 600 })
   return parseJSON(data)
 }
