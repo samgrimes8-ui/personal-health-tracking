@@ -610,3 +610,56 @@ export async function deleteFoodItem(userId, id) {
     .eq('user_id', userId)
   if (error) throw error
 }
+
+// ─── Error Logging ────────────────────────────────────────────────────────────
+
+export async function logError(userId, error, context = {}) {
+  if (!supabase) return
+  try {
+    await supabase.from('error_logs').insert({
+      user_id: userId || null,
+      error_message: String(error?.message || error).slice(0, 500),
+      error_stack: error?.stack?.slice(0, 2000) || null,
+      context: context.context || null,
+      page: context.page || null,
+      url: typeof window !== 'undefined' ? window.location.href.slice(0, 200) : null,
+    })
+  } catch {
+    // Never throw from error logger
+  }
+}
+
+export async function cleanupOldErrors() {
+  if (!supabase) return
+  try {
+    // Delete errors older than 14 days for this user
+    await supabase
+      .from('error_logs')
+      .delete()
+      .lt('created_at', new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString())
+  } catch {}
+}
+
+export async function getErrorLogs(userId, limit = 100) {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('error_logs')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) return []
+  return data ?? []
+}
+
+export async function getAllErrorLogs(limit = 200) {
+  if (!supabase) return []
+  // Admin view — uses service role via server or falls back to own logs
+  const { data, error } = await supabase
+    .from('error_logs')
+    .select('*, user_profiles(email:user_id)')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) return []
+  return data ?? []
+}

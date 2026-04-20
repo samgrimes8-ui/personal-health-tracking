@@ -7,7 +7,8 @@ import {
   getRecipes, upsertRecipe, deleteRecipe, getRecipeByName,
   getWeeksWithMeals, getPlannerRange,
   getFoodItems, upsertFoodItem, deleteFoodItem,
-  saveRecipeInstructions, autoSaveFoodItem
+  saveRecipeInstructions, autoSaveFoodItem,
+  logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -78,6 +79,29 @@ let _appInitialized = false
 // ─── Init ─────────────────────────────────────────────────────────────────────
 export async function initApp(user, container) {
   state.user = user
+
+  // Global error handler — captures unhandled errors and logs to DB
+  if (!window._errorHandlerInstalled) {
+    window._errorHandlerInstalled = true
+    window.addEventListener('error', (e) => {
+      logError(state.user?.id, e.error || e.message, {
+        context: 'unhandled_error',
+        page: state.currentPage,
+      }).catch(() => {})
+    })
+    window.addEventListener('unhandledrejection', (e) => {
+      logError(state.user?.id, e.reason, {
+        context: 'unhandled_promise',
+        page: state.currentPage,
+      }).catch(() => {})
+    })
+  }
+
+  // Run cleanup once per session (not every page nav)
+  if (!window._errorCleanupRan) {
+    window._errorCleanupRan = true
+    cleanupOldErrors().catch(() => {})
+  }
   try {
     await Promise.race([
       loadAll(),
@@ -2074,6 +2098,15 @@ function renderAccount(container) {
       <div id="admin-panel-content">
         <div style="color:var(--text3);font-size:13px;padding:20px 0">Loading users...</div>
       </div>
+    </div>
+    <div class="upload-card" style="max-width:900px;margin-bottom:20px">
+      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>🪲 Error logs <span style="font-size:11px;font-weight:400;color:var(--text3)">(auto-cleared after 14 days)</span></span>
+        <button class="clear-btn" onclick="loadErrorLogs()" style="color:var(--accent)" id="error-log-load-btn">Load</button>
+      </div>
+      <div id="error-log-content" style="color:var(--text3);font-size:12px;padding:8px 0">
+        Tap Load to view recent errors across all users.
+      </div>
     </div>` : ''}
 
     <!-- Sign out -->
@@ -2690,7 +2723,10 @@ function wireGlobals() {
     try {
       const result = await doAnalyze()
       if (result) { state.currentEntry = result; showResult(result) }
-    } catch (err) { showToast('Analysis failed: ' + err.message, 'error') }
+    } catch (err) {
+      showToast('Analysis failed: ' + err.message, 'error')
+      logError(state.user?.id, err, { context: 'analyze_food', page: state.currentPage })
+    }
     btn.disabled = false
     btn.textContent = 'Analyze with AI'
   }
@@ -4234,6 +4270,42 @@ function wireGlobals() {
     if (entry) entry.meal_type = next
     updateMealEntry(state.user.id, logId, { meal_type: next }).catch(() => {})
     refreshTodayLog()
+  }
+
+  window.refreshAdminPanel = () => loadAdminPanel()
+
+  window.loadErrorLogs = async () => {
+    const el = document.getElementById('error-log-content')
+    const btn = document.getElementById('error-log-load-btn')
+    if (!el) return
+    if (btn) btn.textContent = 'Loading...'
+    try {
+      const logs = await getAllErrorLogs(200)
+      if (!logs.length) {
+        el.innerHTML = '<div style="color:var(--text3);padding:8px 0">No errors logged 🎉</div>'
+        if (btn) btn.textContent = 'Refresh'
+        return
+      }
+      el.innerHTML = logs.map(e => {
+        const time = new Date(e.created_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">'
+          + '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">'
+          + '<span style="color:var(--red);font-size:12px;font-weight:500">' + esc(e.error_message) + '</span>'
+          + '<span style="color:var(--text3);font-size:11px;white-space:nowrap">' + time + '</span>'
+          + '</div>'
+          + '<div style="font-size:11px;color:var(--text3);margin-top:2px">'
+          + (e.page ? 'page: ' + esc(e.page) : '')
+          + (e.context ? ' · ' + esc(e.context) : '')
+          + (e.user_id ? ' · user: ' + e.user_id.slice(0,8) + '...' : ' · anonymous')
+          + '</div>'
+          + (e.error_stack ? '<details style="margin-top:4px"><summary style="font-size:11px;color:var(--text3);cursor:pointer">Stack trace</summary>'
+            + '<pre style="font-size:10px;color:var(--text3);overflow-x:auto;margin:4px 0;white-space:pre-wrap">' + esc(e.error_stack.slice(0,500)) + '</pre></details>' : '')
+          + '</div>'
+      }).join('')
+    } catch (err) {
+      el.innerHTML = '<div style="color:var(--red);font-size:12px">Failed to load: ' + esc(err.message) + '</div>'
+    }
+    if (btn) btn.textContent = 'Refresh'
   }
 
   window.toggleUnlimited = async (userId, currentVal) => {
