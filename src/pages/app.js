@@ -2458,7 +2458,7 @@ function renderGoalsPage(container) {
           </div>
           <button onclick="applyCalculatedTargets(${targets.calories},${targets.protein},${targets.carbs},${targets.fat})"
             style="width:100%;margin-top:10px;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
-            Apply these targets to my daily goals →
+            ↓ Use these targets (fills fields below)
           </button>
         </div>
       ` : `
@@ -2469,14 +2469,29 @@ function renderGoalsPage(container) {
       </div>
 
       <!-- Manual override -->
-      <div style="font-size:11px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px">Manual targets</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-        <div><label class="field-label">Calories</label>${inp('goal-cal','number',state.goals.calories)}</div>
-        <div><label class="field-label">Protein (g)</label>${inp('goal-p','number',state.goals.protein)}</div>
-        <div><label class="field-label">Carbs (g)</label>${inp('goal-c','number',state.goals.carbs)}</div>
-        <div><label class="field-label">Fat (g)</label>${inp('goal-f','number',state.goals.fat)}</div>
+      <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Daily macro targets</div>
+          <div style="font-size:11px;color:var(--text3)">Edit manually or use calculated targets above</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+          <div><label class="field-label">Calories</label>${inp('goal-cal','number',state.goals.calories)}</div>
+          <div><label class="field-label">Protein (g)</label>${inp('goal-p','number',state.goals.protein)}</div>
+          <div><label class="field-label">Carbs (g)</label>${inp('goal-c','number',state.goals.carbs)}</div>
+          <div><label class="field-label">Fat (g)</label>${inp('goal-f','number',state.goals.fat)}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <button onclick="saveBodyMetricsOnly()"
+            style="padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;font-weight:500;font-family:inherit;cursor:pointer"
+            onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+            Save body metrics
+          </button>
+          <button onclick="saveGoalsHandler()"
+            style="padding:12px;background:var(--accent);border:none;border-radius:var(--r);color:#1a1500;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer">
+            Save targets
+          </button>
+        </div>
       </div>
-      <button class="analyze-btn" onclick="saveGoalsHandler()">Calculate &amp; Save</button>
     </div>
 
     <!-- Weekly check-in -->
@@ -3336,7 +3351,7 @@ function wireGlobals() {
             </div>
             <button onclick="applyCalculatedTargets(${targets.calories},${targets.protein},${targets.carbs},${targets.fat})"
               style="width:100%;margin-top:10px;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
-              Apply these targets to my daily goals →
+              ↓ Use these targets (fills fields below)
             </button>
           </div>`
       } else {
@@ -3632,26 +3647,29 @@ function wireGlobals() {
     if (e.target.id === 'checkin-modal') closeCheckinModal()
   })
 
+  window.saveBodyMetricsOnly = async () => {
+    try {
+      const bm = readBodyMetricsForm()
+      const bmr = calcBMR(bm)
+      const tdee = calcTDEE(bmr, bm.activity_level)
+      const updated = await saveBodyMetrics(state.user.id, { ...state.bodyMetrics, ...bm, bmr, tdee })
+      state.bodyMetrics = updated
+      showToast('Body metrics saved!', 'success')
+      renderPage()
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
   window.saveGoalsHandler = async () => {
     state.goals = {
       calories: parseInt(document.getElementById('goal-cal')?.value) || 2000,
-      protein: parseInt(document.getElementById('goal-p')?.value) || 150,
-      carbs: parseInt(document.getElementById('goal-c')?.value) || 200,
-      fat: parseInt(document.getElementById('goal-f')?.value) || 65
+      protein:  parseInt(document.getElementById('goal-p')?.value)   || 150,
+      carbs:    parseInt(document.getElementById('goal-c')?.value)   || 200,
+      fat:      parseInt(document.getElementById('goal-f')?.value)   || 65
     }
     try {
       await dbSaveGoals(state.user.id, state.goals)
-      // Also save body metrics if on goals page
-      if (state.currentPage === 'goals') {
-        const bm = readBodyMetricsForm()
-        const bmr = calcBMR(bm)
-        const tdee = calcTDEE(bmr, bm.activity_level)
-        const updated = await saveBodyMetrics(state.user.id, { ...state.bodyMetrics, ...bm, bmr, tdee })
-        state.bodyMetrics = updated
-      }
-      showToast('Saved!', 'success')
+      showToast('Targets saved!', 'success')
       updateSidebar()
-      renderPage()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
