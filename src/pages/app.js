@@ -96,6 +96,10 @@ export async function initApp(user, container) {
     wireGlobals()
     _appInitialized = true
   }
+  // Restore last visited page from sessionStorage (persists across refreshes)
+  const savedPage = sessionStorage.getItem('macrolens_page')
+  const validPages = ['log','planner','history','goals','recipes','foods','account']
+  if (savedPage && validPages.includes(savedPage)) state.currentPage = savedPage
   renderPage()
   // Load new user badge for admins (background, non-blocking)
   if (state.usage?.isAdmin) {
@@ -121,7 +125,6 @@ export async function initApp(user, container) {
   }
 }
 
-async function loadAll() {
   const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
 
   const [goals, log, usage, recipes, weeksWithMeals, foodItems] = await Promise.all([
@@ -2241,6 +2244,7 @@ function handleFile(file) {
 function wireGlobals() {
   window.switchPage = (name) => {
     state.currentPage = name
+    sessionStorage.setItem('macrolens_page', name)
     // Update active nav item directly — shell doesn't re-render
     document.querySelectorAll('.nav-item[id^="nav-"]').forEach(el => {
       const page = el.id.replace('nav-', '')
@@ -2477,8 +2481,10 @@ function wireGlobals() {
     document.getElementById('sidebar-overlay')?.classList.toggle('visible')
   }
   window.closeSidebar = () => {
-    document.getElementById('sidebar')?.classList.remove('open')
-    document.getElementById('sidebar-overlay')?.classList.remove('visible')
+    const sb = document.getElementById('sidebar')
+    const ov = document.getElementById('sidebar-overlay')
+    if (sb) { sb.classList.remove('open'); sb.style.transform = '' }
+    if (ov) { ov.classList.remove('visible'); ov.style.opacity = ''; ov.style.pointerEvents = '' }
   }
 
   window.analyzeFoodHandler = async () => {
