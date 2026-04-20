@@ -2168,9 +2168,21 @@ function buildCheckinRow(c, isImperial) {
 
 
 function calcBMR(m) {
-  if (!m?.weight_kg || !m?.height_cm || !m?.age) return null
-  const base = 10 * m.weight_kg + 6.25 * m.height_cm - 5 * m.age
-  return Math.round(m.sex === 'female' ? base - 161 : base + 5)
+  if (!m?.weight_kg) return null
+
+  // Katch-McArdle (most accurate) — requires body fat %
+  if (m.body_fat_pct) {
+    const lbm = m.weight_kg * (1 - m.body_fat_pct / 100)
+    return Math.round(370 + 21.6 * lbm)
+  }
+
+  // Mifflin-St Jeor fallback — requires height, age, sex
+  if (m.height_cm && m.age) {
+    const base = 10 * m.weight_kg + 6.25 * m.height_cm - 5 * m.age
+    return Math.round(m.sex === 'female' ? base - 161 : base + 5)
+  }
+
+  return null
 }
 
 function calcTDEE(bmr, activity) {
@@ -2184,7 +2196,13 @@ function calcTargetMacros(m, tdee) {
   const deficit = m.weight_goal === 'lose' ? (pace[m.pace] || 400)
     : m.weight_goal === 'gain' ? -(pace[m.pace] || 300) : 0
   const targetCal = Math.max(1200, tdee - deficit)
-  const proteinG = Math.round((m.weight_kg || 70) * 2.2 * 0.85) // ~0.85g per lb
+
+  // Protein: base off lean body mass if BF% known, else conservative estimate from total weight
+  const lbm_lbs = m.body_fat_pct
+    ? (m.weight_kg * (1 - m.body_fat_pct / 100)) * 2.20462
+    : (m.weight_kg * 2.20462) * 0.75  // estimate lean mass as 75% of total weight
+  const proteinG = Math.round(lbm_lbs * 1.0) // 1g per lb lean mass
+
   const fatCal = Math.round(targetCal * 0.25)
   const fatG = Math.round(fatCal / 9)
   const carbCal = targetCal - (proteinG * 4) - fatCal
@@ -2281,8 +2299,8 @@ function renderGoalsPage(container) {
         </div>
         `}
         <div>
-          <label class="field-label">Body fat %</label>
-          ${inp('bm-bf','number', m.body_fat_pct, '20')}
+          <label class="field-label">Body fat % <span style="font-weight:400;color:var(--text3)">(optional)</span></label>
+          ${inp('bm-bf','number', m.body_fat_pct, 'e.g. 17')}
         </div>
         <div>
           <label class="field-label">Muscle mass (${isImperial ? 'lbs' : 'kg'})</label>
@@ -2312,6 +2330,11 @@ function renderGoalsPage(container) {
             <div style="font-size:22px;font-weight:700;color:var(--protein)" id="calc-tdee">${tdee}</div>
             <div style="font-size:11px;color:var(--text3)">maintenance</div>
           </div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:12px;padding:0 2px" id="calc-formula-note">
+          ${m.body_fat_pct
+            ? '✓ Using Katch-McArdle (body fat % known — most accurate)'
+            : '⚠ Using Mifflin-St Jeor estimate — add body fat % for better accuracy'}
         </div>
       ` : ''}
     </div>
@@ -3208,8 +3231,14 @@ function wireGlobals() {
     // Update BMR/TDEE display
     const bmrEl = document.getElementById('calc-bmr')
     const tdeeEl = document.getElementById('calc-tdee')
+    const noteEl = document.getElementById('calc-formula-note')
     if (bmrEl) bmrEl.textContent = bmr || '—'
     if (tdeeEl) tdeeEl.textContent = tdee || '—'
+    if (noteEl) noteEl.textContent = bmr
+      ? (m.body_fat_pct
+          ? '✓ Katch-McArdle (body fat % known — most accurate)'
+          : '⚠ Mifflin-St Jeor estimate — add body fat % for best accuracy')
+      : ''
 
     // Update target macros display
     const targEl = document.getElementById('calc-targets')
