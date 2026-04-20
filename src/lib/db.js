@@ -663,3 +663,53 @@ export async function getAllErrorLogs(limit = 200) {
   if (error) return []
   return data ?? []
 }
+
+// ─── Body Metrics ─────────────────────────────────────────────────────────────
+
+export async function getBodyMetrics(userId) {
+  if (!supabase) return null
+  const { data } = await supabase.from('body_metrics').select('*').eq('user_id', userId).maybeSingle()
+  return data
+}
+
+export async function saveBodyMetrics(userId, metrics) {
+  if (!supabase) return metrics
+  const payload = { ...metrics, user_id: userId, updated_at: new Date().toISOString() }
+  const { data, error } = await supabase.from('body_metrics').upsert(payload).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function getCheckins(userId, limit = 52) {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('checkins').select('*').eq('user_id', userId)
+    .order('checked_in_at', { ascending: false }).limit(limit)
+  if (error) return []
+  return data ?? []
+}
+
+export async function saveCheckin(userId, checkin) {
+  if (!supabase) return checkin
+  const { data, error } = await supabase
+    .from('checkins').insert({ ...checkin, user_id: userId }).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function uploadScanFile(userId, file) {
+  if (!supabase) return null
+  const ext = file.name.split('.').pop()
+  const path = `${userId}/${Date.now()}.${ext}`
+  const { error } = await supabase.storage.from('body-scans').upload(path, file, {
+    cacheControl: '3600', upsert: false
+  })
+  if (error) throw error
+  return path
+}
+
+export async function getScanUrl(path) {
+  if (!supabase || !path) return null
+  const { data } = await supabase.storage.from('body-scans').createSignedUrl(path, 60 * 60 * 24)
+  return data?.signedUrl || null
+}

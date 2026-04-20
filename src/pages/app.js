@@ -8,12 +8,13 @@ import {
   getWeeksWithMeals, getPlannerRange,
   getFoodItems, upsertFoodItem, deleteFoodItem,
   saveRecipeInstructions, autoSaveFoodItem,
-  logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs
+  logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs,
+  getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, uploadScanFile, getScanUrl
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
-  generateRecipeInstructions
+  generateRecipeInstructions, extractBodyScan
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -25,6 +26,8 @@ let state = {
   log: [],
   recipes: [],
   foodItems: [],
+  bodyMetrics: null,
+  checkins: [],
   newUsersCount: 0,
   editingFoodItem: null,
   editingComponents: null,
@@ -157,14 +160,16 @@ export async function initApp(user, container) {
 async function loadAll() {
   const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
 
-  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner] = await Promise.all([
+  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner, bodyMetrics, checkins] = await Promise.all([
     safe(() => getGoals(state.user.id)),
     safe(() => getMealLog(state.user.id, { limit: 300 })),
     safe(() => getUsageSummary(state.user.id)),
     safe(() => getRecipes(state.user.id)),
     safe(() => getWeeksWithMeals(state.user.id)),
     safe(() => getFoodItems(state.user.id)),
-    safe(() => getPlannerWeek(state.user.id, getWeekStart()))
+    safe(() => getPlannerWeek(state.user.id, getWeekStart())),
+    safe(() => getBodyMetrics(state.user.id)),
+    safe(() => getCheckins(state.user.id))
   ])
   state.goals = { calories: goals?.calories ?? 2000, protein: goals?.protein ?? 150, carbs: goals?.carbs ?? 200, fat: goals?.fat ?? 65 }
   state.log = log ?? []
@@ -173,6 +178,8 @@ async function loadAll() {
   state.weeksWithMeals = weeksWithMeals ?? []
   state.foodItems = foodItems ?? []
   if (todayPlanner) state.planner = todayPlanner
+  state.bodyMetrics = bodyMetrics
+  state.checkins = checkins ?? []
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
@@ -328,6 +335,43 @@ function renderShell(container) {
           <div id="leftover-preview" style="display:none;margin-top:8px;font-size:12px;color:var(--carbs);padding:6px 10px;background:rgba(122,180,232,0.08);border-radius:var(--r);border:1px solid rgba(122,180,232,0.2)">
             Will also be added to <span id="leftover-day-label">Monday</span> as lunch
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Check-in modal -->
+    <div class="modal-overlay" id="checkin-modal">
+      <div class="modal-box" style="max-width:480px">
+        <button class="modal-close" onclick="closeCheckinModal()">×</button>
+        <h3>Weekly check-in</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+          <div class="modal-field"><label>Weight (kg)</label><input type="number" step="0.1" id="ci-weight" placeholder="80.5" /></div>
+          <div class="modal-field"><label>Body fat %</label><input type="number" step="0.1" id="ci-bf" placeholder="20" /></div>
+          <div class="modal-field"><label>Muscle mass (kg)</label><input type="number" step="0.1" id="ci-muscle" placeholder="" /></div>
+          <div class="modal-field"><label>Date</label><input type="date" id="ci-date" /></div>
+        </div>
+        <div class="modal-field">
+          <label>Notes (optional)</label>
+          <textarea id="ci-notes" placeholder="How are you feeling? Any observations..."
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none;resize:none;min-height:60px"></textarea>
+        </div>
+        <!-- Scan upload -->
+        <div style="margin-bottom:16px">
+          <label style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:8px">InBody / DEXA scan (optional)</label>
+          <div id="scan-upload-area" onclick="document.getElementById('scan-file-input').click()"
+            style="border:1.5px dashed var(--border2);border-radius:var(--r);padding:16px;text-align:center;cursor:pointer;background:var(--bg3)">
+            <div id="scan-upload-inner">
+              <div style="font-size:24px;margin-bottom:4px">📄</div>
+              <div style="font-size:13px;color:var(--text2)">Upload scan (PDF or image)</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract your metrics automatically</div>
+            </div>
+          </div>
+          <input type="file" id="scan-file-input" accept="application/pdf,image/*" style="display:none" onchange="handleScanUpload(this.files[0])" />
+          <div id="scan-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-cancel" onclick="closeCheckinModal()">Cancel</button>
+          <button class="btn-save" onclick="saveCheckinHandler()">Save check-in</button>
         </div>
       </div>
     </div>
@@ -2000,26 +2044,232 @@ function renderIngredientRow(ing, idx, editable, targetServings, baseServings) {
 }
 
 // ─── Goals Page ───────────────────────────────────────────────────────────────
+// ─── Goals & Body Metrics Page ────────────────────────────────────────────────
+function calcBMR(m) {
+  if (!m?.weight_kg || !m?.height_cm || !m?.age) return null
+  const base = 10 * m.weight_kg + 6.25 * m.height_cm - 5 * m.age
+  return Math.round(m.sex === 'female' ? base - 161 : base + 5)
+}
+
+function calcTDEE(bmr, activity) {
+  const mults = { sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725, very_active: 1.9 }
+  return bmr ? Math.round(bmr * (mults[activity] || 1.55)) : null
+}
+
+function calcTargetMacros(m, tdee) {
+  if (!tdee || !m) return null
+  const pace = { slow: 250, moderate: 400, aggressive: 600 }
+  const deficit = m.weight_goal === 'lose' ? (pace[m.pace] || 400)
+    : m.weight_goal === 'gain' ? -(pace[m.pace] || 300) : 0
+  const targetCal = Math.max(1200, tdee - deficit)
+  const proteinG = Math.round((m.weight_kg || 70) * 2.2 * 0.85) // ~0.85g per lb
+  const fatCal = Math.round(targetCal * 0.25)
+  const fatG = Math.round(fatCal / 9)
+  const carbCal = targetCal - (proteinG * 4) - fatCal
+  const carbG = Math.max(50, Math.round(carbCal / 4))
+  return { calories: targetCal, protein: proteinG, carbs: carbG, fat: fatG }
+}
+
+function weeksToGoal(m) {
+  if (!m?.weight_kg || !m?.goal_weight_kg) return null
+  const diff = Math.abs(m.weight_kg - m.goal_weight_kg)
+  const pace = { slow: 0.25, moderate: 0.4, aggressive: 0.6 }
+  const kgPerWeek = pace[m.pace] || 0.4
+  return Math.ceil(diff / kgPerWeek)
+}
+
 function renderGoalsPage(container) {
+  const m = state.bodyMetrics || {}
+  const bmr = calcBMR(m)
+  const tdee = calcTDEE(bmr, m.activity_level)
+  const targets = calcTargetMacros(m, tdee)
+  const weeks = weeksToGoal(m)
+  const checkins = state.checkins || []
+  const inp = (id, type, val, placeholder='') =>
+    `<input type="${type}" id="${id}" value="${val ?? ''}" placeholder="${placeholder}"
+      style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none">`
+  const sel = (id, val, opts) =>
+    `<select id="${id}" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none">
+      ${opts.map(([v,l]) => `<option value="${v}" ${val===v?'selected':''}>${l}</option>`).join('')}
+    </select>`
+
   container.innerHTML = `
-    <div class="greeting">Goals</div>
-    <div class="greeting-sub">Set your daily macro targets.</div>
-    <div class="upload-card" style="max-width:400px">
-      <div class="section-title">Daily targets</div>
-      <div style="display:flex;flex-direction:column;gap:14px">
-        <div><label style="font-size:12px;color:var(--text3);display:block;margin-bottom:6px">Calories (kcal)</label>
-          <input type="number" id="goal-cal" value="${state.goals.calories}" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none"></div>
-        <div><label style="font-size:12px;color:var(--text3);display:block;margin-bottom:6px">Protein (g)</label>
-          <input type="number" id="goal-p" value="${state.goals.protein}" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none"></div>
-        <div><label style="font-size:12px;color:var(--text3);display:block;margin-bottom:6px">Carbs (g)</label>
-          <input type="number" id="goal-c" value="${state.goals.carbs}" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none"></div>
-        <div><label style="font-size:12px;color:var(--text3);display:block;margin-bottom:6px">Fat (g)</label>
-          <input type="number" id="goal-f" value="${state.goals.fat}" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none"></div>
-        <button class="analyze-btn" onclick="saveGoalsHandler()">Save goals</button>
+    <div class="greeting">Goals & Body</div>
+    <div class="greeting-sub">Track your metrics, calculate your targets, log your progress.</div>
+
+    <!-- Body metrics form -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title">Body metrics</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div>
+          <label class="field-label">Sex</label>
+          ${sel('bm-sex', m.sex||'male', [['male','Male'],['female','Female']])}
+        </div>
+        <div>
+          <label class="field-label">Age</label>
+          ${inp('bm-age','number', m.age, '30')}
+        </div>
+        <div>
+          <label class="field-label">Height (cm)</label>
+          ${inp('bm-height','number', m.height_cm, '175')}
+        </div>
+        <div>
+          <label class="field-label">Current weight (kg)</label>
+          ${inp('bm-weight','number', m.weight_kg, '80')}
+        </div>
+        <div>
+          <label class="field-label">Body fat %</label>
+          ${inp('bm-bf','number', m.body_fat_pct, '20')}
+        </div>
+        <div>
+          <label class="field-label">Muscle mass (kg)</label>
+          ${inp('bm-muscle','number', m.muscle_mass_kg, '')}
+        </div>
       </div>
+      <div style="margin-bottom:12px">
+        <label class="field-label">Activity level</label>
+        ${sel('bm-activity', m.activity_level||'moderate', [
+          ['sedentary','Sedentary (desk job, no exercise)'],
+          ['light','Light (1-3x/week)'],
+          ['moderate','Moderate (3-5x/week)'],
+          ['active','Active (6-7x/week)'],
+          ['very_active','Very active (2x/day or physical job)']
+        ])}
+      </div>
+
+      ${bmr ? `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;padding:12px;background:var(--bg3);border-radius:var(--r)">
+          <div style="text-align:center">
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">BMR</div>
+            <div style="font-size:22px;font-weight:700;color:var(--accent)">${bmr}</div>
+            <div style="font-size:11px;color:var(--text3)">kcal at rest</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">TDEE</div>
+            <div style="font-size:22px;font-weight:700;color:var(--protein)">${tdee}</div>
+            <div style="font-size:11px;color:var(--text3)">maintenance</div>
+          </div>
+        </div>
+      ` : ''}
+    </div>
+
+    <!-- Goal settings -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title">Goal settings</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div>
+          <label class="field-label">Goal weight (kg)</label>
+          ${inp('bm-goal-weight','number', m.goal_weight_kg, '75')}
+        </div>
+        <div>
+          <label class="field-label">Goal body fat %</label>
+          ${inp('bm-goal-bf','number', m.goal_body_fat_pct, '15')}
+        </div>
+        <div>
+          <label class="field-label">Direction</label>
+          ${sel('bm-direction', m.weight_goal||'lose', [
+            ['lose','Lose fat'],['maintain','Maintain'],['gain','Build muscle']
+          ])}
+        </div>
+        <div>
+          <label class="field-label">Pace</label>
+          ${sel('bm-pace', m.pace||'moderate', [
+            ['slow','Slow (sustainable)'],
+            ['moderate','Moderate (recommended)'],
+            ['aggressive','Aggressive (harder)']
+          ])}
+        </div>
+      </div>
+
+      ${targets ? `
+        <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:12px">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">
+            Calculated daily targets
+            ${weeks ? `<span style="font-weight:400;color:var(--text3);margin-left:8px">~${weeks} weeks to goal</span>` : ''}
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center">
+            <div><div style="font-size:18px;font-weight:700;color:var(--accent)">${targets.calories}</div><div style="font-size:10px;color:var(--text3)">kcal</div></div>
+            <div><div style="font-size:18px;font-weight:700;color:var(--protein)">${targets.protein}g</div><div style="font-size:10px;color:var(--text3)">protein</div></div>
+            <div><div style="font-size:18px;font-weight:700;color:var(--carbs)">${targets.carbs}g</div><div style="font-size:10px;color:var(--text3)">carbs</div></div>
+            <div><div style="font-size:18px;font-weight:700;color:var(--fat)">${targets.fat}g</div><div style="font-size:10px;color:var(--text3)">fat</div></div>
+          </div>
+          <button onclick="applyCalculatedTargets(${targets.calories},${targets.protein},${targets.carbs},${targets.fat})"
+            style="width:100%;margin-top:10px;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+            Apply these targets to my daily goals →
+          </button>
+        </div>
+      ` : `
+        <div style="padding:12px;background:var(--bg3);border-radius:var(--r);font-size:13px;color:var(--text3);margin-bottom:12px">
+          Fill in your body metrics above to calculate personalized macro targets.
+        </div>
+      `}
+
+      <!-- Manual override -->
+      <div style="font-size:11px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px">Manual targets</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div><label class="field-label">Calories</label>${inp('goal-cal','number',state.goals.calories)}</div>
+        <div><label class="field-label">Protein (g)</label>${inp('goal-p','number',state.goals.protein)}</div>
+        <div><label class="field-label">Carbs (g)</label>${inp('goal-c','number',state.goals.carbs)}</div>
+        <div><label class="field-label">Fat (g)</label>${inp('goal-f','number',state.goals.fat)}</div>
+      </div>
+      <button class="analyze-btn" onclick="saveGoalsHandler()">Save all settings</button>
+    </div>
+
+    <!-- Weekly check-in -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Weekly check-in</span>
+        <button onclick="openCheckinModal()" class="clear-btn" style="color:var(--accent)">+ Log check-in</button>
+      </div>
+      ${!checkins.length ? `
+        <div style="font-size:13px;color:var(--text3);padding:12px 0">No check-ins yet. Log your first weekly weigh-in!</div>
+      ` : `
+        <!-- Progress chart placeholder -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Weight trend (kg)</div>
+          <div style="display:flex;align-items:flex-end;gap:4px;height:60px">
+            ${checkins.slice(0,12).reverse().map(c => {
+              const allW = checkins.filter(x=>x.weight_kg).map(x=>x.weight_kg)
+              const minW = Math.min(...allW), maxW = Math.max(...allW)
+              const range = maxW - minW || 1
+              const pct = c.weight_kg ? Math.round(((c.weight_kg - minW) / range) * 50 + 10) : 10
+              return `<div style="flex:1;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:4px;opacity:0.7" title="${c.weight_kg}kg"></div>`
+            }).join('')}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${checkins.slice(0,8).map(c => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
+              <div>
+                <div style="font-size:13px;color:var(--text);font-weight:500">
+                  ${new Date(c.checked_in_at).toLocaleDateString([], {month:'short',day:'numeric',year:'numeric'})}
+                </div>
+                <div style="font-size:11px;color:var(--text3);margin-top:2px">${c.notes || ''}</div>
+              </div>
+              <div style="text-align:right;font-size:12px;display:flex;gap:12px">
+                ${c.weight_kg ? `<div><div style="color:var(--accent);font-weight:600">${c.weight_kg}kg</div><div style="color:var(--text3)">weight</div></div>` : ''}
+                ${c.body_fat_pct ? `<div><div style="color:var(--protein);font-weight:600">${c.body_fat_pct}%</div><div style="color:var(--text3)">body fat</div></div>` : ''}
+                ${c.scan_file_path ? `<div><div style="color:var(--carbs)">📄</div><div style="color:var(--text3)">scan</div></div>` : ''}
+              </div>
+            </div>`).join('')}
+        </div>
+      `}
     </div>
   `
+
+  // Wire save button to also save body metrics
+  wireGoalsPage()
 }
+
+function wireGoalsPage() {
+  // Live recalc when inputs change
+  const ids = ['bm-sex','bm-age','bm-height','bm-weight','bm-bf','bm-muscle','bm-activity','bm-goal-weight','bm-goal-bf','bm-direction','bm-pace']
+  ids.forEach(id => {
+    const el = document.getElementById(id)
+    if (el) el.addEventListener('change', () => window.previewGoalsCalc())
+  })
+}
+
 
 // ─── Account Page ─────────────────────────────────────────────────────────────
 function renderAccount(container) {
@@ -2786,6 +3036,146 @@ function wireGlobals() {
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
+  // ── Goals & Body Metrics ───────────────────────────────────────
+  window.previewGoalsCalc = () => {
+    // Re-render the goals page with current input values
+    const m = readBodyMetricsForm()
+    state.bodyMetrics = { ...state.bodyMetrics, ...m }
+    renderPage()
+  }
+
+  function readBodyMetricsForm() {
+    return {
+      sex: document.getElementById('bm-sex')?.value || 'male',
+      age: parseFloat(document.getElementById('bm-age')?.value) || null,
+      height_cm: parseFloat(document.getElementById('bm-height')?.value) || null,
+      weight_kg: parseFloat(document.getElementById('bm-weight')?.value) || null,
+      body_fat_pct: parseFloat(document.getElementById('bm-bf')?.value) || null,
+      muscle_mass_kg: parseFloat(document.getElementById('bm-muscle')?.value) || null,
+      activity_level: document.getElementById('bm-activity')?.value || 'moderate',
+      goal_weight_kg: parseFloat(document.getElementById('bm-goal-weight')?.value) || null,
+      goal_body_fat_pct: parseFloat(document.getElementById('bm-goal-bf')?.value) || null,
+      weight_goal: document.getElementById('bm-direction')?.value || 'lose',
+      pace: document.getElementById('bm-pace')?.value || 'moderate',
+    }
+  }
+
+  window.applyCalculatedTargets = (cal, protein, carbs, fat) => {
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v }
+    setVal('goal-cal', cal); setVal('goal-p', protein)
+    setVal('goal-c', carbs); setVal('goal-f', fat)
+    showToast('Targets applied — tap Save to confirm', 'success')
+  }
+
+  window.openCheckinModal = () => {
+    state.pendingCheckinScan = null
+    const today = new Date().toISOString().split('T')[0]
+    document.getElementById('ci-date').value = today
+    document.getElementById('ci-weight').value = state.bodyMetrics?.weight_kg || ''
+    document.getElementById('ci-bf').value = state.bodyMetrics?.body_fat_pct || ''
+    document.getElementById('ci-muscle').value = state.bodyMetrics?.muscle_mass_kg || ''
+    document.getElementById('ci-notes').value = ''
+    document.getElementById('scan-status').textContent = ''
+    document.getElementById('scan-upload-inner').innerHTML = '<div style="font-size:24px;margin-bottom:4px">📄</div><div style="font-size:13px;color:var(--text2)">Upload scan (PDF or image)</div><div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract your metrics automatically</div>'
+    document.getElementById('checkin-modal').classList.add('open')
+  }
+
+  window.closeCheckinModal = () => {
+    document.getElementById('checkin-modal').classList.remove('open')
+    state.pendingCheckinScan = null
+  }
+
+  window.handleScanUpload = async (file) => {
+    if (!file) return
+    const status = document.getElementById('scan-status')
+    const inner = document.getElementById('scan-upload-inner')
+    if (status) status.textContent = 'Reading scan...'
+    if (inner) inner.innerHTML = '<div style="font-size:24px">⏳</div><div style="font-size:13px;color:var(--text2)">Extracting metrics...</div>'
+
+    try {
+      const reader = new FileReader()
+      reader.onload = async (ev) => {
+        const b64 = ev.target.result.split(',')[1]
+        const mediaType = file.type || 'image/jpeg'
+        const extracted = await extractBodyScan(b64, mediaType)
+
+        state.pendingCheckinScan = { file, extracted }
+
+        // Auto-fill form from extracted data
+        const set = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val }
+        if (extracted) {
+          set('ci-weight', extracted.weight_kg)
+          set('ci-bf', extracted.body_fat_pct)
+          set('ci-muscle', extracted.muscle_mass_kg)
+          if (extracted.scan_date) set('ci-date', extracted.scan_date)
+        }
+
+        if (inner) inner.innerHTML = '<div style="font-size:24px">✓</div><div style="font-size:13px;color:var(--protein)">' + esc(file.name) + '</div>'
+        if (status) status.textContent = extracted
+          ? `Extracted: ${[extracted.weight_kg && extracted.weight_kg+'kg', extracted.body_fat_pct && extracted.body_fat_pct+'% BF'].filter(Boolean).join(', ')}`
+          : 'File ready — metrics not detected, fill in manually'
+      }
+      reader.readAsDataURL(file)
+    } catch (err) {
+      if (status) status.textContent = 'Extraction failed — fill in manually'
+      state.pendingCheckinScan = { file, extracted: null }
+    }
+  }
+
+  window.saveCheckinHandler = async () => {
+    const btn = document.querySelector('#checkin-modal .btn-save')
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
+    try {
+      const weight = parseFloat(document.getElementById('ci-weight')?.value) || null
+      const bf = parseFloat(document.getElementById('ci-bf')?.value) || null
+      const muscle = parseFloat(document.getElementById('ci-muscle')?.value) || null
+      const date = document.getElementById('ci-date')?.value || new Date().toISOString().split('T')[0]
+      const notes = document.getElementById('ci-notes')?.value?.trim() || ''
+
+      // Upload scan file if present
+      let scanPath = null
+      if (state.pendingCheckinScan?.file) {
+        try {
+          scanPath = await uploadScanFile(state.user.id, state.pendingCheckinScan.file)
+        } catch (e) {
+          showToast('Scan upload failed — saving check-in without file', '')
+        }
+      }
+
+      const checkin = await saveCheckin(state.user.id, {
+        checked_in_at: date,
+        weight_kg: weight,
+        body_fat_pct: bf,
+        muscle_mass_kg: muscle,
+        notes,
+        scan_file_path: scanPath,
+        scan_extracted: state.pendingCheckinScan?.extracted || null,
+      })
+      state.checkins.unshift(checkin)
+
+      // Update body metrics with latest weight
+      if (weight || bf || muscle) {
+        const updates = {}
+        if (weight) updates.weight_kg = weight
+        if (bf) updates.body_fat_pct = bf
+        if (muscle) updates.muscle_mass_kg = muscle
+        const updated = await saveBodyMetrics(state.user.id, { ...state.bodyMetrics, ...updates })
+        state.bodyMetrics = updated
+      }
+
+      closeCheckinModal()
+      renderPage()
+      showToast('Check-in saved!', 'success')
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+      if (btn) { btn.disabled = false; btn.textContent = 'Save check-in' }
+    }
+  }
+
+  document.getElementById('checkin-modal')?.addEventListener('click', e => {
+    if (e.target.id === 'checkin-modal') closeCheckinModal()
+  })
+
   window.saveGoalsHandler = async () => {
     state.goals = {
       calories: parseInt(document.getElementById('goal-cal')?.value) || 2000,
@@ -2795,8 +3185,17 @@ function wireGlobals() {
     }
     try {
       await dbSaveGoals(state.user.id, state.goals)
-      showToast('Goals saved!', 'success')
+      // Also save body metrics if on goals page
+      if (state.currentPage === 'goals') {
+        const bm = readBodyMetricsForm()
+        const bmr = calcBMR(bm)
+        const tdee = calcTDEE(bmr, bm.activity_level)
+        const updated = await saveBodyMetrics(state.user.id, { ...state.bodyMetrics, ...bm, bmr, tdee })
+        state.bodyMetrics = updated
+      }
+      showToast('Saved!', 'success')
       updateSidebar()
+      renderPage()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 

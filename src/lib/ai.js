@@ -301,3 +301,28 @@ Return ONLY the steps as a JSON array:
 
   return parseJSON(data)
 }
+
+export async function extractBodyScan(imageBase64, mediaType = 'image/jpeg') {
+  const data = await callProxy('food', [{
+    role: 'user',
+    content: [
+      { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+      { type: 'text', text: `This is a body composition scan (InBody, DEXA, or similar). Extract all available metrics.
+
+Return ONLY this JSON:
+{
+  "scan_type": "inbody|dexa|other",
+  "weight_kg": number|null,
+  "body_fat_pct": number|null,
+  "muscle_mass_kg": number|null,
+  "bone_mass_kg": number|null,
+  "water_pct": number|null,
+  "visceral_fat": number|null,
+  "bmr": number|null,
+  "scan_date": "YYYY-MM-DD"|null,
+  "notes": "any other notable findings"
+}` }
+    ]
+  }], { max_tokens: 500 })
+  return parseJSON(data)
+}
