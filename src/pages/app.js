@@ -660,9 +660,7 @@ function renderTodayMeals(logEntries) {
   return d.innerHTML
 }
 
-
-
-
+function renderLogTable(entries, isToday) {
   if (!entries.length) return `<div class="log-empty">${isToday ? 'No entries yet. Analyze a meal to get started.' : 'No history yet.'}</div>`
   return `
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
