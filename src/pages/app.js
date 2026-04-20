@@ -579,10 +579,10 @@ function renderTodayMeals(logEntries) {
   })
   const activeMealTypes = MEAL_TYPES.filter(t => grouped[t].length > 0 || plannedByType[t].length > 0)
   if (!activeMealTypes.length) {
-    return '<div class="log-empty">No meals yet today. Analyze a meal or check off a planned meal to get started.</div>'
+    return '<div class="log-empty">No meals yet today. Analyze a meal or check off a planned meal.</div>'
   }
 
-  const html = []
+  const d = document.createElement('div')
   activeMealTypes.forEach(mealType => {
     const logs = grouped[mealType]
     const plans = plannedByType[mealType]
@@ -592,80 +592,74 @@ function renderTodayMeals(logEntries) {
     const mealF   = logs.reduce((a, e) => a + (e.fat      || 0), 0)
     const icon = MEAL_TYPE_ICONS[mealType] || ''
 
-    const macroSummary = logs.length
-      ? '<span style="font-size:11px;color:var(--text3)">'
-        + '<span style="color:var(--accent)">' + Math.round(mealCal) + '</span> kcal'
-        + '<span style="color:var(--protein);margin-left:6px">P' + Math.round(mealP) + '</span>'
-        + '<span style="color:var(--carbs);margin-left:4px">C' + Math.round(mealC) + '</span>'
-        + '<span style="color:var(--fat);margin-left:4px">F' + Math.round(mealF) + '</span>'
-        + '</span>'
-      : ''
+    const section = document.createElement('div')
+    section.style.marginBottom = '4px'
 
-    html.push(
-      '<div style="margin-bottom:4px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px;background:var(--bg3)">'
-      + '<span style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px">' + icon + ' ' + mealType + '</span>'
-      + macroSummary
-      + '</div>'
-    )
+    // Header
+    const header = document.createElement('div')
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px;background:var(--bg3)'
+    header.innerHTML = '<span style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px">'
+      + icon + ' ' + mealType + '</span>'
+      + (logs.length ? '<span style="font-size:11px;color:var(--text3)">'
+        + '<span style="color:var(--accent)">' + Math.round(mealCal) + '</span> kcal'
+        + ' <span style="color:var(--protein)">P' + Math.round(mealP) + '</span>'
+        + ' <span style="color:var(--carbs)">C' + Math.round(mealC) + '</span>'
+        + ' <span style="color:var(--fat)">F' + Math.round(mealF) + '</span>'
+        + '</span>' : '')
+    section.appendChild(header)
 
     // Planned meals
     plans.forEach(m => {
       const mealName = m.meal_name || m.name || ''
       const isLogged = loggedNames.has(mealName.toLowerCase())
-      const checkmark = isLogged
-        ? '<svg width="10" height="10" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>'
-        : ''
-      html.push(
-        '<div style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);opacity:' + (isLogged ? '0.45' : '1') + ';cursor:pointer"'
-        + ' onclick="logPlannedMeal('' + m.id + '', '' + mealType + '')">'
-        + '<div style="width:20px;height:20px;border-radius:50%;border:2px solid ' + (isLogged ? 'var(--protein)' : 'var(--border2)') + ';background:' + (isLogged ? 'var(--protein)' : 'none') + ';flex-shrink:0;display:flex;align-items:center;justify-content:center">'
-        + checkmark + '</div>'
-        + '<div style="flex:1;min-width:0">'
-        + '<div style="font-size:13px;color:var(--text2)' + (isLogged ? ';text-decoration:line-through' : '') + '">' + esc(mealName) + '</div>'
-        + '<div style="font-size:11px;color:var(--text3)">Planned · ' + Math.round(m.calories || 0) + ' kcal</div>'
+      const row = document.createElement('div')
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer;opacity:' + (isLogged ? '0.45' : '1')
+      row.innerHTML = '<div style="width:20px;height:20px;border-radius:50%;border:2px solid ' + (isLogged ? 'var(--protein)' : 'var(--border2)') + ';background:' + (isLogged ? 'var(--protein)' : 'none') + ';flex-shrink:0;display:flex;align-items:center;justify-content:center">'
+        + (isLogged ? '<svg width="10" height="10" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>' : '')
         + '</div>'
-        + (!isLogged ? '<span style="font-size:11px;color:var(--text3);flex-shrink:0">Log it →</span>' : '')
-        + '</div>'
-      )
+        + '<div style="flex:1;min-width:0"><div style="font-size:13px;color:var(--text2)' + (isLogged ? ';text-decoration:line-through' : '') + '">' + esc(mealName) + '</div>'
+        + '<div style="font-size:11px;color:var(--text3)">Planned · ' + Math.round(m.calories || 0) + ' kcal</div></div>'
+        + (!isLogged ? '<span style="font-size:11px;color:var(--text3);flex-shrink:0">Log it \u2192</span>' : '')
+      row.addEventListener('click', () => window.logPlannedMeal(m.id, mealType))
+      section.appendChild(row)
     })
 
     // Logged entries
     logs.forEach(e => {
-      const d = new Date(e.logged_at || e.timestamp)
-      const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      const servingBadge = e.servings_consumed && e.servings_consumed != 1
-        ? '<span style="font-size:10px;color:var(--text3);margin-left:4px">x' + e.servings_consumed + '</span>' : ''
+      const d2 = new Date(e.logged_at || e.timestamp)
+      const timeStr = d2.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      const servingTxt = e.servings_consumed && e.servings_consumed != 1 ? ' \xd7' + e.servings_consumed : ''
       const entryIcon = MEAL_TYPE_ICONS[e._mealType] || ''
-      html.push(
-        '<div onclick="openEditModal('' + e.id + '', 'log')"'
-        + ' style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer"'
-        + ' onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">'
-        + '<div style="flex:1;min-width:0">'
-        + '<div style="font-size:13px;color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(e.name) + servingBadge + '</div>'
+      const row = document.createElement('div')
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer'
+      row.onmouseover = () => { row.style.background = 'var(--bg3)' }
+      row.onmouseout  = () => { row.style.background = '' }
+      row.innerHTML = '<div style="flex:1;min-width:0">'
+        + '<div style="font-size:13px;color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(e.name) + (servingTxt ? '<span style="font-size:10px;color:var(--text3);margin-left:4px">' + servingTxt + '</span>' : '') + '</div>'
         + '<div style="font-size:11px;color:var(--text3);margin-top:1px;display:flex;align-items:center;gap:6px">'
         + '<span>' + timeStr + '</span>'
-        + '<button onclick="changeMealType('' + e.id + '', '' + e._mealType + '');event.stopPropagation()"'
-        + ' style="background:none;border:none;font-size:10px;color:var(--text3);cursor:pointer;padding:0;font-family:inherit"'
-        + ' onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text3)'">'
-        + entryIcon + ' ' + e._mealType + ' ▾</button>'
+        + '<button data-meal-type-btn style="background:none;border:none;font-size:10px;color:var(--text3);cursor:pointer;padding:0;font-family:inherit">' + entryIcon + ' ' + e._mealType + ' \u25be</button>'
         + '</div></div>'
         + '<div style="text-align:right;flex-shrink:0;font-size:12px">'
         + '<div style="color:var(--accent);font-weight:600">' + Math.round(e.calories) + ' kcal</div>'
         + '<div style="color:var(--text3)">P' + Math.round(e.protein) + ' C' + Math.round(e.carbs) + ' F' + Math.round(e.fat) + '</div>'
-        + '</div></div>'
-      )
+        + '</div>'
+      row.addEventListener('click', (ev) => {
+        if (ev.target.closest('[data-meal-type-btn]')) {
+          window.changeMealType(e.id, e._mealType)
+        } else {
+          window.openEditModal(e.id, 'log')
+        }
+      })
+      section.appendChild(row)
     })
 
-    if (!plans.length && !logs.length) {
-      html.push('<div style="padding:10px 16px;font-size:12px;color:var(--text3)">Nothing logged yet</div>')
-    }
-
-    html.push('</div>')
+    d.appendChild(section)
   })
 
-  return html.join('')
+  return d.innerHTML
 }
+
 
 
 
