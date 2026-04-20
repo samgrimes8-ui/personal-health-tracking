@@ -3187,6 +3187,9 @@ function wireGlobals() {
     document.getElementById('ci-date').value = today
     const wLabel = document.getElementById('ci-weight-label')
     if (wLabel) wLabel.textContent = isImperial ? 'Weight (lbs)' : 'Weight (kg)'
+    const mLabel = document.querySelector('#checkin-modal label[for-muscle]') || 
+      document.querySelector('#checkin-modal .modal-field:nth-child(3) label')
+    if (mLabel) mLabel.textContent = isImperial ? 'Muscle mass (lbs)' : 'Muscle mass (kg)'
     const bm = state.bodyMetrics
     document.getElementById('ci-weight').value = bm?.weight_kg
       ? (isImperial ? +(bm.weight_kg * 2.20462).toFixed(1) : bm.weight_kg) : ''
@@ -3211,33 +3214,60 @@ function wireGlobals() {
     if (status) status.textContent = 'Reading scan...'
     if (inner) inner.innerHTML = '<div style="font-size:24px">⏳</div><div style="font-size:13px;color:var(--text2)">Extracting metrics...</div>'
 
-    try {
-      const reader = new FileReader()
-      reader.onload = async (ev) => {
-        const b64 = ev.target.result.split(',')[1]
-        const mediaType = file.type || 'image/jpeg'
-        const extracted = await extractBodyScan(b64, mediaType)
-
-        state.pendingCheckinScan = { file, extracted }
-
-        // Auto-fill form from extracted data
-        const set = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val }
-        if (extracted) {
-          set('ci-weight', extracted.weight_kg)
-          set('ci-bf', extracted.body_fat_pct)
-          set('ci-muscle', extracted.muscle_mass_kg)
-          if (extracted.scan_date) set('ci-date', extracted.scan_date)
-        }
-
-        if (inner) inner.innerHTML = '<div style="font-size:24px">✓</div><div style="font-size:13px;color:var(--protein)">' + esc(file.name) + '</div>'
-        if (status) status.textContent = extracted
-          ? `Extracted: ${[extracted.weight_kg && extracted.weight_kg+'kg', extracted.body_fat_pct && extracted.body_fat_pct+'% BF'].filter(Boolean).join(', ')}`
-          : 'File ready — metrics not detected, fill in manually'
-      }
-      reader.readAsDataURL(file)
-    } catch (err) {
-      if (status) status.textContent = 'Extraction failed — fill in manually'
+    const isImperial = state.units === 'imperial'
+    const resetUpload = (msg) => {
+      if (inner) inner.innerHTML = '<div style="font-size:24px">📄</div><div style="font-size:13px;color:var(--text2)">Upload scan (PDF or image)</div><div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract your metrics automatically</div>'
+      if (status) status.textContent = msg
       state.pendingCheckinScan = { file, extracted: null }
+    }
+
+    try {
+      // Read file
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader()
+        reader.onload = e => res(e.target.result)
+        reader.onerror = rej
+        reader.readAsDataURL(file)
+      })
+      const b64 = dataUrl.split(',')[1]
+      const mediaType = file.type || 'image/jpeg'
+
+      // Extract with 30s timeout
+      let extracted = null
+      try {
+        extracted = await Promise.race([
+          extractBodyScan(b64, mediaType),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30000))
+        ])
+      } catch (aiErr) {
+        // AI failed or timed out — still allow saving without extraction
+        console.warn('Scan extraction failed:', aiErr.message)
+        resetUpload('Could not extract metrics — fill in manually above')
+        return
+      }
+
+      state.pendingCheckinScan = { file, extracted }
+
+      // Auto-fill form — convert units if imperial
+      const set = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val }
+      if (extracted) {
+        const w = extracted.weight_kg
+        const mu = extracted.muscle_mass_kg
+        set('ci-weight', isImperial && w ? +(w * 2.20462).toFixed(1) : w)
+        set('ci-bf', extracted.body_fat_pct)
+        set('ci-muscle', isImperial && mu ? +(mu * 2.20462).toFixed(1) : mu)
+        if (extracted.scan_date) set('ci-date', extracted.scan_date)
+      }
+
+      if (inner) inner.innerHTML = '<div style="font-size:24px">✓</div><div style="font-size:13px;color:var(--protein)">' + esc(file.name) + '</div>'
+      if (status) {
+        const parts = []
+        if (extracted?.weight_kg) parts.push(isImperial ? +(extracted.weight_kg*2.20462).toFixed(1)+'lbs' : extracted.weight_kg+'kg')
+        if (extracted?.body_fat_pct) parts.push(extracted.body_fat_pct+'% BF')
+        status.textContent = parts.length ? 'Extracted: ' + parts.join(', ') : 'File ready — fill in metrics above'
+      }
+    } catch (err) {
+      resetUpload('Failed to read file — try again')
     }
   }
 
@@ -3245,9 +3275,12 @@ function wireGlobals() {
     const btn = document.querySelector('#checkin-modal .btn-save')
     if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
     try {
-      const weight = parseFloat(document.getElementById('ci-weight')?.value) || null
+      const isImperial = state.units === 'imperial'
+      const rawWeight = parseFloat(document.getElementById('ci-weight')?.value) || null
+      const rawMuscle = parseFloat(document.getElementById('ci-muscle')?.value) || null
+      const weight = rawWeight ? (isImperial ? +(rawWeight / 2.20462).toFixed(2) : rawWeight) : null
       const bf = parseFloat(document.getElementById('ci-bf')?.value) || null
-      const muscle = parseFloat(document.getElementById('ci-muscle')?.value) || null
+      const muscle = rawMuscle ? (isImperial ? +(rawMuscle / 2.20462).toFixed(2) : rawMuscle) : null
       const date = document.getElementById('ci-date')?.value || new Date().toISOString().split('T')[0]
       const notes = document.getElementById('ci-notes')?.value?.trim() || ''
 
