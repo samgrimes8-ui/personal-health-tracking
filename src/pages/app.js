@@ -3081,7 +3081,7 @@ function renderAccount(container) {
   `
 
   if (u.isAdmin) loadAdminPanel()
-  setTimeout(() => loadHealthSyncKey(), 0)
+  setTimeout(() => window.loadHealthSyncKey?.(), 0)
 }
 
 async function loadAdminPanel() {
@@ -4439,8 +4439,7 @@ function wireGlobals() {
     }
   }
 
-  // Load health sync key for current user
-  async function loadHealthSyncKey() {
+  window.loadHealthSyncKey = async function() {
     const el = document.getElementById('health-sync-key-display')
     if (!el) return
     try {
@@ -4458,7 +4457,6 @@ function wireGlobals() {
       let xmlText = ''
 
       if (file.name.endsWith('.zip')) {
-        // Load JSZip dynamically
         if (!window.JSZip) {
           await new Promise((res, rej) => {
             const s = document.createElement('script')
@@ -4478,7 +4476,6 @@ function wireGlobals() {
 
       if (status) status.textContent = 'Extracting weight readings...'
 
-      // Parse weight records from Apple Health XML
       const parser = new DOMParser()
       const doc = parser.parseFromString(xmlText, 'text/xml')
       const records = Array.from(doc.querySelectorAll('Record[type="HKQuantityTypeIdentifierBodyMass"]'))
@@ -4499,15 +4496,14 @@ function wireGlobals() {
       }
 
       const readings = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date))
-      if (status) status.textContent = `Found ${readings.length} days of weight data — importing...`
+      if (status) status.textContent = `Found ${readings.length} days — importing...`
 
-      // Send to webhook in batches of 100
-      const BATCH = 100
-      let saved = 0
       const { data: profile } = await supabase.from('user_profiles').select('health_sync_key').eq('user_id', state.user.id).maybeSingle()
       const apiKey = profile?.health_sync_key
       if (!apiKey) { if (status) status.textContent = 'No sync key found — try refreshing'; return }
 
+      const BATCH = 100
+      let saved = 0
       for (let i = 0; i < readings.length; i += BATCH) {
         const batch = readings.slice(i, i + BATCH)
         const res = await fetch('/api/health-sync', {
@@ -4520,7 +4516,6 @@ function wireGlobals() {
         if (status) status.textContent = `Imported ${saved} of ${readings.length} readings...`
       }
 
-      // Reload checkins
       const checkins = await getCheckins(state.user.id)
       state.checkins = checkins
       if (status) status.textContent = `✓ Imported ${saved} weight readings from Apple Health`
