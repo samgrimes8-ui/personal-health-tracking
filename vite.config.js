@@ -6,6 +6,17 @@ export default defineConfig({
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
+      // Disable workbox caching during development — re-enable before App Store launch
+      // The aggressive caching was preventing updates from reaching users
+      injectRegister: 'script',
+      workbox: {
+        globPatterns: [],             // Cache nothing
+        navigateFallback: null,        // No offline fallback
+        runtimeCaching: [],            // No runtime caching
+        cleanupOutdatedCaches: true,   // Clear old caches
+        skipWaiting: true,             // New SW takes over immediately
+        clientsClaim: true,            // Controls all open tabs immediately
+      },
       includeAssets: ['favicon.svg', 'icons/*.png'],
       manifest: {
         name: 'MacroLens',
@@ -21,26 +32,6 @@ export default defineConfig({
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-        ],
-      },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        navigateFallback: 'index.html',
-        navigateFallbackDenylist: [/^\/api\//, /^\/recipe\//],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com/,
-            handler: 'StaleWhileRevalidate',
-            options: { cacheName: 'google-fonts-stylesheets' },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.gstatic\.com/,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-webfonts',
-              expiration: { maxAgeSeconds: 60 * 60 * 24 * 365 },
-            },
-          },
         ],
       },
     }),
