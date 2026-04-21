@@ -17,7 +17,8 @@ import {
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
-  generateRecipeInstructions, extractBodyScan, fetchOgMetadata, readBarcodeFromImage
+  generateRecipeInstructions, extractBodyScan, fetchOgMetadata, readBarcodeFromImage,
+  extractRecipeFromPhoto
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -1952,6 +1953,28 @@ function renderRecipeModalContent(recipe, mode = 'view') {
 
       <!-- Scrollable body -->
       <div style="padding:20px 20px 28px">
+
+        <!-- Cookbook photo capture — only for new recipes -->
+        ${isNew ? `
+          <div style="margin-bottom:16px;background:var(--bg3);border-radius:var(--r);overflow:hidden">
+            <div style="padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+              <div style="font-size:12px;font-weight:600;color:var(--text2)">📸 Import from cookbook</div>
+              <div style="font-size:11px;color:var(--text3)">Photo, screenshot or scan</div>
+            </div>
+            <div id="cookbook-upload-area" onclick="document.getElementById('cookbook-file-input').click()"
+              style="padding:16px;text-align:center;cursor:pointer;min-height:80px;display:flex;align-items:center;justify-content:center;gap:12px"
+              onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background=''">
+              <div id="cookbook-upload-inner" style="text-align:center">
+                <div style="font-size:28px;margin-bottom:4px">📖</div>
+                <div style="font-size:13px;color:var(--accent);font-weight:500">Tap to photograph a recipe</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract name, ingredients & instructions</div>
+              </div>
+            </div>
+            <input type="file" id="cookbook-file-input" accept="image/*" capture="environment" style="display:none"
+              onchange="handleCookbookPhoto(this.files[0])" />
+            <div id="cookbook-status" style="font-size:12px;color:var(--text3);padding:0 14px 10px;text-align:center;min-height:18px"></div>
+          </div>
+        ` : ''}
 
         <!-- Description -->
         ${mode === 'edit' || isNew ? `
@@ -4610,6 +4633,76 @@ function wireGlobals() {
   }
 
   // ── Recipe handlers ─────────────────────────────────────────────
+  window.handleCookbookPhoto = async (file) => {
+    if (!file) return
+    const status = document.getElementById('cookbook-status')
+    const inner = document.getElementById('cookbook-upload-inner')
+    if (status) status.textContent = 'Reading recipe...'
+    if (inner) inner.innerHTML = '<div style="font-size:24px">⏳</div><div style="font-size:13px;color:var(--text2)">Extracting recipe...</div>'
+
+    try {
+      // Resize before sending (cookbook photos can be large)
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader()
+        reader.onload = e => res(e.target.result)
+        reader.onerror = rej
+        reader.readAsDataURL(file)
+      })
+      const b64 = await new Promise((res) => {
+        const img = new Image()
+        img.onload = () => {
+          const MAX = 1500
+          let { width: w, height: h } = img
+          if (w > MAX || h > MAX) { const s = MAX / Math.max(w, h); w = Math.round(w*s); h = Math.round(h*s) }
+          const canvas = document.createElement('canvas')
+          canvas.width = w; canvas.height = h
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+          res(canvas.toDataURL('image/jpeg', 0.85).split(',')[1])
+        }
+        img.src = dataUrl
+      })
+
+      const extracted = await Promise.race([
+        extractRecipeFromPhoto(b64),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30000))
+      ])
+
+      if (!extracted || !extracted.name) {
+        if (status) status.textContent = 'Could not read recipe — fill in manually'
+        if (inner) inner.innerHTML = '<div style="font-size:20px">📖</div><div style="font-size:12px;color:var(--text2)">Fill in details below</div>'
+        return
+      }
+
+      // Update the editing recipe in state
+      state.editingRecipe = {
+        ...state.editingRecipe,
+        name: extracted.name || '',
+        description: extracted.description || '',
+        servings: extracted.servings || 4,
+        serving_label: extracted.serving_label || 'serving',
+        ingredients: (extracted.ingredients || []).map(ing => ({
+          amount: String(ing.amount || ''),
+          unit: ing.unit || '',
+          name: ing.name || '',
+        })),
+        instructions: extracted.instructions
+          ? { steps: extracted.instructions, prep_time: extracted.prep_time, cook_time: extracted.cook_time }
+          : null,
+        notes: extracted.notes || '',
+      }
+
+      // Re-render the modal with extracted data
+      document.getElementById('recipe-modal-content').innerHTML =
+        renderRecipeModalContent(state.editingRecipe, 'edit')
+
+      showToast(`"${extracted.name}" extracted — review and save`, 'success')
+
+    } catch (err) {
+      if (status) status.textContent = 'Extraction failed — fill in manually'
+      if (inner) inner.innerHTML = '<div style="font-size:20px">📖</div><div style="font-size:12px;color:var(--text2)">Fill in details below</div>'
+    }
+  }
+
   window.openNewRecipeModal = () => {
     state.editingRecipe = { name: '', description: '', servings: 4, serving_label: 'serving', calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, ingredients: [] }
     document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')

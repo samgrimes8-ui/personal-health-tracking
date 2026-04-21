@@ -482,3 +482,32 @@ export async function readBarcodeFromImage(imageBase64) {
   const match = text.match(/\d{6,14}/)
   return match ? match[0] : null
 }
+
+export async function extractRecipeFromPhoto(imageBase64) {
+  const data = await callProxy('recipe', [{
+    role: 'user',
+    content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
+      { type: 'text', text: `This is a photo of a recipe from a cookbook or recipe card. Extract the complete recipe.
+
+Return ONLY this JSON (no markdown):
+{
+  "name": "recipe name",
+  "description": "one line description",
+  "servings": number,
+  "serving_label": "serving",
+  "ingredients": [
+    { "amount": "1", "unit": "cup", "name": "ingredient name" }
+  ],
+  "instructions": ["Step 1 text", "Step 2 text"],
+  "prep_time": "X mins or null",
+  "cook_time": "X mins or null",
+  "notes": "any tips or notes from the recipe or null"
+}
+
+If ingredient has no unit (e.g. "2 eggs"), set unit to "".
+Extract every ingredient and every step exactly as written.` }
+    ]
+  }], { max_tokens: 2000 })
+  return parseJSON(data)
+}
