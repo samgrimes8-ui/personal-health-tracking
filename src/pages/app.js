@@ -4969,14 +4969,20 @@ function wireGlobals() {
 
   window.toggleMacroLock = (key) => {
     const locks = window._macroLockState
-    // Count currently unlocked — need at least 1 unlocked at all times
-    const unlocked = Object.values(locks).filter(v => !v).length
-    if (locks[key] && unlocked <= 1) {
-      showToast('At least one macro must be unlocked to auto-adjust', 'error')
-      return
-    }
+
+    // Toggle the clicked key
     locks[key] = !locks[key]
-    // Re-render the macro fields in place without full page render
+
+    // After toggling, check how many are still unlocked
+    const unlocked = Object.values(locks).filter(v => !v).length
+
+    // If everything is locked (0 unlocked), automatically unlock calories
+    if (unlocked === 0) {
+      locks.cal = false
+      showToast('Calories unlocked — one macro must always float', 'success')
+    }
+
+    // Re-render macro fields
     const container = document.getElementById('goal-cal')?.closest('[style*="grid"]')?.parentElement
     if (container) {
       const parent = container.parentElement
