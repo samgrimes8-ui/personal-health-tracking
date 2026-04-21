@@ -949,10 +949,15 @@ export async function getFollowedProviders(userId) {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('provider_follows')
-    .select('provider_id, user_profiles!provider_id(user_id, provider_name, provider_bio, provider_slug, provider_specialty, role)')
+    .select('provider_id')
     .eq('follower_id', userId)
-  if (error) throw error
-  return (data ?? []).map(r => r.user_profiles).filter(Boolean)
+  if (error || !data?.length) return []
+  const ids = data.map(r => r.provider_id)
+  const { data: profiles } = await supabase
+    .from('user_profiles')
+    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, role')
+    .in('user_id', ids)
+  return profiles ?? []
 }
 
 export async function isFollowingProvider(followerId, providerId) {

@@ -2961,8 +2961,25 @@ function wireGoalsPage() {
 function renderAccount(container) {
   const u = state.usage || {}
   const isImperial = state.units === 'imperial'
+  const m = state.bodyMetrics || {}
+  const bmr = calcBMR(m)
+  const tdee = calcTDEE(bmr, m.activity_level)
+  const targets = calcTargetMacros(m, tdee)
   const spentPct = u.isUnlimited ? 0 : Math.min(100, Math.round(((u.spent ?? 0) / (u.limit ?? 10)) * 100))
   const spentColor = spentPct >= 90 ? 'var(--red)' : spentPct >= 70 ? 'var(--fat)' : 'var(--accent)'
+  const kgToLbs = kg => kg ? +(kg * 2.20462).toFixed(1) : ''
+  const cmToFtIn = cm => { if (!cm) return { ft: '', inches: '' }; const totalIn = cm / 2.54; return { ft: Math.floor(totalIn / 12), inches: +(totalIn % 12).toFixed(1) } }
+  const ftIn = cmToFtIn(m.height_cm)
+  const weightDisplay = isImperial ? kgToLbs(m.weight_kg) : m.weight_kg
+  const muscleDisplay = isImperial ? kgToLbs(m.muscle_mass_kg) : m.muscle_mass_kg
+  const goalWeightDisplay = isImperial ? kgToLbs(m.goal_weight_kg) : m.goal_weight_kg
+  const inp = (id, type, val, placeholder='') =>
+    `<input type="${type}" id="${id}" value="${val ?? ''}" placeholder="${placeholder}"
+      style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none">`
+  const sel = (id, val, opts) =>
+    `<select id="${id}" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none">
+      ${opts.map(([v,l]) => `<option value="${v}" ${val===v?'selected':''}}>${l}</option>`).join('')}
+    </select>`
 
   container.innerHTML = `
     <div class="greeting">Account</div>
@@ -3224,63 +3241,6 @@ function renderAccount(container) {
       </div>
     </div>` : ''}
 
-    <!-- Apple Health -->
-    <div class="upload-card" style="max-width:520px;margin-bottom:20px">
-      <div class="section-title">🍎 Apple Health sync</div>
-
-      <!-- XML Import -->
-      <div style="margin-bottom:16px">
-        <div style="font-size:13px;color:var(--text2);font-weight:500;margin-bottom:4px">Import weight history</div>
-        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.5">
-          Export from Apple Health → profile pic → Export All Health Data → share the ZIP here.
-        </div>
-        <label for="health-xml-input"
-          style="display:block;width:100%;padding:11px;background:var(--bg3);border:1.5px dashed var(--border2);border-radius:var(--r);text-align:center;cursor:pointer;font-size:13px;color:var(--text2)">
-          📂 Select export.zip or export.xml
-        </label>
-        <input type="file" id="health-xml-input" accept=".zip,.xml" style="display:none"
-          onchange="importAppleHealthFile(this.files[0])" />
-        <div id="health-import-status" style="font-size:12px;color:var(--text3);margin-top:8px;min-height:18px;text-align:center"></div>
-      </div>
-
-      <div style="border-top:1px solid var(--border);margin-bottom:16px"></div>
-
-      <!-- Shortcuts webhook -->
-      <div>
-        <div style="font-size:13px;color:var(--text2);font-weight:500;margin-bottom:4px">Auto-sync via iOS Shortcuts</div>
-        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.5">
-          Set up a daily Shortcut to automatically log your weight from Apple Health.
-        </div>
-        <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:10px">
-          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Your sync credentials</div>
-          <div style="display:flex;flex-direction:column;gap:6px">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-              <span style="font-size:11px;color:var(--text3);flex-shrink:0">User ID</span>
-              <code style="font-size:11px;color:var(--text2);background:var(--bg2);padding:3px 7px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;max-width:220px;white-space:nowrap">${state.user.id}</code>
-              <button onclick="copyText('${state.user.id}')" style="background:none;border:1px solid var(--border2);border-radius:4px;padding:2px 7px;font-size:11px;color:var(--text3);cursor:pointer;flex-shrink:0">Copy</button>
-            </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-              <span style="font-size:11px;color:var(--text3);flex-shrink:0">API key</span>
-              <code id="health-sync-key-display" style="font-size:11px;color:var(--text2);background:var(--bg2);padding:3px 7px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;max-width:220px;white-space:nowrap">Loading...</code>
-              <button onclick="copyHealthKey()" style="background:none;border:1px solid var(--border2);border-radius:4px;padding:2px 7px;font-size:11px;color:var(--text3);cursor:pointer;flex-shrink:0">Copy</button>
-            </div>
-          </div>
-        </div>
-        <div style="background:var(--bg3);border-radius:var(--r);padding:12px">
-          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Shortcut setup (one-time)</div>
-          <ol style="font-size:12px;color:var(--text3);margin:0;padding-left:16px;line-height:1.8">
-            <li>Open the <strong style="color:var(--text2)">Shortcuts</strong> app on iPhone</li>
-            <li>Tap <strong style="color:var(--text2)">+</strong> → Add Action → <strong style="color:var(--text2)">Health</strong> → Find Health Samples</li>
-            <li>Set type: <strong style="color:var(--text2)">Body Mass</strong>, limit: 1, sort: Latest</li>
-            <li>Add action: <strong style="color:var(--text2)">URL</strong> → paste: <code style="color:var(--accent)">https://personal-health-tracking.vercel.app/api/health-sync</code></li>
-            <li>Add action: <strong style="color:var(--text2)">Get Contents of URL</strong> → Method: POST, Body: JSON</li>
-            <li>Add fields: <code style="color:var(--carbs)">user_id</code>, <code style="color:var(--carbs)">api_key</code>, <code style="color:var(--carbs)">weight_lbs</code> (Health Sample Value), <code style="color:var(--carbs)">date</code> (today)</li>
-            <li>Set automation: <strong style="color:var(--text2)">Run Shortcut</strong> daily at 7am</li>
-          </ol>
-        </div>
-      </div>
-    </div>
-
     <!-- Sign out -->
     <div class="upload-card" style="max-width:520px">
       <div class="section-title">Session</div>
@@ -3289,7 +3249,6 @@ function renderAccount(container) {
   `
 
   if (u.isAdmin) loadAdminPanel()
-  setTimeout(() => window.loadHealthSyncKey?.(), 0)
 }
 
 async function loadAdminPanel() {
