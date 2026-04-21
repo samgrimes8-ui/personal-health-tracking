@@ -1930,6 +1930,23 @@ function renderRecipeModalContent(recipe, mode = 'view') {
           <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);margin-right:36px;line-height:1.2;margin-bottom:8px">${esc(recipe.name)}</div>
         `}
 
+        ${isNew ? `
+          <div style="margin-top:10px">
+            <button onclick="document.getElementById('cookbook-file-input').click()"
+              style="width:100%;padding:10px 14px;background:rgba(232,197,71,0.1);border:1.5px dashed rgba(232,197,71,0.4);border-radius:var(--r);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;font-family:inherit">
+              <span style="font-size:18px">📖</span>
+              <div style="text-align:left">
+                <div style="font-size:13px;font-weight:600;color:var(--accent)">Import from cookbook</div>
+                <div style="font-size:11px;color:var(--text3)">Tap to photograph a recipe page</div>
+              </div>
+              <span id="cookbook-spinner" style="display:none;margin-left:auto">⏳</span>
+            </button>
+            <input type="file" id="cookbook-file-input" accept="image/*" capture="environment" style="display:none"
+              onchange="handleCookbookPhoto(this.files[0])" />
+            <div id="cookbook-status" style="font-size:11px;color:var(--text3);margin-top:4px;text-align:center;min-height:14px"></div>
+          </div>
+        ` : ''}
+
         ${isView ? `
           <div style="display:flex;align-items:center;gap:6px">
             <div style="display:flex;gap:4px;flex-wrap:nowrap;flex:1;overflow:hidden;min-width:0">
@@ -1953,28 +1970,6 @@ function renderRecipeModalContent(recipe, mode = 'view') {
 
       <!-- Scrollable body -->
       <div style="padding:20px 20px 28px">
-
-        <!-- Cookbook photo capture — only for new recipes -->
-        ${isNew ? `
-          <div style="margin-bottom:16px;background:var(--bg3);border-radius:var(--r);overflow:hidden">
-            <div style="padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
-              <div style="font-size:12px;font-weight:600;color:var(--text2)">📸 Import from cookbook</div>
-              <div style="font-size:11px;color:var(--text3)">Photo, screenshot or scan</div>
-            </div>
-            <div id="cookbook-upload-area" onclick="document.getElementById('cookbook-file-input').click()"
-              style="padding:16px;text-align:center;cursor:pointer;min-height:80px;display:flex;align-items:center;justify-content:center;gap:12px"
-              onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background=''">
-              <div id="cookbook-upload-inner" style="text-align:center">
-                <div style="font-size:28px;margin-bottom:4px">📖</div>
-                <div style="font-size:13px;color:var(--accent);font-weight:500">Tap to photograph a recipe</div>
-                <div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract name, ingredients & instructions</div>
-              </div>
-            </div>
-            <input type="file" id="cookbook-file-input" accept="image/*" capture="environment" style="display:none"
-              onchange="handleCookbookPhoto(this.files[0])" />
-            <div id="cookbook-status" style="font-size:12px;color:var(--text3);padding:0 14px 10px;text-align:center;min-height:18px"></div>
-          </div>
-        ` : ''}
 
         <!-- Description -->
         ${mode === 'edit' || isNew ? `
@@ -4636,9 +4631,9 @@ function wireGlobals() {
   window.handleCookbookPhoto = async (file) => {
     if (!file) return
     const status = document.getElementById('cookbook-status')
-    const inner = document.getElementById('cookbook-upload-inner')
+    const spinner = document.getElementById('cookbook-spinner')
     if (status) status.textContent = 'Reading recipe...'
-    if (inner) inner.innerHTML = '<div style="font-size:24px">⏳</div><div style="font-size:13px;color:var(--text2)">Extracting recipe...</div>'
+    if (spinner) spinner.style.display = 'inline'
 
     try {
       // Resize before sending (cookbook photos can be large)
@@ -4669,7 +4664,7 @@ function wireGlobals() {
 
       if (!extracted || !extracted.name) {
         if (status) status.textContent = 'Could not read recipe — fill in manually'
-        if (inner) inner.innerHTML = '<div style="font-size:20px">📖</div><div style="font-size:12px;color:var(--text2)">Fill in details below</div>'
+        if (spinner) spinner.style.display = 'none'
         return
       }
 
@@ -4699,7 +4694,7 @@ function wireGlobals() {
 
     } catch (err) {
       if (status) status.textContent = 'Extraction failed — fill in manually'
-      if (inner) inner.innerHTML = '<div style="font-size:20px">📖</div><div style="font-size:12px;color:var(--text2)">Fill in details below</div>'
+      if (spinner) spinner.style.display = 'none'
     }
   }
 
