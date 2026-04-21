@@ -278,7 +278,7 @@ export async function getUsageSummary(userId) {
   startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
 
   const [profileRes, usageRes] = await Promise.all([
-    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status, role').eq('user_id', userId).maybeSingle(),
+    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status, role, is_provider, provider_name, provider_slug').eq('user_id', userId).maybeSingle(),
     supabase.from('token_usage').select('cost_usd, tokens_used, feature').eq('user_id', userId).gte('created_at', startOfMonth.toISOString())
   ])
 
@@ -301,6 +301,9 @@ export async function getUsageSummary(userId) {
     isDietitian: role === 'dietitian',
     isPremium: isUnlimited,
     isFree: role === 'free' && !isUnlimited,
+    isProvider: profile.is_provider || false,
+    providerName: profile.provider_name || null,
+    providerSlug: profile.provider_slug || null,
     role,
     isUnlimited,
     accountStatus: profile.account_status ?? 'active',
@@ -868,4 +871,123 @@ export async function saveRecipeOgCache(userId, recipeId, ogData) {
     .update({ og_cache: ogData })
     .eq('id', recipeId)
     .eq('user_id', userId)
+}
+
+// ─── Provider / Broadcast ──────────────────────────────────────────────────────
+
+export async function getProviders() {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('user_profiles')
+    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, role, email')
+    .eq('is_provider', true)
+    .order('provider_name')
+  if (error) throw error
+  return data ?? []
+}
+
+export async function getProviderBySlug(slug) {
+  if (!supabase) return null
+  const { data } = await supabase
+    .from('user_profiles')
+    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, role')
+    .eq('provider_slug', slug)
+    .eq('is_provider', true)
+    .maybeSingle()
+  return data
+}
+
+export async function getProviderBroadcasts(providerId, publishedOnly = true) {
+  if (!supabase) return []
+  let q = supabase
+    .from('provider_broadcasts')
+    .select('*')
+    .eq('provider_id', providerId)
+    .order('week_start', { ascending: false })
+  if (publishedOnly) q = q.eq('is_published', true)
+  const { data, error } = await q
+  if (error) throw error
+  return data ?? []
+}
+
+export async function saveBroadcast(broadcast) {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('provider_broadcasts')
+    .upsert({ ...broadcast, updated_at: new Date().toISOString() }, { onConflict: 'id' })
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteBroadcast(id) {
+  if (!supabase) return
+  const { error } = await supabase.from('provider_broadcasts').delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function followProvider(followerId, providerId) {
+  if (!supabase) return
+  const { error } = await supabase
+    .from('provider_follows')
+    .upsert({ follower_id: followerId, provider_id: providerId }, { onConflict: 'follower_id,provider_id' })
+  if (error) throw error
+}
+
+export async function unfollowProvider(followerId, providerId) {
+  if (!supabase) return
+  const { error } = await supabase
+    .from('provider_follows')
+    .delete()
+    .eq('follower_id', followerId)
+    .eq('provider_id', providerId)
+  if (error) throw error
+}
+
+export async function getFollowedProviders(userId) {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('provider_follows')
+    .select('provider_id, user_profiles!provider_id(user_id, provider_name, provider_bio, provider_slug, provider_specialty, role)')
+    .eq('follower_id', userId)
+  if (error) throw error
+  return (data ?? []).map(r => r.user_profiles).filter(Boolean)
+}
+
+export async function isFollowingProvider(followerId, providerId) {
+  if (!supabase) return false
+  const { data } = await supabase
+    .from('provider_follows')
+    .select('follower_id')
+    .eq('follower_id', followerId)
+    .eq('provider_id', providerId)
+    .maybeSingle()
+  return !!data
+}
+
+export async function getFollowerCount(providerId) {
+  if (!supabase) return 0
+  const { count } = await supabase
+    .from('provider_follows')
+    .select('*', { count: 'exact', head: true })
+    .eq('provider_id', providerId)
+  return count ?? 0
+}
+
+export async function copyBroadcastToPlanner(userId, broadcast, weekStart) {
+  if (!supabase || !broadcast?.plan_data?.length) return 0
+  const rows = broadcast.plan_data.map(item => ({
+    user_id: userId,
+    recipe_id: item.recipe_id || null,
+    food_item_id: item.food_item_id || null,
+    meal_type: item.meal_type || 'dinner',
+    planned_servings: item.planned_servings || 1,
+    actual_date: item.actual_date || weekStart,
+    week_start_date: weekStart,
+    notes: item.notes || null,
+  }))
+  const { error } = await supabase.from('meal_planner').insert(rows)
+  if (error) throw error
+  return rows.length
 }

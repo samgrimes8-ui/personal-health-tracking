@@ -12,7 +12,10 @@ import {
   getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, uploadScanFile, getScanUrl,
   generateShareToken, shareRecipeWithUser, getIncomingShares, markShareRead, getUnreadShareCount,
   enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary,
-  saveRecipeOgCache, setUserRole
+  saveRecipeOgCache, setUserRole,
+  getProviders, getProviderBroadcasts, saveBroadcast, deleteBroadcast,
+  followProvider, unfollowProvider, getFollowedProviders, isFollowingProvider,
+  getFollowerCount, copyBroadcastToPlanner
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -32,6 +35,9 @@ let state = {
   foodItems: [],
   bodyMetrics: null,
   checkins: [],
+  providers: [],
+  followedProviders: [],
+  myBroadcasts: [],
   incomingShares: [],
   units: null, // set on init from locale
   newUsersCount: 0,
@@ -40,7 +46,7 @@ let state = {
   pendingComponent: null,
   foodSearch: '',
   planner: { meals: Array(7).fill(null).map(() => []) },
-  usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false },
+  usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false, isProvider: false },
   currentPage: 'log',
   currentMode: 'food',
   foodMode: 'barcode',    // 'barcode' | 'label' | 'search'
@@ -166,7 +172,7 @@ export async function initApp(user, container) {
 async function loadAll() {
   const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
 
-  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner, bodyMetrics, checkins, incomingShares] = await Promise.all([
+  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner, bodyMetrics, checkins, incomingShares, providers, followedProviders] = await Promise.all([
     safe(() => getGoals(state.user.id)),
     safe(() => getMealLog(state.user.id, { limit: 300 })),
     safe(() => getUsageSummary(state.user.id)),
@@ -176,7 +182,9 @@ async function loadAll() {
     safe(() => getPlannerWeek(state.user.id, getWeekStart())),
     safe(() => getBodyMetrics(state.user.id)),
     safe(() => getCheckins(state.user.id)),
-    safe(() => getIncomingShares(state.user.id))
+    safe(() => getIncomingShares(state.user.id)),
+    safe(() => getProviders()),
+    safe(() => getFollowedProviders(state.user.id)),
   ])
   state.goals = { calories: goals?.calories ?? 2000, protein: goals?.protein ?? 150, carbs: goals?.carbs ?? 200, fat: goals?.fat ?? 65 }
   state.log = log ?? []
@@ -188,6 +196,12 @@ async function loadAll() {
   state.bodyMetrics = bodyMetrics
   state.checkins = checkins ?? []
   state.incomingShares = incomingShares ?? []
+  state.providers = providers ?? []
+  state.followedProviders = followedProviders ?? []
+  // If user is a provider, load their broadcasts
+  if (usage?.role === 'admin' || usage?.role === 'dietitian' || usage?.isProvider) {
+    safe(() => getProviderBroadcasts(state.user.id, false)).then(b => { state.myBroadcasts = b ?? [] })
+  }
   // Auto-detect units from locale (US = imperial, rest = metric)
   if (!state.units) {
     const locale = navigator.language || 'en-US'
@@ -230,6 +244,11 @@ function renderShell(container) {
           <div class="nav-item ${state.currentPage === 'recipes' ? 'active' : ''}" id="nav-recipes" onclick="switchPage('recipes')">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
             Recipes
+          </div>
+          <div class="nav-item ${state.currentPage === 'providers' ? 'active' : ''}" id="nav-providers" onclick="switchPage('providers')" style="position:relative">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+            Providers
+            ${state.followedProviders?.length > 0 ? `<span style="position:absolute;top:4px;right:4px;background:var(--protein);color:white;border-radius:999px;font-size:9px;font-weight:700;padding:1px 5px">${state.followedProviders.length}</span>` : ''}
           </div>
           <div class="nav-item ${state.currentPage === 'foods' ? 'active' : ''}" id="nav-foods" onclick="switchPage('foods')">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
@@ -544,6 +563,13 @@ function renderShell(container) {
       </div>
     </div>
 
+    <!-- Broadcast modal -->
+    <div class="modal-overlay" id="broadcast-modal">
+      <div class="modal-box" style="max-width:500px;padding:0">
+        <div id="broadcast-modal-content"></div>
+      </div>
+    </div>
+
     <!-- Food item modal -->
     <div class="modal-overlay" id="food-item-modal">
       <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);width:100%;max-width:520px;max-height:90vh;overflow-y:auto;position:relative">
@@ -626,6 +652,7 @@ function renderPage() {
     case 'history':  renderHistory(main); break
     case 'goals':    renderGoalsPage(main); break
     case 'recipes':  renderRecipesPage(main); break
+    case 'providers': renderProvidersPage(main); break
     case 'foods':    renderFoodsPage(main); break
     case 'account':  renderAccount(main); break
   }
@@ -2488,6 +2515,186 @@ function weeksToGoal(m) {
   const pace = { slow: 0.25, moderate: 0.4, aggressive: 0.6 }
   const kgPerWeek = pace[m.pace] || 0.4
   return Math.ceil(diff / kgPerWeek)
+}
+
+function renderBroadcastForm(b) {
+  const planItems = (b.plan_data || [])
+  return `
+    <div style="padding:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div style="font-family:'DM Serif Display',serif;font-size:20px;color:var(--text)">${b.id ? 'Edit plan' : 'New broadcast'}</div>
+        <button onclick="closeBroadcastModal()" style="background:none;border:none;font-size:22px;color:var(--text3);cursor:pointer">×</button>
+      </div>
+      <input type="hidden" id="bc-id" value="${b.id || ''}" />
+
+      <div class="modal-field" style="margin-bottom:12px">
+        <label>Title</label>
+        <input type="text" id="bc-title" value="${esc(b.title || '')}" placeholder="e.g. Week of April 21 · High protein plan"
+          style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none" />
+      </div>
+
+      <div class="modal-field" style="margin-bottom:12px">
+        <label>Description <span style="font-weight:400;color:var(--text3);font-size:10px">(optional)</span></label>
+        <textarea id="bc-desc" placeholder="What's the focus this week? Macros, theme, notes for followers..."
+          style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none;resize:none;min-height:60px">${esc(b.description || '')}</textarea>
+      </div>
+
+      <div class="modal-field" style="margin-bottom:16px">
+        <label>Week starting</label>
+        <input type="date" id="bc-week" value="${b.week_start || ''}"
+          style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none"
+          onchange="previewBroadcastPlan(this.value)" />
+      </div>
+
+      <div id="bc-plan-preview" style="margin-bottom:16px">
+        ${planItems.length ? `
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Plan includes ${planItems.length} meals</div>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            ${planItems.slice(0, 5).map(item => `
+              <div style="font-size:12px;color:var(--text2);padding:5px 8px;background:var(--bg3);border-radius:4px;display:flex;justify-content:space-between">
+                <span>${esc(item._name || 'Meal')}</span>
+                <span style="color:var(--text3)">${item.meal_type || ''} · ${item._calories ? Math.round(item._calories) + ' kcal' : ''}</span>
+              </div>
+            `).join('')}
+            ${planItems.length > 5 ? `<div style="font-size:11px;color:var(--text3);padding:4px 8px">+ ${planItems.length - 5} more meals</div>` : ''}
+          </div>
+        ` : `
+          <div style="background:var(--bg3);border-radius:var(--r);padding:12px;font-size:12px;color:var(--text3);text-align:center">
+            Select a week to import meals from your planner
+          </div>
+        `}
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
+        <input type="checkbox" id="bc-published" ${b.is_published ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer" />
+        <div>
+          <div style="font-size:13px;color:var(--text);font-weight:500">Publish immediately</div>
+          <div style="font-size:11px;color:var(--text3)">Followers can copy this plan to their week</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button onclick="closeBroadcastModal()"
+          style="flex:1;padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text3);font-size:14px;font-family:inherit;cursor:pointer">
+          Cancel
+        </button>
+        <button id="bc-save-btn" onclick="saveBroadcastHandler()"
+          style="flex:2;padding:12px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:14px;font-weight:700;font-family:inherit;cursor:pointer">
+          ${b.is_published ? '✓ Save & publish' : 'Save draft'}
+        </button>
+      </div>
+    </div>
+  `
+}
+
+function renderProvidersPage(container) {
+  const isProvider = state.usage?.isProvider
+  const myProviders = state.followedProviders || []
+  const allProviders = state.providers || []
+
+  container.innerHTML = `
+    <div class="greeting">${isProvider ? 'My Channel' : 'Providers'}</div>
+    <div class="greeting-sub">${isProvider ? 'Manage your broadcasts and client plans.' : 'Follow dietitians and coaches — copy their meal plans to your week.'}</div>
+
+    ${isProvider ? renderMyProviderChannel() : ''}
+
+    ${!isProvider ? `
+      <!-- Followed providers -->
+      ${myProviders.length ? `
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Following (${myProviders.length})</div>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:24px">
+          ${myProviders.map(p => renderProviderCard(p, true)).join('')}
+        </div>
+      ` : ''}
+
+      <!-- Discover providers -->
+      <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">
+        ${myProviders.length ? 'All providers' : 'Discover providers'}
+      </div>
+      ${allProviders.length ? `
+        <div style="display:flex;flex-direction:column;gap:10px">
+          ${allProviders.map(p => renderProviderCard(p, myProviders.some(f => f.user_id === p.user_id))).join('')}
+        </div>
+      ` : `
+        <div class="upload-card" style="text-align:center;padding:32px">
+          <div style="font-size:32px;margin-bottom:8px">🩺</div>
+          <div style="font-size:14px;color:var(--text2);font-weight:500">No providers yet</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:4px">Providers will appear here when they join MacroLens</div>
+        </div>
+      `}
+    ` : ''}
+  `
+
+  // Load broadcasts for followed providers
+  if (!isProvider) loadFollowedBroadcasts()
+}
+
+function renderProviderCard(p, isFollowing) {
+  const roleLabel = p.role === 'dietitian' ? '🩺 Dietitian' : p.role === 'admin' ? '👑' : '🏋️ Coach'
+  return `
+    <div class="upload-card" style="padding:0;overflow:hidden">
+      <div style="padding:14px 16px;display:flex;align-items:start;gap:12px">
+        <div style="width:44px;height:44px;background:rgba(76,175,130,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:15px;font-weight:600;color:var(--text)">${esc(p.provider_name || p.email || 'Provider')}</div>
+          <div style="font-size:11px;color:var(--protein);margin-bottom:2px">${roleLabel}${p.provider_specialty ? ' · ' + esc(p.provider_specialty) : ''}</div>
+          ${p.provider_bio ? `<div style="font-size:12px;color:var(--text3);line-height:1.4">${esc(p.provider_bio)}</div>` : ''}
+        </div>
+        <button onclick="${isFollowing ? `unfollowProviderHandler('${p.user_id}')` : `followProviderHandler('${p.user_id}')`}"
+          style="flex-shrink:0;padding:7px 14px;border-radius:var(--r);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;border:1px solid ${isFollowing ? 'var(--border2)' : 'var(--protein)'};background:${isFollowing ? 'var(--bg3)' : 'rgba(76,175,130,0.15)'};color:${isFollowing ? 'var(--text3)' : 'var(--protein)'}">
+          ${isFollowing ? 'Following' : '+ Follow'}
+        </button>
+      </div>
+      <!-- Their latest broadcast -->
+      <div id="broadcasts-${p.user_id}" style="border-top:1px solid var(--border)">
+        <div style="padding:10px 16px;font-size:12px;color:var(--text3)">Loading plans...</div>
+      </div>
+    </div>
+  `
+}
+
+function renderMyProviderChannel() {
+  const broadcasts = state.myBroadcasts || []
+  return `
+    <div class="upload-card" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div class="section-title" style="margin:0">My broadcasts</div>
+        <button onclick="openNewBroadcastModal()"
+          style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:8px 14px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+          + New plan
+        </button>
+      </div>
+      ${!broadcasts.length ? `
+        <div style="text-align:center;padding:20px;color:var(--text3);font-size:13px">
+          No broadcasts yet. Create your first weekly plan to share with followers.
+        </div>
+      ` : broadcasts.map(b => `
+        <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:8px;display:flex;align-items:start;justify-content:space-between;gap:8px">
+          <div style="flex:1">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+              <span style="font-size:13px;font-weight:600;color:var(--text)">${esc(b.title)}</span>
+              <span style="font-size:10px;padding:2px 7px;border-radius:999px;font-weight:600;background:${b.is_published ? 'rgba(76,175,130,0.2)' : 'var(--bg2)'};color:${b.is_published ? 'var(--protein)' : 'var(--text3)'}">
+                ${b.is_published ? 'Live' : 'Draft'}
+              </span>
+            </div>
+            <div style="font-size:11px;color:var(--text3)">Week of ${new Date(b.week_start + 'T12:00:00').toLocaleDateString([], {month:'short', day:'numeric'})}</div>
+            ${b.description ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(b.description)}</div>` : ''}
+            <div style="font-size:11px;color:var(--text3);margin-top:4px">${(b.plan_data || []).length} meals planned</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0">
+            <button onclick="editBroadcastHandler('${b.id}')"
+              style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--text2);cursor:pointer;font-family:inherit">
+              Edit
+            </button>
+            <button onclick="toggleBroadcastPublished('${b.id}', ${b.is_published})"
+              style="background:${b.is_published ? 'rgba(239,68,68,0.1)' : 'rgba(76,175,130,0.15)'};border:1px solid ${b.is_published ? 'var(--red)' : 'var(--protein)'};border-radius:6px;padding:5px 10px;font-size:11px;color:${b.is_published ? 'var(--red)' : 'var(--protein)'};cursor:pointer;font-family:inherit">
+              ${b.is_published ? 'Unpublish' : 'Publish'}
+            </button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `
 }
 
 function renderGoalsPage(container) {
@@ -4394,6 +4601,9 @@ function wireGlobals() {
     }
   }
 
+  document.getElementById('broadcast-modal')?.addEventListener('click', e => {
+    if (e.target.id === 'broadcast-modal') closeBroadcastModal()
+  })
   document.getElementById('checkin-modal')?.addEventListener('click', e => {
     if (e.target.id === 'checkin-modal') closeCheckinModal()
   })
@@ -4525,6 +4735,186 @@ function wireGlobals() {
       console.error('Apple Health import error:', err)
       if (status) status.textContent = 'Import failed: ' + err.message
     }
+  }
+
+  // ─── Provider handlers ────────────────────────────────────────────────────────
+
+  window.followProviderHandler = async (providerId) => {
+    try {
+      await followProvider(state.user.id, providerId)
+      state.followedProviders = await getFollowedProviders(state.user.id)
+      renderPage()
+      showToast('Following!', 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.unfollowProviderHandler = async (providerId) => {
+    try {
+      await unfollowProvider(state.user.id, providerId)
+      state.followedProviders = await getFollowedProviders(state.user.id)
+      renderPage()
+      showToast('Unfollowed', 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  async function loadFollowedBroadcasts() {
+    const providers = [...(state.followedProviders || []), ...(state.providers || [])]
+    const seen = new Set()
+    for (const p of providers) {
+      if (seen.has(p.user_id)) continue
+      seen.add(p.user_id)
+      const el = document.getElementById(`broadcasts-${p.user_id}`)
+      if (!el) continue
+      try {
+        const broadcasts = await getProviderBroadcasts(p.user_id, true)
+        if (!broadcasts.length) {
+          el.innerHTML = `<div style="padding:10px 16px;font-size:12px;color:var(--text3)">No plans published yet</div>`
+          continue
+        }
+        el.innerHTML = broadcasts.slice(0, 2).map(b => `
+          <div style="padding:12px 16px;border-bottom:1px solid var(--border);last-child:border-none">
+            <div style="display:flex;align-items:start;justify-content:space-between;gap:8px">
+              <div>
+                <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(b.title)}</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:2px">
+                  Week of ${new Date(b.week_start + 'T12:00:00').toLocaleDateString([], {month:'short', day:'numeric'})}
+                  · ${(b.plan_data||[]).length} meals
+                </div>
+                ${b.description ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(b.description)}</div>` : ''}
+              </div>
+              <button onclick="copyBroadcastHandler('${b.id}','${p.user_id}')"
+                style="flex-shrink:0;padding:7px 12px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">
+                Copy to my week
+              </button>
+            </div>
+          </div>
+        `).join('')
+      } catch {
+        el.innerHTML = `<div style="padding:10px 16px;font-size:12px;color:var(--text3)">Could not load plans</div>`
+      }
+    }
+  }
+
+  window.copyBroadcastHandler = async (broadcastId, providerId) => {
+    try {
+      // Load the broadcast
+      const broadcasts = await getProviderBroadcasts(providerId, true)
+      const broadcast = broadcasts.find(b => b.id === broadcastId)
+      if (!broadcast) { showToast('Plan not found', 'error'); return }
+
+      const weekStart = getWeekStart()
+      const count = await copyBroadcastToPlanner(state.user.id, broadcast, weekStart)
+
+      // Refresh planner state
+      const planner = await getPlannerWeek(state.user.id, weekStart)
+      if (planner) state.planner = planner
+
+      showToast(`Copied ${count} meals to your week!`, 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.openNewBroadcastModal = () => {
+    const weekStart = getWeekStart()
+    document.getElementById('broadcast-modal-content').innerHTML = renderBroadcastForm({
+      week_start: weekStart,
+      title: '',
+      description: '',
+      is_published: false,
+      plan_data: [],
+    })
+    document.getElementById('broadcast-modal').classList.add('open')
+  }
+
+  window.editBroadcastHandler = async (id) => {
+    const broadcast = state.myBroadcasts.find(b => b.id === id)
+    if (!broadcast) return
+    document.getElementById('broadcast-modal-content').innerHTML = renderBroadcastForm(broadcast)
+    document.getElementById('broadcast-modal').classList.add('open')
+  }
+
+  window.closeBroadcastModal = () => {
+    document.getElementById('broadcast-modal').classList.remove('open')
+  }
+
+  window.toggleBroadcastPublished = async (id, currentlyPublished) => {
+    try {
+      const broadcast = state.myBroadcasts.find(b => b.id === id)
+      if (!broadcast) return
+      await saveBroadcast({ ...broadcast, is_published: !currentlyPublished })
+      state.myBroadcasts = await getProviderBroadcasts(state.user.id, false)
+      renderPage()
+      showToast(currentlyPublished ? 'Unpublished' : '🎉 Published! Followers can now copy this plan', 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.saveBroadcastHandler = async () => {
+    const id = document.getElementById('bc-id')?.value || null
+    const title = document.getElementById('bc-title')?.value.trim()
+    const description = document.getElementById('bc-desc')?.value.trim()
+    const week_start = document.getElementById('bc-week')?.value
+    const is_published = document.getElementById('bc-published')?.checked || false
+
+    if (!title) { showToast('Add a title', 'error'); return }
+    if (!week_start) { showToast('Select a week', 'error'); return }
+
+    // Build plan_data from current planner for that week
+    const plannerData = await getPlannerWeek(state.user.id, week_start)
+    const plan_data = (plannerData || []).map(item => ({
+      recipe_id: item.recipe_id || null,
+      food_item_id: item.food_item_id || null,
+      meal_type: item.meal_type || 'dinner',
+      planned_servings: item.planned_servings || 1,
+      actual_date: item.actual_date,
+      notes: item.notes || null,
+      // Snapshot the recipe name for display
+      _name: item.recipe?.name || item.food_item?.name || '',
+      _calories: item.recipe?.calories || item.food_item?.calories || 0,
+    }))
+
+    try {
+      const btn = document.getElementById('bc-save-btn')
+      if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
+
+      await saveBroadcast({
+        ...(id ? { id } : {}),
+        provider_id: state.user.id,
+        title, description, week_start, is_published, plan_data
+      })
+      state.myBroadcasts = await getProviderBroadcasts(state.user.id, false)
+      closeBroadcastModal()
+      renderPage()
+      showToast(is_published ? '🎉 Plan published!' : 'Draft saved', 'success')
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+      const btn = document.getElementById('bc-save-btn')
+      if (btn) { btn.disabled = false; btn.textContent = 'Save' }
+    }
+  }
+
+  window.previewBroadcastPlan = async (weekStart) => {
+    const preview = document.getElementById('bc-plan-preview')
+    if (!preview || !weekStart) return
+    preview.innerHTML = `<div style="font-size:12px;color:var(--text3);text-align:center;padding:8px">Loading meals for that week...</div>`
+    try {
+      const plannerData = await getPlannerWeek(state.user.id, weekStart)
+      const items = plannerData || []
+      if (!items.length) {
+        preview.innerHTML = `<div style="background:var(--bg3);border-radius:var(--r);padding:12px;font-size:12px;color:var(--text3);text-align:center">No meals planned for this week yet — add meals to your planner first</div>`
+        return
+      }
+      preview.innerHTML = `
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">${items.length} meals from your planner</div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${items.slice(0, 6).map(item => `
+            <div style="font-size:12px;color:var(--text2);padding:5px 8px;background:var(--bg3);border-radius:4px;display:flex;justify-content:space-between">
+              <span>${esc(item.recipe?.name || item.food_item?.name || 'Meal')}</span>
+              <span style="color:var(--text3)">${item.meal_type || ''}</span>
+            </div>
+          `).join('')}
+          ${items.length > 6 ? `<div style="font-size:11px;color:var(--text3);padding:4px 8px">+ ${items.length - 6} more</div>` : ''}
+        </div>
+      `
+    } catch { preview.innerHTML = `<div style="font-size:12px;color:var(--text3);text-align:center;padding:8px">Could not load planner</div>` }
   }
 
   window.handleSignOut = async () => {
