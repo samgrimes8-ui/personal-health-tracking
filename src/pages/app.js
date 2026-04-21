@@ -809,6 +809,8 @@ function renderDashboard(container) {
   wireFileInput()
   // Wire today log click delegation after render
   setTimeout(() => wireTodayLogClicks(document.getElementById('today-log-body')), 0)
+  // Show quick log empty state or recent items immediately
+  setTimeout(() => filterQuickLog(), 0)
   if (state.currentMode === 'food') {
     if (state.foodMode === 'label') wireLabelFileInput()
     if (state.foodMode === 'barcode') wireBarcodeInput()
@@ -5679,7 +5681,65 @@ function filterQuickLog() {
   const list = document.getElementById('quick-log-list')
   if (!list) return
 
-  if (!q) { list.innerHTML = ''; return }
+  const hasHistory = state.log.length > 0
+  const hasRecipes = state.recipes.length > 0
+
+  // Empty state — no search term yet
+  if (!q) {
+    if (!hasHistory && !hasRecipes) {
+      list.innerHTML = `
+        <div style="padding:16px 4px;text-align:center">
+          <div style="font-size:28px;margin-bottom:8px">🍽️</div>
+          <div style="font-size:13px;font-weight:500;color:var(--text2);margin-bottom:6px">No meals logged yet</div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:14px;line-height:1.5">
+            Log your first meal using <strong style="color:var(--text2)">Analyze food</strong> below,<br>
+            or save a recipe to find it here next time.
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;max-width:240px;margin:0 auto">
+            <button onclick="switchMode('food')"
+              style="padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+              📸 Analyze a meal
+            </button>
+            <button onclick="switchPage('recipes')"
+              style="padding:10px;background:var(--bg3);color:var(--text2);border:1px solid var(--border2);border-radius:var(--r);font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+              📝 Browse recipes
+            </button>
+          </div>
+        </div>`
+    } else {
+      // Has some history — show top recent items as suggestions
+      const items = []
+      const seen = new Set()
+      state.recipes.slice(0, 4).forEach(r => {
+        seen.add(r.name.toLowerCase())
+        items.push({ ...r, source: 'recipe' })
+      })
+      state.log.slice(0, 6).forEach(e => {
+        const key = e.name.toLowerCase()
+        if (seen.has(key)) return
+        seen.add(key)
+        items.push({ ...e, source: 'log' })
+      })
+      list.innerHTML = `
+        <div style="font-size:11px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">Recent</div>
+        ${items.slice(0, 5).map(item => `
+          <div class="history-pick-item" onclick="quickLogMeal('${esc(item.source === 'recipe' ? 'recipe::' + item.id : item.id)}')"
+            style="border-radius:var(--r)">
+            <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
+              <span class="hpi-name">${esc(item.name)}</span>
+              <span style="font-size:10px;color:${item.source === 'recipe' ? 'var(--protein)' : 'var(--text3)'}">
+                ${item.source === 'recipe' ? '⭐ Recipe' : '📋 Recent'}
+              </span>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div class="hpi-cal">${Math.round(item.calories)} kcal</div>
+              <div style="font-size:10px;color:var(--text3)">P${Math.round(item.protein)} C${Math.round(item.carbs)} F${Math.round(item.fat)}</div>
+            </div>
+          </div>`).join('')}
+      `
+    }
+    return
+  }
 
   // Merge recipes + unique log entries
   const items = []
