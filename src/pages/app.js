@@ -654,7 +654,17 @@ function renderPage() {
     case 'recipes':  renderRecipesPage(main); break
     case 'providers': renderProvidersPage(main); break
     case 'foods':    renderFoodsPage(main); break
-    case 'account':  renderAccount(main); break
+    case 'account':
+      try {
+        renderAccount(main)
+      } catch(e) {
+        main.innerHTML = `<div style="padding:20px;color:var(--fat)">
+          <div style="font-size:16px;font-weight:600;margin-bottom:8px">Account page error</div>
+          <div style="font-size:13px;color:var(--text2);margin-bottom:8px">${e.message}</div>
+          <pre style="font-size:11px;color:var(--text3);white-space:pre-wrap;overflow-wrap:anywhere">${e.stack}</pre>
+        </div>`
+      }
+      break
   }
   updateSidebar()
 }
