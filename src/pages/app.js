@@ -2975,6 +2975,7 @@ function renderAccount(container) {
   const bmr = calcBMR(m)
   const tdee = calcTDEE(bmr, m.activity_level)
   const targets = calcTargetMacros(m, tdee)
+  const weeks = weeksToGoal(m)
   const spentPct = u.isUnlimited ? 0 : Math.min(100, Math.round(((u.spent ?? 0) / (u.limit ?? 10)) * 100))
   const spentColor = spentPct >= 90 ? 'var(--red)' : spentPct >= 70 ? 'var(--fat)' : 'var(--accent)'
   const kgToLbs = kg => kg ? +(kg * 2.20462).toFixed(1) : ''
