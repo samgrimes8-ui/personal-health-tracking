@@ -12,7 +12,7 @@ import {
   getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, uploadScanFile, getScanUrl,
   generateShareToken, shareRecipeWithUser, getIncomingShares, markShareRead, getUnreadShareCount,
   enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary,
-  saveRecipeOgCache
+  saveRecipeOgCache, setUserRole
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -551,8 +551,55 @@ function renderShell(container) {
 }
 
 // ─── Page Routing ─────────────────────────────────────────────────────────────
+// ─── Tier helpers ─────────────────────────────────────────────────────────────
+function userCanAccess(feature) {
+  const role = state.usage?.role || 'premium'
+  if (role === 'admin' || role === 'premium' || role === 'dietitian') return true
+  // Free tier limits
+  const freeFeatures = ['log', 'history', 'account']
+  return freeFeatures.includes(feature)
+}
+
+function renderUpgradePage(container, feature) {
+  const featureNames = {
+    planner: 'Meal Planner',
+    goals: 'Goals & Body Tracking',
+    recipes: 'Recipes',
+    foods: 'Saved Foods',
+  }
+  container.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;padding:32px 20px;text-align:center">
+      <div style="font-size:48px;margin-bottom:16px">⭐</div>
+      <div style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:8px">Premium feature</div>
+      <div style="font-size:14px;color:var(--text3);margin-bottom:24px;max-width:280px;line-height:1.5">
+        ${featureNames[feature] || 'This feature'} is available on the Premium plan.
+        Upgrade to unlock unlimited AI analysis, meal planning, body tracking, and more.
+      </div>
+      <div style="background:var(--bg3);border-radius:var(--r);padding:20px;margin-bottom:24px;width:100%;max-width:300px">
+        <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:12px">Premium includes:</div>
+        ${['Unlimited AI meal analysis','Meal planner & recipes','Body scan tracking','Weekly check-ins','Goals & macro calculator'].map(f =>
+          `<div style="font-size:13px;color:var(--text3);padding:4px 0;display:flex;gap:8px;text-align:left">
+            <span style="color:var(--protein)">✓</span>${f}
+          </div>`
+        ).join('')}
+      </div>
+      <button onclick="window.open('https://personal-health-tracking.vercel.app/upgrade','_blank')"
+        style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px 32px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;width:100%;max-width:300px">
+        Upgrade to Premium
+      </button>
+      <div style="margin-top:12px;font-size:12px;color:var(--text3)">Already premium? <a onclick="location.reload()" style="color:var(--accent);cursor:pointer">Refresh your session</a></div>
+    </div>
+  `
+}
+
 function renderPage() {
   const main = document.getElementById('main-content')
+  // Paywall check for free users
+  if (state.usage?.isFree && !userCanAccess(state.currentPage)) {
+    renderUpgradePage(main, state.currentPage)
+    updateSidebar()
+    return
+  }
   switch (state.currentPage) {
     case 'log':      renderDashboard(main); break
     case 'planner':  renderPlanner(main); break
@@ -2672,12 +2719,21 @@ function renderAccount(container) {
     <!-- Usage card -->
     <div class="upload-card" style="max-width:520px;margin-bottom:20px">
       <div class="section-title">Usage this month</div>
-      ${u.isUnlimited ? `
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
-          <span style="background:rgba(232,197,71,0.15);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:500">
-            ${u.isAdmin ? '👑 Admin — unlimited access' : '⭐ Unlimited access'}
-          </span>
-        </div>` : ''}
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+        ${u.role === 'admin' ? `
+          <span style="background:rgba(232,197,71,0.15);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">👑 Admin</span>
+          <span style="font-size:12px;color:var(--text3)">Unlimited access · All features</span>
+        ` : u.role === 'dietitian' ? `
+          <span style="background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">🩺 Dietitian</span>
+          <span style="font-size:12px;color:var(--text3)">Professional access</span>
+        ` : u.isPremium ? `
+          <span style="background:rgba(91,156,246,0.15);color:var(--carbs);border:1px solid rgba(91,156,246,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">⭐ Premium</span>
+          <span style="font-size:12px;color:var(--text3)">Unlimited access · All features</span>
+        ` : `
+          <span style="background:var(--bg3);color:var(--text3);border:1px solid var(--border2);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:500">Free</span>
+          <a href="#" onclick="switchPage('upgrade');return false" style="font-size:12px;color:var(--accent);text-decoration:none;font-weight:500">Upgrade to Premium →</a>
+        `}
+      </div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
         <div class="stat-card" style="padding:12px">
           <div class="stat-label">Spent</div>
@@ -2814,24 +2870,24 @@ async function loadAdminPanel() {
               <div style="flex:1;min-width:0">
                 <div style="font-size:13px;font-weight:500;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                   ${esc(u.email)}
-                  ${u.is_admin ? '<span style="font-size:10px;background:rgba(232,197,71,0.15);color:var(--accent);border-radius:4px;padding:1px 5px">admin</span>' : ''}
-                  ${u.unlimited_access ? '<span style="font-size:10px;background:rgba(126,200,160,0.15);color:var(--protein);border-radius:4px;padding:1px 5px">unlimited</span>' : ''}
-                  ${isNew ? '<span style="font-size:10px;background:rgba(126,200,160,0.2);color:var(--protein);border-radius:4px;padding:1px 5px">🆕 new</span>' : ''}
+                  ${isNew ? '<span style="font-size:10px;background:rgba(76,175,130,0.2);color:var(--protein);border-radius:4px;padding:1px 5px">🆕 new</span>' : ''}
                 </div>
                 <div style="font-size:11px;color:var(--text3);margin-top:3px">
-                  Joined ${joinDate} · Last active ${lastActive} · ${u.log_entries_total ?? 0} meals · ${u.recipe_count ?? 0} recipes · ${u.food_item_count ?? 0} foods
+                  Joined ${joinDate} · Last active ${lastActive} · ${u.log_entries_total ?? 0} meals · ${u.recipe_count ?? 0} recipes
                 </div>
               </div>
-              <div style="display:flex;gap:4px;flex-shrink:0">
-                <button class="td-act" title="Toggle unlimited" onclick="toggleUnlimited('${u.user_id}', ${u.unlimited_access})">
-                  ${u.unlimited_access ? '🔓' : '🔒'}
-                </button>
-                <button class="td-act" title="Toggle admin" onclick="toggleAdmin('${u.user_id}', ${u.is_admin})">
-                  ${u.is_admin ? '👑' : '👤'}
-                </button>
+              <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+                <!-- Role selector -->
+                <select onchange="changeUserRole('${u.user_id}', this.value)"
+                  style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--text);font-family:inherit;cursor:pointer">
+                  ${['admin','dietitian','premium','free'].map(r =>
+                    '<option value="' + r + '" ' + ((u.role||'premium') === r ? 'selected' : '') + '>' +
+                    {admin:'👑 Admin',dietitian:'🩺 Dietitian',premium:'⭐ Premium',free:'Free'}[r] + '</option>'
+                  ).join('')}
+                </select>
                 <button class="td-act" title="${u.account_status === 'active' ? 'Suspend' : 'Activate'}"
                   onclick="toggleSuspend('${u.user_id}', '${u.account_status}')"
-                  style="color:${u.account_status === 'active' ? 'var(--text3)' : 'var(--green)'}">
+                  style="color:${u.account_status === 'active' ? 'var(--text3)' : 'var(--protein)'}">
                   ${u.account_status === 'active' ? '⏸' : '▶'}
                 </button>
               </div>
@@ -3356,6 +3412,17 @@ function wireGlobals() {
   window.analyzeFoodHandler = async () => {
     const btn = document.getElementById('analyze-btn')
     if (!btn) return
+
+    // Free tier: allow 20 analyses/month
+    if (state.usage?.isFree) {
+      const used = state.usage?.requests || 0
+      const FREE_LIMIT = 20
+      if (used >= FREE_LIMIT) {
+        showToast(`Free plan limit (${FREE_LIMIT} analyses/month) reached. Upgrade for unlimited.`, 'error')
+        return
+      }
+    }
+
     btn.disabled = true
     btn.innerHTML = '<span class="analyzing-spinner"></span> Analyzing...'
     try {
@@ -5556,10 +5623,28 @@ function wireGlobals() {
     if (btn) btn.textContent = 'Refresh'
   }
 
-  window.toggleUnlimited = async (userId, currentVal) => {
+  window.changeUserRole = async (userId, role) => {
     try {
-      await setUserPrivileges(userId, { unlimitedAccess: !currentVal })
-      showToast(!currentVal ? 'Unlimited access granted' : 'Unlimited access removed', 'success')
+      await setUserRole(userId, role)
+      showToast(`Role updated to ${role}`, 'success')
+      loadAdminPanel()
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.toggleUnlimited = async (userId, currentVal) => {
+    const newRole = currentVal ? 'free' : 'premium'
+    try {
+      await setUserRole(userId, newRole)
+      showToast(currentVal ? 'Moved to free tier' : 'Upgraded to premium', 'success')
+      loadAdminPanel()
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.toggleAdmin = async (userId, currentVal) => {
+    const newRole = currentVal ? 'premium' : 'admin'
+    try {
+      await setUserRole(userId, newRole)
+      showToast(currentVal ? 'Admin removed' : 'Admin granted', 'success')
       loadAdminPanel()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }

@@ -278,7 +278,7 @@ export async function getUsageSummary(userId) {
   startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
 
   const [profileRes, usageRes] = await Promise.all([
-    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status').eq('user_id', userId).maybeSingle(),
+    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status, role').eq('user_id', userId).maybeSingle(),
     supabase.from('token_usage').select('cost_usd, tokens_used, feature').eq('user_id', userId).gte('created_at', startOfMonth.toISOString())
   ])
 
@@ -287,7 +287,8 @@ export async function getUsageSummary(userId) {
   const monthSpent = usage.reduce((s, r) => s + (parseFloat(r.cost_usd) || 0), 0)
   const monthTokens = usage.reduce((s, r) => s + (r.tokens_used || 0), 0)
   const limit = profile.spending_limit_usd ?? 10
-  const isUnlimited = profile.is_admin || profile.unlimited_access
+  const role = profile.role || (profile.is_admin ? 'admin' : profile.unlimited_access ? 'premium' : 'free')
+  const isUnlimited = role === 'admin' || role === 'premium' || role === 'dietitian' || profile.unlimited_access
 
   return {
     spent: Math.round(monthSpent * 10000) / 10000,
@@ -296,8 +297,12 @@ export async function getUsageSummary(userId) {
     totalSpent: profile.total_spent_usd ?? 0,
     tokens: monthTokens,
     requests: usage.length,
-    isAdmin: profile.is_admin ?? false,
-    isUnlimited: isUnlimited ?? false,
+    isAdmin: role === 'admin' || profile.is_admin || false,
+    isDietitian: role === 'dietitian',
+    isPremium: isUnlimited,
+    isFree: role === 'free' && !isUnlimited,
+    role,
+    isUnlimited,
     accountStatus: profile.account_status ?? 'active',
     breakdown: usage.reduce((acc, r) => {
       acc[r.feature] = (acc[r.feature] || 0) + (parseFloat(r.cost_usd) || 0)
@@ -312,6 +317,16 @@ export async function getAdminUserOverview() {
   const { data, error } = await supabase.from('admin_user_overview').select('*').order('spent_this_month_usd', { ascending: false })
   if (error) throw error
   return data ?? []
+}
+
+export async function setUserRole(userId, role) {
+  if (!supabase) return
+  const isAdmin = role === 'admin'
+  const unlimitedAccess = role !== 'free'
+  const { error } = await supabase.from('user_profiles')
+    .update({ role, is_admin: isAdmin, unlimited_access: unlimitedAccess })
+    .eq('user_id', userId)
+  if (error) throw error
 }
 
 export async function setUserPrivileges(userId, { isAdmin, unlimitedAccess, spendingLimitUsd, accountStatus }) {
