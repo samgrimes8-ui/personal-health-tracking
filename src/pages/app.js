@@ -2507,6 +2507,179 @@ function renderGoalsPage(container) {
     <div class="greeting">Goals & Body</div>
     <div class="greeting-sub">Track your metrics, calculate your targets, log your progress.</div>
 
+    <button onclick="openCheckinModal()"
+      style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:16px;display:flex;align-items:center;justify-content:center;gap:8px">
+      📊 Log this week's check-in
+    </button>
+
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Body metrics</span>
+        <div style="display:flex;gap:4px;background:var(--bg3);border-radius:var(--r);padding:3px;border:1px solid var(--border)">
+          <button onclick="setUnits('imperial')"
+            style="padding:4px 10px;border:none;border-radius:calc(var(--r) - 2px);font-size:11px;font-family:inherit;cursor:pointer;font-weight:500;
+              background:${isImperial ? 'var(--bg2)' : 'none'};color:${isImperial ? 'var(--text)' : 'var(--text3)'}">lbs / ft</button>
+          <button onclick="setUnits('metric')"
+            style="padding:4px 10px;border:none;border-radius:calc(var(--r) - 2px);font-size:11px;font-family:inherit;cursor:pointer;font-weight:500;
+              background:${!isImperial ? 'var(--bg2)' : 'none'};color:${!isImperial ? 'var(--text)' : 'var(--text3)'}">kg / cm</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div>
+          <label class="field-label">Sex</label>
+          ${sel('bm-sex', m.sex||'male', [['male','Male'],['female','Female']])}
+        </div>
+        <div>
+          <label class="field-label">Age</label>
+          ${inp('bm-age','number', m.age, '30')}
+        </div>
+        ${isImperial ? `
+        <div>
+          <label class="field-label">Height (ft)</label>
+          ${inp('bm-ft','number', ftIn.ft, '5')}
+        </div>
+        <div>
+          <label class="field-label">Height (in)</label>
+          ${inp('bm-in','number', ftIn.inches, '10')}
+        </div>
+        <div>
+          <label class="field-label">Current weight (lbs)</label>
+          ${inp('bm-weight','number', weightDisplay, '175')}
+        </div>
+        ` : `
+        <div>
+          <label class="field-label">Height (cm)</label>
+          ${inp('bm-height','number', m.height_cm, '175')}
+        </div>
+        <div>
+          <label class="field-label">Current weight (kg)</label>
+          ${inp('bm-weight','number', weightDisplay, '80')}
+        </div>
+        `}
+        <div>
+          <label class="field-label">Body fat % <span style="font-weight:400;color:var(--text3)">(optional)</span></label>
+          ${inp('bm-bf','number', m.body_fat_pct, 'e.g. 17')}
+        </div>
+        <div>
+          <label class="field-label">Muscle mass (${isImperial ? 'lbs' : 'kg'})</label>
+          ${inp('bm-muscle','number', muscleDisplay, '')}
+        </div>
+      </div>
+      <div style="margin-bottom:12px">
+        <label class="field-label">Activity level</label>
+        ${sel('bm-activity', m.activity_level||'moderate', [
+          ['sedentary','Sedentary (desk job, no exercise)'],
+          ['light','Light (1-3x/week)'],
+          ['moderate','Moderate (3-5x/week)'],
+          ['active','Active (6-7x/week)'],
+          ['very_active','Very active (2x/day or physical job)']
+        ])}
+      </div>
+
+      ${bmr ? `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;padding:12px;background:var(--bg3);border-radius:var(--r)">
+          <div style="text-align:center">
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">BMR</div>
+            <div style="font-size:22px;font-weight:700;color:var(--accent)" id="calc-bmr">${bmr}</div>
+            <div style="font-size:11px;color:var(--text3)">kcal at rest</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">TDEE</div>
+            <div style="font-size:22px;font-weight:700;color:var(--protein)" id="calc-tdee">${tdee}</div>
+            <div style="font-size:11px;color:var(--text3)">maintenance</div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:12px;padding:0 2px" id="calc-formula-note">
+          ${m.body_fat_pct
+            ? '✓ Using Katch-McArdle (body fat % known — most accurate)'
+            : '⚠ Using Mifflin-St Jeor estimate — add body fat % for better accuracy'}
+        </div>
+      ` : ''}
+    </div>
+
+    <!-- Goal settings -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title">Goal settings</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div>
+          <label class="field-label">Goal weight (${isImperial ? 'lbs' : 'kg'})</label>
+          ${inp('bm-goal-weight','number', goalWeightDisplay, isImperial ? '165' : '75')}
+        </div>
+        <div>
+          <label class="field-label">Goal body fat %</label>
+          ${inp('bm-goal-bf','number', m.goal_body_fat_pct, '15')}
+        </div>
+        <div>
+          <label class="field-label">Direction</label>
+          ${sel('bm-direction', m.weight_goal||'lose', [
+            ['lose','Lose fat'],['maintain','Maintain'],['gain','Build muscle']
+          ])}
+        </div>
+        <div>
+          <label class="field-label">Pace</label>
+          ${sel('bm-pace', m.pace||'moderate', [
+            ['slow','Slow (sustainable)'],
+            ['moderate','Moderate (recommended)'],
+            ['aggressive','Aggressive (harder)']
+          ])}
+        </div>
+      </div>
+
+      <div id="calc-targets">
+      ${targets ? `
+        <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:12px">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px;display:flex;align-items:center;gap:6px">
+            Calculated daily targets
+            ${weeks ? `<span style="font-weight:400;color:var(--text3)">~${weeks} weeks to goal</span>` : ''}
+            <button onclick="showMethodologyModal()" title="How are these calculated?"
+              style="background:none;border:1px solid var(--border2);border-radius:50%;width:18px;height:18px;cursor:pointer;font-size:11px;color:var(--text3);display:inline-flex;align-items:center;justify-content:center;padding:0;font-family:inherit;flex-shrink:0;margin-left:auto"
+              onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+              onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text3)'">i</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center">
+            <div><div style="font-size:18px;font-weight:700;color:var(--accent)">${targets.calories}</div><div style="font-size:10px;color:var(--text3)">kcal</div></div>
+            <div><div style="font-size:18px;font-weight:700;color:var(--protein)">${targets.protein}g</div><div style="font-size:10px;color:var(--text3)">protein</div></div>
+            <div><div style="font-size:18px;font-weight:700;color:var(--carbs)">${targets.carbs}g</div><div style="font-size:10px;color:var(--text3)">carbs</div></div>
+            <div><div style="font-size:18px;font-weight:700;color:var(--fat)">${targets.fat}g</div><div style="font-size:10px;color:var(--text3)">fat</div></div>
+          </div>
+          <button onclick="applyCalculatedTargets(${targets.calories},${targets.protein},${targets.carbs},${targets.fat})"
+            style="width:100%;margin-top:10px;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+            ↓ Use these targets (fills fields below)
+          </button>
+        </div>
+      ` : `
+        <div style="padding:12px;background:var(--bg3);border-radius:var(--r);font-size:13px;color:var(--text3);margin-bottom:12px">
+          Fill in your body metrics above to calculate personalized macro targets.
+        </div>
+      `}
+      </div>
+
+      <!-- Manual override -->
+      <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Daily macro targets</div>
+          <div style="font-size:11px;color:var(--text3)">Edit manually or use calculated targets above</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+          <div><label class="field-label">Calories</label>${inp('goal-cal','number',state.goals.calories)}</div>
+          <div><label class="field-label">Protein (g)</label>${inp('goal-p','number',state.goals.protein)}</div>
+          <div><label class="field-label">Carbs (g)</label>${inp('goal-c','number',state.goals.carbs)}</div>
+          <div><label class="field-label">Fat (g)</label>${inp('goal-f','number',state.goals.fat)}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <button onclick="saveBodyMetricsOnly()"
+            style="padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;font-weight:500;font-family:inherit;cursor:pointer"
+            onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+            Save body metrics
+          </button>
+          <button onclick="saveGoalsHandler()"
+            style="padding:12px;background:var(--accent);border:none;border-radius:var(--r);color:#1a1500;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer">
+            Save targets
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Weekly check-in -->
     <div class="upload-card" style="margin-bottom:16px">
       <div class="section-title">Weekly check-in</div>
@@ -2514,13 +2687,14 @@ function renderGoalsPage(container) {
         style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:8px">
         📊 Log this week's check-in
       </button>
-      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">
+      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:12px">
         Upload your InBody or DEXA scan to auto-extract body composition data
       </div>
       ${!checkins.length ? `
         <div style="font-size:13px;color:var(--text3);padding:12px 0">No check-ins yet. Log your first weekly weigh-in!</div>
       ` : `
-        <div style="margin-bottom:16px">
+        <!-- Progress chart placeholder -->
+        <div style="margin-bottom:12px">
           <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Weight trend (${isImperial ? 'lbs' : 'kg'})</div>
           <div style="display:flex;align-items:flex-end;gap:4px;height:60px">
             ${checkins.slice(0,12).reverse().map(c => {
@@ -2528,9 +2702,8 @@ function renderGoalsPage(container) {
               const minW = Math.min(...allW), maxW = Math.max(...allW)
               const range = maxW - minW || 1
               const pct = c.weight_kg ? Math.round(((c.weight_kg - minW) / range) * 50 + 10) : 10
-              const dispW = c.weight_kg ? (isImperial ? +(c.weight_kg*2.20462).toFixed(1)+'lbs' : c.weight_kg+'kg') : '?'
-              const dateStr = (c.scan_date || c.checked_in_at || '').slice(0,10)
-              return `<div style="flex:1;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:4px;opacity:0.7" title="${dateStr}: ${dispW}"></div>`
+              const label = (c.scan_date || c.checked_in_at) + ': ' + (c.weight_kg ? (isImperial ? +(c.weight_kg*2.20462).toFixed(1)+'lbs' : c.weight_kg+'kg') : '?')
+              return `<div style="flex:1;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:4px;opacity:0.7" title="${label}"></div>`
             }).join('')}
           </div>
         </div>
@@ -2553,6 +2726,9 @@ function wireGoalsPage() {
     if (el) el.addEventListener('change', () => window.previewGoalsCalc())
   })
 }
+
+
+// ─── Account Page ─────────────────────────────────────────────────────────────
 
 
 // ─── Account Page ─────────────────────────────────────────────────────────────
