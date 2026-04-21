@@ -3016,6 +3016,63 @@ function renderAccount(container) {
       </div>
     </div>` : ''}
 
+    <!-- Apple Health -->
+    <div class="upload-card" style="max-width:520px;margin-bottom:20px">
+      <div class="section-title">🍎 Apple Health sync</div>
+
+      <!-- XML Import -->
+      <div style="margin-bottom:16px">
+        <div style="font-size:13px;color:var(--text2);font-weight:500;margin-bottom:4px">Import weight history</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.5">
+          Export from Apple Health → profile pic → Export All Health Data → share the ZIP here.
+        </div>
+        <label for="health-xml-input"
+          style="display:block;width:100%;padding:11px;background:var(--bg3);border:1.5px dashed var(--border2);border-radius:var(--r);text-align:center;cursor:pointer;font-size:13px;color:var(--text2)">
+          📂 Select export.zip or export.xml
+        </label>
+        <input type="file" id="health-xml-input" accept=".zip,.xml" style="display:none"
+          onchange="importAppleHealthFile(this.files[0])" />
+        <div id="health-import-status" style="font-size:12px;color:var(--text3);margin-top:8px;min-height:18px;text-align:center"></div>
+      </div>
+
+      <div style="border-top:1px solid var(--border);margin-bottom:16px"></div>
+
+      <!-- Shortcuts webhook -->
+      <div>
+        <div style="font-size:13px;color:var(--text2);font-weight:500;margin-bottom:4px">Auto-sync via iOS Shortcuts</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.5">
+          Set up a daily Shortcut to automatically log your weight from Apple Health.
+        </div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:10px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Your sync credentials</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+              <span style="font-size:11px;color:var(--text3);flex-shrink:0">User ID</span>
+              <code style="font-size:11px;color:var(--text2);background:var(--bg2);padding:3px 7px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;max-width:220px;white-space:nowrap">${state.user.id}</code>
+              <button onclick="copyText('${state.user.id}')" style="background:none;border:1px solid var(--border2);border-radius:4px;padding:2px 7px;font-size:11px;color:var(--text3);cursor:pointer;flex-shrink:0">Copy</button>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+              <span style="font-size:11px;color:var(--text3);flex-shrink:0">API key</span>
+              <code id="health-sync-key-display" style="font-size:11px;color:var(--text2);background:var(--bg2);padding:3px 7px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;max-width:220px;white-space:nowrap">Loading...</code>
+              <button onclick="copyHealthKey()" style="background:none;border:1px solid var(--border2);border-radius:4px;padding:2px 7px;font-size:11px;color:var(--text3);cursor:pointer;flex-shrink:0">Copy</button>
+            </div>
+          </div>
+        </div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:12px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Shortcut setup (one-time)</div>
+          <ol style="font-size:12px;color:var(--text3);margin:0;padding-left:16px;line-height:1.8">
+            <li>Open the <strong style="color:var(--text2)">Shortcuts</strong> app on iPhone</li>
+            <li>Tap <strong style="color:var(--text2)">+</strong> → Add Action → <strong style="color:var(--text2)">Health</strong> → Find Health Samples</li>
+            <li>Set type: <strong style="color:var(--text2)">Body Mass</strong>, limit: 1, sort: Latest</li>
+            <li>Add action: <strong style="color:var(--text2)">URL</strong> → paste: <code style="color:var(--accent)">https://personal-health-tracking.vercel.app/api/health-sync</code></li>
+            <li>Add action: <strong style="color:var(--text2)">Get Contents of URL</strong> → Method: POST, Body: JSON</li>
+            <li>Add fields: <code style="color:var(--carbs)">user_id</code>, <code style="color:var(--carbs)">api_key</code>, <code style="color:var(--carbs)">weight_lbs</code> (Health Sample Value), <code style="color:var(--carbs)">date</code> (today)</li>
+            <li>Set automation: <strong style="color:var(--text2)">Run Shortcut</strong> daily at 7am</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
     <!-- Sign out -->
     <div class="upload-card" style="max-width:520px">
       <div class="section-title">Session</div>
@@ -3024,6 +3081,7 @@ function renderAccount(container) {
   `
 
   if (u.isAdmin) loadAdminPanel()
+  setTimeout(() => loadHealthSyncKey(), 0)
 }
 
 async function loadAdminPanel() {
@@ -4369,6 +4427,110 @@ function wireGlobals() {
   window.filterQuickLog = filterQuickLog
 
   // API key no longer needed client-side — handled by server proxy
+
+  window.copyText = (text) => {
+    navigator.clipboard.writeText(text).then(() => showToast('Copied!', 'success')).catch(() => showToast('Copy failed', 'error'))
+  }
+
+  window.copyHealthKey = () => {
+    const el = document.getElementById('health-sync-key-display')
+    if (el && el.textContent !== 'Loading...') {
+      navigator.clipboard.writeText(el.textContent).then(() => showToast('API key copied!', 'success'))
+    }
+  }
+
+  // Load health sync key for current user
+  async function loadHealthSyncKey() {
+    const el = document.getElementById('health-sync-key-display')
+    if (!el) return
+    try {
+      const { data } = await supabase.from('user_profiles').select('health_sync_key').eq('user_id', state.user.id).maybeSingle()
+      el.textContent = data?.health_sync_key || 'Not set'
+    } catch { el.textContent = 'Error loading' }
+  }
+
+  window.importAppleHealthFile = async (file) => {
+    const status = document.getElementById('health-import-status')
+    if (!file) return
+    if (status) status.textContent = 'Reading file...'
+
+    try {
+      let xmlText = ''
+
+      if (file.name.endsWith('.zip')) {
+        // Load JSZip dynamically
+        if (!window.JSZip) {
+          await new Promise((res, rej) => {
+            const s = document.createElement('script')
+            s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
+            s.onload = res; s.onerror = rej
+            document.head.appendChild(s)
+          })
+        }
+        const zip = await window.JSZip.loadAsync(file)
+        const xmlFile = zip.file('apple_health_export/export.xml') || zip.file('export.xml')
+        if (!xmlFile) { if (status) status.textContent = 'Could not find export.xml in ZIP'; return }
+        if (status) status.textContent = 'Parsing XML...'
+        xmlText = await xmlFile.async('text')
+      } else {
+        xmlText = await file.text()
+      }
+
+      if (status) status.textContent = 'Extracting weight readings...'
+
+      // Parse weight records from Apple Health XML
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(xmlText, 'text/xml')
+      const records = Array.from(doc.querySelectorAll('Record[type="HKQuantityTypeIdentifierBodyMass"]'))
+
+      if (!records.length) { if (status) status.textContent = 'No weight data found in export'; return }
+
+      // Deduplicate by date, keep latest reading per day
+      const byDate = {}
+      for (const r of records) {
+        const date = r.getAttribute('startDate')?.slice(0, 10)
+        const val = parseFloat(r.getAttribute('value'))
+        const unit = r.getAttribute('unit') || 'lb'
+        if (!date || isNaN(val)) continue
+        const lbs = unit.toLowerCase().includes('kg') ? val * 2.20462 : val
+        if (!byDate[date] || new Date(r.getAttribute('startDate')) > new Date(byDate[date].startDate)) {
+          byDate[date] = { date, weight_lbs: +lbs.toFixed(1), startDate: r.getAttribute('startDate') }
+        }
+      }
+
+      const readings = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date))
+      if (status) status.textContent = `Found ${readings.length} days of weight data — importing...`
+
+      // Send to webhook in batches of 100
+      const BATCH = 100
+      let saved = 0
+      const { data: profile } = await supabase.from('user_profiles').select('health_sync_key').eq('user_id', state.user.id).maybeSingle()
+      const apiKey = profile?.health_sync_key
+      if (!apiKey) { if (status) status.textContent = 'No sync key found — try refreshing'; return }
+
+      for (let i = 0; i < readings.length; i += BATCH) {
+        const batch = readings.slice(i, i + BATCH)
+        const res = await fetch('/api/health-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: state.user.id, api_key: apiKey, readings: batch, source: 'apple_health_import' })
+        })
+        const data = await res.json()
+        saved += data.saved || 0
+        if (status) status.textContent = `Imported ${saved} of ${readings.length} readings...`
+      }
+
+      // Reload checkins
+      const checkins = await getCheckins(state.user.id)
+      state.checkins = checkins
+      if (status) status.textContent = `✓ Imported ${saved} weight readings from Apple Health`
+      showToast(`Imported ${saved} weight readings`, 'success')
+
+    } catch (err) {
+      console.error('Apple Health import error:', err)
+      if (status) status.textContent = 'Import failed: ' + err.message
+    }
+  }
 
   window.handleSignOut = async () => {
     try { await signOut() } catch (e) { console.error(e) }
