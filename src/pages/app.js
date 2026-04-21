@@ -7327,12 +7327,86 @@ function filterQuickLog() {
       meal = state.log.find(e => String(e.id) === String(id))
     }
     if (!meal) return
+
+    // Check if this meal is linked to a food item with components
+    const linkedFood = meal.food_item_id
+      ? state.foodItems.find(f => f.id === meal.food_item_id)
+      : null
+    const components = linkedFood?.components || []
+
+    if (components.length > 1) {
+      const choice = await new Promise(resolve => {
+        const sheet = document.createElement('div')
+        sheet.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:flex-end;justify-content:center'
+        sheet.innerHTML = `
+          <div style="background:var(--bg2);border-radius:var(--r3) var(--r3) 0 0;width:100%;max-width:480px;padding:20px 20px 32px">
+            <div style="width:36px;height:4px;background:var(--border2);border-radius:2px;margin:0 auto 16px"></div>
+            <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:4px">Log ${esc(meal.name)}</div>
+            <div style="font-size:13px;color:var(--text3);margin-bottom:16px">This food has ${components.length} components. How do you want to log it?</div>
+            <button id="ql-log-one"
+              style="width:100%;padding:14px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:10px;text-align:left;display:flex;align-items:center;gap:12px">
+              <span style="font-size:22px">🍽️</span>
+              <div>
+                <div>Log as one food</div>
+                <div style="font-size:11px;font-weight:400;opacity:0.8">${Math.round(meal.calories)} kcal · P${Math.round(meal.protein)}g C${Math.round(meal.carbs)}g F${Math.round(meal.fat)}g</div>
+              </div>
+            </button>
+            <button id="ql-log-components"
+              style="width:100%;padding:14px;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-size:14px;font-weight:500;font-family:inherit;cursor:pointer;margin-bottom:10px;text-align:left;display:flex;align-items:center;gap:12px">
+              <span style="font-size:22px">📋</span>
+              <div>
+                <div>Log individual components</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:2px">${components.map(c => esc(c.name)).join(', ')}</div>
+              </div>
+            </button>
+            <button id="ql-cancel"
+              style="width:100%;padding:12px;background:none;border:none;color:var(--text3);font-size:14px;font-family:inherit;cursor:pointer">
+              Cancel
+            </button>
+          </div>
+        `
+        document.body.appendChild(sheet)
+        document.getElementById('ql-log-one').onclick = () => { document.body.removeChild(sheet); resolve('one') }
+        document.getElementById('ql-log-components').onclick = () => { document.body.removeChild(sheet); resolve('components') }
+        document.getElementById('ql-cancel').onclick = () => { document.body.removeChild(sheet); resolve(null) }
+        sheet.onclick = (e) => { if (e.target === sheet) { document.body.removeChild(sheet); resolve(null) } }
+      })
+
+      if (!choice) return
+
+      if (choice === 'components') {
+        let logged = 0
+        for (const comp of components) {
+          try {
+            const entry = await addMealEntry(state.user.id, {
+              name: comp.name,
+              calories: comp.calories || 0, protein: comp.protein || 0,
+              carbs: comp.carbs || 0, fat: comp.fat || 0,
+              fiber: comp.fiber || 0, sugar: comp.sugar || 0,
+              base_calories: comp.calories || 0, base_protein: comp.protein || 0,
+              base_carbs: comp.carbs || 0, base_fat: comp.fat || 0,
+              servings_consumed: comp.qty || 1,
+              food_item_id: linkedFood.id,
+            })
+            state.log.unshift(entry)
+            logged++
+          } catch (err) { console.error('Component log error:', err) }
+        }
+        const input = document.getElementById('quick-log-search')
+        if (input) input.value = ''
+        document.getElementById('quick-log-list').innerHTML = ''
+        updateStats()
+        refreshTodayLog()
+        showToast(`${logged} components logged!`, 'success')
+        return
+      }
+    }
+
     try {
       // Link recipe_id if logging from a recipe
       const isRecipe = id.startsWith('recipe::')
       const recipe_id = isRecipe ? meal.id : (meal.recipe_id ?? null)
 
-      // Auto-save to foods if not a recipe and not already linked
       const food_item_id = isRecipe ? null
         : (meal.food_item_id ?? await autoSaveFoodItem(state.user.id, meal, state.foodItems).then(fid => {
             if (fid && !state.foodItems.find(f => f.id === fid)) {
