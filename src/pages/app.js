@@ -4667,12 +4667,72 @@ function wireGlobals() {
   }
 
   window.saveGoalsHandler = async () => {
-    state.goals = {
-      calories: parseInt(document.getElementById('goal-cal')?.value) || 2000,
-      protein:  parseInt(document.getElementById('goal-p')?.value)   || 150,
-      carbs:    parseInt(document.getElementById('goal-c')?.value)   || 200,
-      fat:      parseInt(document.getElementById('goal-f')?.value)   || 65
+    const cal   = parseInt(document.getElementById('goal-cal')?.value) || 2000
+    const pro   = parseInt(document.getElementById('goal-p')?.value)   || 150
+    const carb  = parseInt(document.getElementById('goal-c')?.value)   || 200
+    const fat   = parseInt(document.getElementById('goal-f')?.value)   || 65
+
+    // ── Nutrition safety checks ──────────────────────────────────────────────
+    const impliedCal = pro * 4 + carb * 4 + fat * 9
+    const calDiff = Math.abs(cal - impliedCal)
+    const warnings = []
+
+    if (cal < 1200) {
+      warnings.push(`⚠️ ${cal} kcal is below the safe minimum (1200 kcal). Very low calorie diets should only be followed under medical supervision.`)
     }
+    if (cal < 1500 && state.bodyMetrics?.sex !== 'female') {
+      warnings.push(`⚠️ ${cal} kcal may be too low for most men. Typical minimums are 1500–1800 kcal.`)
+    }
+    if (pro < 50) {
+      warnings.push(`⚠️ ${pro}g protein is very low and may cause muscle loss. Most adults need at least 50–60g daily.`)
+    }
+    if (pro > 400) {
+      warnings.push(`⚠️ ${pro}g protein is unusually high. Most research supports up to 2.2g/kg of body weight.`)
+    }
+    if (calDiff > 200) {
+      warnings.push(`⚠️ Your calories (${cal} kcal) don't match your macros (${impliedCal} kcal from ${pro}g P + ${carb}g C + ${fat}g F). Consider using the lock system to balance them.`)
+    }
+
+    if (warnings.length) {
+      // Show warning modal — user can still override and save
+      const proceed = await new Promise(resolve => {
+        const overlay = document.createElement('div')
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px'
+        overlay.innerHTML = `
+          <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:24px;max-width:360px;width:100%">
+            <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:6px">Before you save</div>
+            <div style="font-size:13px;color:var(--text3);margin-bottom:16px;line-height:1.5">
+              We noticed a few things with these targets:
+            </div>
+            ${warnings.map(w => `
+              <div style="font-size:13px;color:var(--text2);background:var(--bg3);border-radius:var(--r);padding:10px 12px;margin-bottom:8px;line-height:1.5">
+                ${w}
+              </div>`).join('')}
+            <div style="font-size:12px;color:var(--text3);margin:12px 0 16px;line-height:1.5">
+              We recommend speaking with a dietitian before setting aggressive targets.
+              ${state.providers?.length ? `<a onclick="document.body.removeChild(document.body.lastChild);switchPage('providers')" style="color:var(--protein);cursor:pointer;text-decoration:underline"> Connect with a provider →</a>` : ''}
+            </div>
+            <div style="display:flex;gap:10px">
+              <button id="goal-warn-cancel"
+                style="flex:1;padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:14px;font-family:inherit;cursor:pointer">
+                Adjust targets
+              </button>
+              <button id="goal-warn-save"
+                style="flex:1;padding:12px;background:rgba(239,68,68,0.15);border:1px solid var(--red);border-radius:var(--r);color:var(--red);font-size:14px;font-weight:600;font-family:inherit;cursor:pointer">
+                Save anyway
+              </button>
+            </div>
+          </div>
+        `
+        document.body.appendChild(overlay)
+        document.getElementById('goal-warn-cancel').onclick = () => { document.body.removeChild(overlay); resolve(false) }
+        document.getElementById('goal-warn-save').onclick  = () => { document.body.removeChild(overlay); resolve(true) }
+        overlay.onclick = (e) => { if (e.target === overlay) { document.body.removeChild(overlay); resolve(false) } }
+      })
+      if (!proceed) return
+    }
+
+    state.goals = { calories: cal, protein: pro, carbs: carb, fat }
     try {
       await dbSaveGoals(state.user.id, state.goals)
       showToast('Targets saved!', 'success')
