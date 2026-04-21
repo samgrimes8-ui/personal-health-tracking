@@ -2379,8 +2379,8 @@ function buildCheckinRow(c, isImperial) {
         ${pill('ECW/TBW', c.ecw_tbw_ratio)}
         ${pill('InBody Score', c.inbody_score ? c.inbody_score+'/100' : null)}
         ${pill('SMI', c.smi ? c.smi+' kg/m²' : null)}
-        ${pill('Protein', c.protein_kg ? c.protein_kg+'kg' : null)}
-        ${pill('Minerals', c.minerals_kg ? c.minerals_kg+'kg' : null)}
+        ${pill('Protein', c.protein_kg ? toDisp(c.protein_kg) : null)}
+        ${pill('Minerals', c.minerals_kg ? toDisp(c.minerals_kg) : null)}
         ${pill('BCM', toDisp(c.body_cell_mass_kg))}
       </div>
     </div>` : ''}
@@ -2506,6 +2506,66 @@ function renderGoalsPage(container) {
   container.innerHTML = `
     <div class="greeting">Goals & Body</div>
     <div class="greeting-sub">Track your metrics, calculate your targets, log your progress.</div>
+
+    <!-- Weekly check-in -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title">Weekly check-in</div>
+      <button onclick="openCheckinModal()"
+        style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:8px">
+        📊 Log this week's check-in
+      </button>
+      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">
+        Upload your InBody or DEXA scan to auto-extract body composition data
+      </div>
+      ${!checkins.length ? `
+        <div style="font-size:13px;color:var(--text3);padding:12px 0">No check-ins yet. Log your first weekly weigh-in!</div>
+      ` : `
+        <div style="margin-bottom:16px">
+          <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Weight trend (${isImperial ? 'lbs' : 'kg'})</div>
+          <div style="display:flex;align-items:flex-end;gap:4px;height:60px">
+            ${checkins.slice(0,12).reverse().map(c => {
+              const allW = checkins.filter(x=>x.weight_kg).map(x=>x.weight_kg)
+              const minW = Math.min(...allW), maxW = Math.max(...allW)
+              const range = maxW - minW || 1
+              const pct = c.weight_kg ? Math.round(((c.weight_kg - minW) / range) * 50 + 10) : 10
+              const dispW = c.weight_kg ? (isImperial ? +(c.weight_kg*2.20462).toFixed(1)+'lbs' : c.weight_kg+'kg') : '?'
+              const dateStr = (c.scan_date || c.checked_in_at || '').slice(0,10)
+              return `<div style="flex:1;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:4px;opacity:0.7" title="${dateStr}: ${dispW}"></div>`
+            }).join('')}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${checkins.slice(0,8).map(c => buildCheckinRow(c, isImperial)).join('')}
+        </div>
+      `}
+    </div>
+  `
+
+  // Wire save button to also save body metrics
+  wireGoalsPage()
+}
+
+function wireGoalsPage() {
+  // Live recalc when inputs change
+  const ids = ['bm-sex','bm-age','bm-height','bm-weight','bm-bf','bm-muscle','bm-activity','bm-goal-weight','bm-goal-bf','bm-direction','bm-pace']
+  ids.forEach(id => {
+    const el = document.getElementById(id)
+    if (el) el.addEventListener('change', () => window.previewGoalsCalc())
+  })
+}
+
+
+// ─── Account Page ─────────────────────────────────────────────────────────────
+function renderAccount(container) {
+  const u = state.usage
+  const spentPct = u.isUnlimited ? 0 : Math.min(100, Math.round(((u.spent ?? 0) / (u.limit ?? 10)) * 100))
+  const spentColor = spentPct >= 90 ? 'var(--red)' : spentPct >= 70 ? 'var(--fat)' : 'var(--accent)'
+
+  container.innerHTML = `
+    <div class="greeting">Account</div>
+    <div class="greeting-sub">${state.user.email}</div>
+
+    <!-- Usage card -->
 
     <div class="upload-card" style="margin-bottom:16px">
       <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
@@ -2675,65 +2735,6 @@ function renderGoalsPage(container) {
       </div>
     </div>
 
-    <!-- Weekly check-in -->
-    <div class="upload-card" style="margin-bottom:16px">
-      <div class="section-title">Weekly check-in</div>
-      <button onclick="openCheckinModal()"
-        style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:8px">
-        📊 Log this week's check-in
-      </button>
-      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:12px">
-        Upload your InBody or DEXA scan to auto-extract body composition data
-      </div>
-      ${!checkins.length ? `
-        <div style="font-size:13px;color:var(--text3);padding:12px 0">No check-ins yet. Log your first weekly weigh-in!</div>
-      ` : `
-        <!-- Progress chart placeholder -->
-        <div style="margin-bottom:12px">
-          <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Weight trend (kg)</div>
-          <div style="display:flex;align-items:flex-end;gap:4px;height:60px">
-            ${checkins.slice(0,12).reverse().map(c => {
-              const allW = checkins.filter(x=>x.weight_kg).map(x=>x.weight_kg)
-              const minW = Math.min(...allW), maxW = Math.max(...allW)
-              const range = maxW - minW || 1
-              const pct = c.weight_kg ? Math.round(((c.weight_kg - minW) / range) * 50 + 10) : 10
-              const label = (c.scan_date || c.checked_in_at) + ': ' + (c.weight_kg ? (isImperial ? +(c.weight_kg*2.20462).toFixed(1)+'lbs' : c.weight_kg+'kg') : '?')
-              return `<div style="flex:1;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:4px;opacity:0.7" title="${label}"></div>`
-            }).join('')}
-          </div>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          ${checkins.slice(0,8).map(c => buildCheckinRow(c, isImperial)).join('')}
-        </div>
-      `}
-    </div>
-  `
-
-  // Wire save button to also save body metrics
-  wireGoalsPage()
-}
-
-function wireGoalsPage() {
-  // Live recalc when inputs change
-  const ids = ['bm-sex','bm-age','bm-height','bm-weight','bm-bf','bm-muscle','bm-activity','bm-goal-weight','bm-goal-bf','bm-direction','bm-pace']
-  ids.forEach(id => {
-    const el = document.getElementById(id)
-    if (el) el.addEventListener('change', () => window.previewGoalsCalc())
-  })
-}
-
-
-// ─── Account Page ─────────────────────────────────────────────────────────────
-function renderAccount(container) {
-  const u = state.usage
-  const spentPct = u.isUnlimited ? 0 : Math.min(100, Math.round(((u.spent ?? 0) / (u.limit ?? 10)) * 100))
-  const spentColor = spentPct >= 90 ? 'var(--red)' : spentPct >= 70 ? 'var(--fat)' : 'var(--accent)'
-
-  container.innerHTML = `
-    <div class="greeting">Account</div>
-    <div class="greeting-sub">${state.user.email}</div>
-
-    <!-- Usage card -->
     <div class="upload-card" style="max-width:520px;margin-bottom:20px">
       <div class="section-title">Usage this month</div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
