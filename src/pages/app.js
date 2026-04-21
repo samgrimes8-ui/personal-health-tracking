@@ -2959,7 +2959,8 @@ function wireGoalsPage() {
 
 // ─── Account Page ─────────────────────────────────────────────────────────────
 function renderAccount(container) {
-  const u = state.usage
+  const u = state.usage || {}
+  const isImperial = state.units === 'imperial'
   const spentPct = u.isUnlimited ? 0 : Math.min(100, Math.round(((u.spent ?? 0) / (u.limit ?? 10)) * 100))
   const spentColor = spentPct >= 90 ? 'var(--red)' : spentPct >= 70 ? 'var(--fat)' : 'var(--accent)'
 
