@@ -987,7 +987,7 @@ function renderTodayMeals(logEntries) {
         + '<div style="font-size:13px;color:var(--text2)' + (isLogged ? ';text-decoration:line-through' : '') + '">' + mealName + '</div>'
         + '<div style="font-size:11px;color:var(--text3)">Planned · ' + Math.round(m.calories || 0) + ' kcal</div>'
         + '</div>'
-        + (!isLogged ? '<span style="font-size:11px;color:var(--text3);flex-shrink:0">Log it →</span>' : '')
+        + (isLogged ? '<span style="font-size:11px;color:var(--text3);flex-shrink:0">Tap to unlog</span>' : '<span style="font-size:11px;color:var(--text3);flex-shrink:0">Log it →</span>')
         + '</div>'
     })
 
@@ -7080,9 +7080,20 @@ function wireGlobals() {
     if (!m) return
     const mealName = m.meal_name || m.name || ''
     const todayLog = getTodayLog()
-    if (todayLog.some(e => (e.name||'').toLowerCase() === mealName.toLowerCase())) {
-      showToast('Already logged today', ''); return
+
+    // If already logged — offer to unlog it
+    const existingEntry = todayLog.find(e => (e.name||'').toLowerCase() === mealName.toLowerCase())
+    if (existingEntry) {
+      try {
+        await deleteMealEntry(state.user.id, existingEntry.id)
+        state.log = state.log.filter(e => String(e.id) !== String(existingEntry.id))
+        updateStats()
+        refreshTodayLog()
+        showToast(`${mealName} removed`, 'success')
+      } catch (err) { showToast('Error: ' + err.message, 'error') }
+      return
     }
+
     try {
       const recipe = state.recipes.find(r => r.name?.toLowerCase() === mealName.toLowerCase())
       const food_item_id = !recipe
