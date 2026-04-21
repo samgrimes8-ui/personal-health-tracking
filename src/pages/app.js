@@ -811,6 +811,8 @@ function renderDashboard(container) {
   setTimeout(() => wireTodayLogClicks(document.getElementById('today-log-body')), 0)
   // Show quick log empty state or recent items immediately
   setTimeout(() => filterQuickLog(), 0)
+  // Set correct analyze button label for current mode
+  setTimeout(() => window.updateAnalyzeBtn(), 0)
   if (state.currentMode === 'food') {
     if (state.foodMode === 'label') wireLabelFileInput()
     if (state.foodMode === 'barcode') wireBarcodeInput()
@@ -3167,7 +3169,7 @@ function wireGlobals() {
     closeSidebar()
   }
 
-  function updateAnalyzeBtn() {
+  window.updateAnalyzeBtn = function() {
     const btn = document.getElementById('analyze-btn')
     if (!btn) return
     const labels = {
@@ -3201,7 +3203,7 @@ function wireGlobals() {
       if (state.foodMode === 'label') wireLabelFileInput()
       if (state.foodMode === 'barcode') wireBarcodeInput()
     }
-    updateAnalyzeBtn()
+    window.updateAnalyzeBtn()
   }
 
   window.setFoodMode = (mode) => {
@@ -3214,7 +3216,7 @@ function wireGlobals() {
     })
     if (mode === 'label') wireLabelFileInput()
     if (mode === 'barcode') wireBarcodeInput()
-    updateAnalyzeBtn()
+    window.updateAnalyzeBtn()
   }
 
   // ── Barcode scanner ─────────────────────────────────────────────
