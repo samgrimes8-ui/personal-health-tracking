@@ -4732,7 +4732,7 @@ function wireGlobals() {
               </div>
               <button onclick="showComingSoon(this)"
                 style="width:100%;padding:10px;background:rgba(76,175,130,0.2);border:1px solid var(--protein);border-radius:var(--r);color:var(--protein);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
-                📅 Schedule a free consultation
+                📅 Schedule a consultation
               </button>
             </div>
             <div style="display:flex;gap:10px">
