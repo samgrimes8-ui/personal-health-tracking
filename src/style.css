@@ -327,3 +327,12 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
     top: calc(12px + env(safe-area-inset-top));
   }
 }
+
+/* ─── Global AI loading bar ──────────────────────────────────────────────────── */
+@keyframes ai-shimmer {
+  0%   { background-position: 200% 0 }
+  100% { background-position: -200% 0 }
+}
+#ai-loading-bar.active {
+  opacity: 1 !important;
+}

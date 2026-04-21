@@ -38,6 +38,7 @@ let state = {
   providers: [],
   followedProviders: [],
   myBroadcasts: [],
+  recipeMode: 'describe', // describe | ingredients | link
   incomingShares: [],
   units: null, // set on init from locale
   newUsersCount: 0,
@@ -734,7 +735,38 @@ function renderDashboard(container) {
           <button class="mode-tab ${state.currentMode === 'link' ? 'active' : ''}" data-mode="link" onclick="switchMode('link')">🔍 Search</button>
         </div>
         <div class="mode-panel ${state.currentMode === 'recipe' ? 'active' : ''}" id="mode-recipe">
-          <textarea class="recipe-textarea" id="recipe-input" placeholder="Describe your recipe or paste ingredients...&#10;&#10;e.g. Grilled chicken breast 200g, brown rice 1 cup, olive oil 1 tbsp"></textarea>
+          <!-- Recipe sub-mode tabs -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
+            <button class="food-sub-btn ${state.recipeMode !== 'link' && state.recipeMode !== 'ingredients' ? 'active' : ''}"
+              onclick="setRecipeMode('describe')" id="recipe-btn-describe">
+              <span style="font-size:18px;display:block;margin-bottom:2px">✏️</span>
+              <span style="font-size:11px">Describe</span>
+            </button>
+            <button class="food-sub-btn ${state.recipeMode === 'ingredients' ? 'active' : ''}"
+              onclick="setRecipeMode('ingredients')" id="recipe-btn-ingredients">
+              <span style="font-size:18px;display:block;margin-bottom:2px">📋</span>
+              <span style="font-size:11px">Ingredients</span>
+            </button>
+            <button class="food-sub-btn ${state.recipeMode === 'link' ? 'active' : ''}"
+              onclick="setRecipeMode('link')" id="recipe-btn-link">
+              <span style="font-size:18px;display:block;margin-bottom:2px">🔗</span>
+              <span style="font-size:11px">Link</span>
+            </button>
+          </div>
+          <!-- Describe panel -->
+          <div id="recipe-panel-describe" style="${state.recipeMode === 'link' || state.recipeMode === 'ingredients' ? 'display:none' : ''}">
+            <textarea class="recipe-textarea" id="recipe-input" placeholder="Describe your recipe...&#10;&#10;e.g. Grilled chicken breast with rice and broccoli, high protein meal"></textarea>
+          </div>
+          <!-- Ingredients panel -->
+          <div id="recipe-panel-ingredients" style="${state.recipeMode === 'ingredients' ? '' : 'display:none'}">
+            <textarea class="recipe-textarea" id="recipe-ingredients-input" placeholder="Paste your ingredient list...&#10;&#10;e.g. 2 cups chicken breast&#10;1 cup brown rice&#10;1 tbsp olive oil&#10;2 cloves garlic"></textarea>
+          </div>
+          <!-- Link panel -->
+          <div id="recipe-panel-link" style="${state.recipeMode === 'link' ? '' : 'display:none'}">
+            <input class="link-input" type="url" id="recipe-link-url" placeholder="Paste URL (optional)..." style="margin-bottom:8px" />
+            <textarea class="recipe-textarea" id="recipe-link-dish" rows="2" placeholder="What's the dish? (required)&#10;e.g. Skillet chicken cacciatore..."></textarea>
+            <div class="link-note">Instagram/TikTok are private — AI searches the web for the recipe by dish name.</div>
+          </div>
         </div>
         <div class="mode-panel ${state.currentMode === 'photo' ? 'active' : ''}" id="mode-photo">
           <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
@@ -2707,6 +2739,48 @@ function renderMyProviderChannel() {
   `
 }
 
+// Reusable macro target fields with lock-to-balance logic
+function buildMacroFields(goals) {
+  const cal = goals?.calories ?? 2000
+  const pro = goals?.protein ?? 150
+  const carb = goals?.carbs ?? 200
+  const fat = goals?.fat ?? 65
+  // Each macro has a lock icon — locked = fixed, unlocked = auto-adjusts
+  // Default: calories locked, fat locked, carbs unlocks to balance
+  const lockState = window._macroLockState || { cal: true, pro: false, carb: false, fat: true }
+  const lockIcon = (key) => `
+    <button onclick="toggleMacroLock('${key}')" title="${lockState[key] ? 'Locked — click to let this adjust' : 'Unlocked — click to lock'}"
+      style="background:none;border:none;padding:2px 4px;cursor:pointer;font-size:13px;opacity:${lockState[key] ? '1' : '0.4'};line-height:1">
+      ${lockState[key] ? '🔒' : '🔓'}
+    </button>`
+  const field = (id, label, val, color, lockKey) => `
+    <div style="position:relative">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+        <label style="font-size:11px;color:${color};text-transform:uppercase;letter-spacing:0.5px;font-weight:600">${label}</label>
+        ${lockIcon(lockKey)}
+      </div>
+      <input type="number" id="${id}" value="${val}"
+        style="width:100%;background:var(--bg3);border:1px solid ${lockState[lockKey] ? 'var(--border2)' : color};border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;opacity:${lockState[lockKey] ? '0.7' : '1'}"
+        ${lockState[lockKey] ? 'readonly' : ''}
+        oninput="rebalanceMacros('${lockKey}')" />
+    </div>`
+  return `
+    <div style="margin-bottom:6px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Daily targets</div>
+        <div style="font-size:11px;color:var(--text3)">🔒 = fixed &nbsp; 🔓 = auto-adjusts</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">
+        ${field('goal-cal','Calories',cal,'var(--cal)','cal')}
+        ${field('goal-p','Protein',pro,'var(--protein)','pro')}
+        ${field('goal-c','Carbs',carb,'var(--carbs)','carb')}
+        ${field('goal-f','Fat',fat,'var(--fat)','fat')}
+      </div>
+      <div style="font-size:11px;color:var(--text3);text-align:right;margin-top:2px" id="macro-balance-hint"></div>
+    </div>
+  `
+}
+
 function renderGoalsPage(container) {
   const m = state.bodyMetrics || {}
   const bmr = calcBMR(m)
@@ -2896,12 +2970,7 @@ function renderGoalsPage(container) {
           <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Daily macro targets</div>
           <div style="font-size:11px;color:var(--text3)">Edit manually or use calculated targets above</div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-          <div><label class="field-label">Calories</label>${inp('goal-cal','number',state.goals.calories)}</div>
-          <div><label class="field-label">Protein (g)</label>${inp('goal-p','number',state.goals.protein)}</div>
-          <div><label class="field-label">Carbs (g)</label>${inp('goal-c','number',state.goals.carbs)}</div>
-          <div><label class="field-label">Fat (g)</label>${inp('goal-f','number',state.goals.fat)}</div>
-        </div>
+        ${buildMacroFields(state.goals)}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <button onclick="saveBodyMetricsOnly()"
             style="padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;font-weight:500;font-family:inherit;cursor:pointer"
@@ -3146,12 +3215,7 @@ function renderAccount(container) {
           <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Daily macro targets</div>
           <div style="font-size:11px;color:var(--text3)">Edit manually or use calculated targets above</div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-          <div><label class="field-label">Calories</label>${inp('goal-cal','number',state.goals.calories)}</div>
-          <div><label class="field-label">Protein (g)</label>${inp('goal-p','number',state.goals.protein)}</div>
-          <div><label class="field-label">Carbs (g)</label>${inp('goal-c','number',state.goals.carbs)}</div>
-          <div><label class="field-label">Fat (g)</label>${inp('goal-f','number',state.goals.fat)}</div>
-        </div>
+        ${buildMacroFields(state.goals)}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <button onclick="saveBodyMetricsOnly()"
             style="padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;font-weight:500;font-family:inherit;cursor:pointer"
@@ -3657,6 +3721,17 @@ function wireGlobals() {
       if (state.foodMode === 'label') wireLabelFileInput()
       if (state.foodMode === 'barcode') wireBarcodeInput()
     }
+    window.updateAnalyzeBtn()
+  }
+
+  window.setRecipeMode = (mode) => {
+    state.recipeMode = mode
+    ;['describe', 'ingredients', 'link'].forEach(m => {
+      const panel = document.getElementById(`recipe-panel-${m}`)
+      const btn = document.getElementById(`recipe-btn-${m}`)
+      if (panel) panel.style.display = m === mode ? '' : 'none'
+      if (btn) btn.classList.toggle('active', m === mode)
+    })
     window.updateAnalyzeBtn()
   }
 
@@ -4886,6 +4961,88 @@ function wireGlobals() {
         </div>
       `
     } catch { preview.innerHTML = `<div style="font-size:12px;color:var(--text3);text-align:center;padding:8px">Could not load planner</div>` }
+  }
+
+  // ─── Macro target lock / rebalance ────────────────────────────────────────────
+  // Default: calories locked, fat locked, carbs floats
+  window._macroLockState = window._macroLockState || { cal: true, pro: false, carb: false, fat: true }
+
+  window.toggleMacroLock = (key) => {
+    const locks = window._macroLockState
+    // Count currently unlocked — need at least 1 unlocked at all times
+    const unlocked = Object.values(locks).filter(v => !v).length
+    if (locks[key] && unlocked <= 1) {
+      showToast('At least one macro must be unlocked to auto-adjust', 'error')
+      return
+    }
+    locks[key] = !locks[key]
+    // Re-render the macro fields in place without full page render
+    const container = document.getElementById('goal-cal')?.closest('[style*="grid"]')?.parentElement
+    if (container) {
+      const parent = container.parentElement
+      if (parent) {
+        parent.innerHTML = buildMacroFields(state.goals)
+        showMacroBalanceHint()
+      }
+    }
+  }
+
+  window.rebalanceMacros = (changedKey) => {
+    const locks = window._macroLockState
+    const cal = parseFloat(document.getElementById('goal-cal')?.value) || 0
+    const pro = parseFloat(document.getElementById('goal-p')?.value) || 0
+    const carb = parseFloat(document.getElementById('goal-c')?.value) || 0
+    const fat = parseFloat(document.getElementById('goal-f')?.value) || 0
+
+    // Cal from macros = protein*4 + carbs*4 + fat*9
+    const calFromMacros = pro * 4 + carb * 4 + fat * 9
+
+    // Find the unlocked fields (excluding the one just changed)
+    const unlocked = Object.entries(locks).filter(([k, locked]) => !locked && k !== changedKey)
+
+    if (locks.cal && unlocked.length === 1) {
+      // Calories is fixed — adjust the one unlocked macro to balance
+      const [floatKey] = unlocked[0]
+      const targetCal = cal
+      if (floatKey === 'carb') {
+        const newCarb = Math.max(0, Math.round((targetCal - pro * 4 - fat * 9) / 4))
+        const el = document.getElementById('goal-c')
+        if (el) el.value = newCarb
+      } else if (floatKey === 'fat') {
+        const newFat = Math.max(0, Math.round((targetCal - pro * 4 - carb * 4) / 9))
+        const el = document.getElementById('goal-f')
+        if (el) el.value = newFat
+      } else if (floatKey === 'pro') {
+        const newPro = Math.max(0, Math.round((targetCal - carb * 4 - fat * 9) / 4))
+        const el = document.getElementById('goal-p')
+        if (el) el.value = newPro
+      }
+    } else if (!locks.cal) {
+      // Calories floats — recalculate from macros
+      const newCal = Math.round(pro * 4 + carb * 4 + fat * 9)
+      const el = document.getElementById('goal-cal')
+      if (el) el.value = newCal
+    }
+
+    showMacroBalanceHint()
+  }
+
+  function showMacroBalanceHint() {
+    const cal = parseFloat(document.getElementById('goal-cal')?.value) || 0
+    const pro = parseFloat(document.getElementById('goal-p')?.value) || 0
+    const carb = parseFloat(document.getElementById('goal-c')?.value) || 0
+    const fat = parseFloat(document.getElementById('goal-f')?.value) || 0
+    const implied = Math.round(pro * 4 + carb * 4 + fat * 9)
+    const diff = Math.abs(implied - cal)
+    const hint = document.getElementById('macro-balance-hint')
+    if (!hint) return
+    if (diff <= 5) {
+      hint.textContent = `✓ Balanced · ${cal} kcal`
+      hint.style.color = 'var(--protein)'
+    } else {
+      hint.textContent = `Macros = ${implied} kcal · Calories set to ${cal} (${diff > 0 ? '+' : ''}${implied - cal})`
+      hint.style.color = 'var(--text3)'
+    }
   }
 
   window.handleSignOut = async () => {

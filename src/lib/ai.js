@@ -7,6 +7,23 @@ import { supabase } from './supabase.js'
 
 // ─── Core proxy caller ────────────────────────────────────────────────────────
 
+// ─── Global AI loading indicator ─────────────────────────────────────────────
+let _aiCallsInFlight = 0
+
+function aiLoadingStart() {
+  _aiCallsInFlight++
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('ai-loading', { detail: { active: true } }))
+  }
+}
+
+function aiLoadingEnd() {
+  _aiCallsInFlight = Math.max(0, _aiCallsInFlight - 1)
+  if (_aiCallsInFlight === 0 && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('ai-loading', { detail: { active: false } }))
+  }
+}
+
 async function callProxy(feature, messages, options = {}) {
   // Always force-refresh the session token before AI calls
   // This prevents "string did not match expected pattern" expired JWT errors
@@ -26,23 +43,28 @@ async function callProxy(feature, messages, options = {}) {
   }
   if (!session?.access_token) throw new Error('Session expired — please refresh the page')
 
-  const res = await fetch('/api/analyze', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${session.access_token}`
-    },
-    body: JSON.stringify({
-      feature,
-      messages,
-      max_tokens: options.max_tokens ?? 2000,
-      ...(options.tools ? { tools: options.tools } : {})
+  aiLoadingStart()
+  try {
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`
+      },
+      body: JSON.stringify({
+        feature,
+        messages,
+        max_tokens: options.max_tokens ?? 2000,
+        ...(options.tools ? { tools: options.tools } : {})
+      })
     })
-  })
 
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`)
-  return data
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`)
+    return data
+  } finally {
+    aiLoadingEnd()
+  }
 }
 
 // ─── Helper: parse JSON from Anthropic response ───────────────────────────────
