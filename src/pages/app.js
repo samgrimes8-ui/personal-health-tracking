@@ -1918,6 +1918,23 @@ function renderRecipeModalContent(recipe, mode = 'view') {
   return `
     <div style="position:relative">
 
+      <!-- Cookbook import — pinned at very top, always visible for new recipes -->
+      ${isNew ? `
+        <div style="background:rgba(232,197,71,0.08);border-bottom:1.5px dashed rgba(232,197,71,0.35);padding:10px 16px;display:flex;align-items:center;gap:10px;cursor:pointer"
+          onclick="document.getElementById('cookbook-file-input').click()">
+          <span style="font-size:22px">📖</span>
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:var(--accent)">Import from cookbook</div>
+            <div style="font-size:11px;color:var(--text3)">Tap to photograph a recipe page — AI fills everything in</div>
+          </div>
+          <span id="cookbook-spinner" style="display:none">⏳</span>
+          <span style="color:var(--text3);font-size:16px">›</span>
+        </div>
+        <input type="file" id="cookbook-file-input" accept="image/*" capture="environment" style="display:none"
+          onchange="handleCookbookPhoto(this.files[0])" />
+        <div id="cookbook-status" style="font-size:11px;color:var(--text3);padding:4px 16px;text-align:center;min-height:16px;background:rgba(232,197,71,0.04)"></div>
+      ` : ''}
+
       <!-- Sticky header: name + plan button -->
       <div style="position:sticky;top:0;z-index:10;background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 16px 10px">
         <button class="modal-close" onclick="closeRecipeModal()" style="top:10px;right:12px">×</button>
@@ -1929,23 +1946,6 @@ function renderRecipeModalContent(recipe, mode = 'view') {
         ` : `
           <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);margin-right:36px;line-height:1.2;margin-bottom:8px">${esc(recipe.name)}</div>
         `}
-
-        ${isNew ? `
-          <div style="margin-top:10px">
-            <button onclick="document.getElementById('cookbook-file-input').click()"
-              style="width:100%;padding:10px 14px;background:rgba(232,197,71,0.1);border:1.5px dashed rgba(232,197,71,0.4);border-radius:var(--r);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;font-family:inherit">
-              <span style="font-size:18px">📖</span>
-              <div style="text-align:left">
-                <div style="font-size:13px;font-weight:600;color:var(--accent)">Import from cookbook</div>
-                <div style="font-size:11px;color:var(--text3)">Tap to photograph a recipe page</div>
-              </div>
-              <span id="cookbook-spinner" style="display:none;margin-left:auto">⏳</span>
-            </button>
-            <input type="file" id="cookbook-file-input" accept="image/*" capture="environment" style="display:none"
-              onchange="handleCookbookPhoto(this.files[0])" />
-            <div id="cookbook-status" style="font-size:11px;color:var(--text3);margin-top:4px;text-align:center;min-height:14px"></div>
-          </div>
-        ` : ''}
 
         ${isView ? `
           <div style="display:flex;align-items:center;gap:6px">
