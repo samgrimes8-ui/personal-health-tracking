@@ -511,3 +511,31 @@ Extract every ingredient and every step exactly as written.` }
   }], { max_tokens: 2000 })
   return parseJSON(data)
 }
+
+export async function generateRecipeFromMood(prompt) {
+  const data = await callProxy('recipe', [{
+    role: 'user',
+    content: `Generate a complete recipe based on this request: "${prompt}"
+
+Create something practical, delicious and realistic for a home cook.
+Calculate accurate macros per serving.
+
+Return ONLY this JSON (no markdown):
+{
+  "name": "Recipe name",
+  "description": "One line description",
+  "servings": number,
+  "serving_label": "serving",
+  "calories": number,
+  "protein": number,
+  "carbs": number,
+  "fat": number,
+  "fiber": number,
+  "sugar": number,
+  "ingredients": [{"amount":"1","unit":"cup","name":"ingredient"}],
+  "instructions": {"steps":["Step 1","Step 2"],"prep_time":"X mins","cook_time":"X mins","tips":["optional tip"]},
+  "notes": "any notes about substitutions or variations"
+}`
+  }], { max_tokens: 2000 })
+  return parseJSON(data)
+}

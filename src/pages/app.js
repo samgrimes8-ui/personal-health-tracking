@@ -18,7 +18,7 @@ import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
   generateRecipeInstructions, extractBodyScan, fetchOgMetadata, readBarcodeFromImage,
-  extractRecipeFromPhoto
+  extractRecipeFromPhoto, generateRecipeFromMood
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -4734,12 +4734,24 @@ function wireGlobals() {
 
           <!-- Option 3: Manual -->
           <button onclick="openNewRecipeManual()"
-            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
             onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
             <div style="width:44px;height:44px;background:rgba(91,156,246,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">✏️</div>
             <div>
               <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Add manually</div>
-              <div style="font-size:12px;color:var(--text3)">Type in the name, ingredients and macros yourself</div>
+              <div style="font-size:12px;color:var(--text3)">Type or paste ingredients — AI parses them instantly</div>
+            </div>
+            <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
+          </button>
+
+          <!-- Option 4: Generate from mood -->
+          <button onclick="openNewRecipeGenerate()"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
+            onmouseover="this.style.borderColor='var(--fat)'" onmouseout="this.style.borderColor='var(--border2)'">
+            <div style="width:44px;height:44px;background:rgba(245,146,78,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">✨</div>
+            <div>
+              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Generate a recipe</div>
+              <div style="font-size:12px;color:var(--text3)">Tell me what's in your fridge or what you're craving</div>
             </div>
             <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
           </button>
@@ -4849,7 +4861,131 @@ function wireGlobals() {
   }
 
   window.openNewRecipeManual = () => {
+    // Show a pre-step for pasting ingredients before going to full form
+    document.getElementById('recipe-modal-content').innerHTML = `
+      <div style="position:relative">
+        <button class="modal-close" onclick="closeRecipeModal()" style="position:absolute;top:12px;right:12px">×</button>
+        <div style="padding:28px 20px 24px">
+          <button onclick="openNewRecipeModal()" style="background:none;border:none;color:var(--text3);font-size:13px;font-family:inherit;cursor:pointer;padding:0;margin-bottom:16px;display:flex;align-items:center;gap:4px">
+            ← Back
+          </button>
+          <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:6px">Add manually</div>
+          <div style="font-size:13px;color:var(--text3);margin-bottom:20px">Paste your ingredient list and AI will parse it, or skip to fill in manually.</div>
+
+          <label style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:8px">Paste ingredients (optional)</label>
+          <textarea id="paste-ingredients-input" rows="6" placeholder="Paste or type your ingredient list here, one per line or comma separated:
+
+2 cups chicken broth
+1 lb chicken breast
+3 cloves garlic, minced
+1 tsp cumin
+..."
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:13px;font-family:inherit;outline:none;resize:none;margin-bottom:12px;line-height:1.5"></textarea>
+
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <button onclick="parseAndOpenManual()" id="parse-ing-btn"
+              style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
+              Parse ingredients & continue →
+            </button>
+            <button onclick="openNewRecipeManualBlank()"
+              style="width:100%;background:var(--bg3);color:var(--text3);border:1px solid var(--border2);border-radius:var(--r);padding:12px;font-size:14px;font-family:inherit;cursor:pointer">
+              Skip — fill in manually
+            </button>
+          </div>
+          <div id="parse-ing-status" style="font-size:12px;color:var(--text3);margin-top:10px;text-align:center;min-height:18px"></div>
+        </div>
+      </div>
+    `
+  }
+
+  window.parseAndOpenManual = async () => {
+    const text = document.getElementById('paste-ingredients-input')?.value.trim()
+    if (!text) { openNewRecipeManualBlank(); return }
+    const btn = document.getElementById('parse-ing-btn')
+    const status = document.getElementById('parse-ing-status')
+    if (btn) { btn.disabled = true; btn.textContent = 'Parsing...' }
+    if (status) status.textContent = 'AI is parsing your ingredients...'
+    try {
+      const result = await extractIngredients(text)
+      if (result?.ingredients?.length) {
+        state.editingRecipe = { ...state.editingRecipe, ingredients: result.ingredients }
+        showToast(`${result.ingredients.length} ingredients parsed`, 'success')
+      }
+      document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+    } catch {
+      if (status) status.textContent = 'Parse failed — opening blank form'
+      setTimeout(() => openNewRecipeManualBlank(), 1000)
+    }
+  }
+
+  window.openNewRecipeManualBlank = () => {
     document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+  }
+
+  window.openNewRecipeGenerate = () => {
+    document.getElementById('recipe-modal-content').innerHTML = `
+      <div style="position:relative">
+        <button class="modal-close" onclick="closeRecipeModal()" style="position:absolute;top:12px;right:12px">×</button>
+        <div style="padding:28px 20px 24px">
+          <button onclick="openNewRecipeModal()" style="background:none;border:none;color:var(--text3);font-size:13px;font-family:inherit;cursor:pointer;padding:0;margin-bottom:16px;display:flex;align-items:center;gap:4px">
+            ← Back
+          </button>
+          <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:6px">✨ Generate a recipe</div>
+          <div style="font-size:13px;color:var(--text3);margin-bottom:20px">Tell me what you have, what you're craving, or both.</div>
+
+          <label style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:8px">What are you working with?</label>
+          <textarea id="generate-recipe-input" rows="5" autofocus
+            placeholder="Examples:
+• chicken breast, rice, bell peppers, garlic — make something spicy
+• I'm in the mood for something cozy and Italian
+• high protein meal under 600 calories with what I have: eggs, spinach, feta
+• leftover salmon, need lunch ideas"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:13px;font-family:inherit;outline:none;resize:none;margin-bottom:8px;line-height:1.5"></textarea>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+            ${['🍗 High protein','🥗 Low carb','⚡ Under 30 min','🌶️ Spicy','🇮🇹 Italian','🌮 Mexican'].map(tag =>
+              `<button onclick="appendToGenerate('${tag.replace(/'/g,"\\'")}');event.stopPropagation()"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:20px;padding:5px 10px;font-size:12px;color:var(--text3);cursor:pointer;font-family:inherit">
+                ${tag}
+              </button>`
+            ).join('')}
+          </div>
+
+          <button onclick="generateRecipeFromPrompt()" id="generate-recipe-btn"
+            style="width:100%;background:var(--fat);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
+            ✨ Generate recipe
+          </button>
+          <div id="generate-recipe-status" style="font-size:12px;color:var(--text3);margin-top:10px;text-align:center;min-height:18px"></div>
+        </div>
+      </div>
+    `
+  }
+
+  window.appendToGenerate = (tag) => {
+    const el = document.getElementById('generate-recipe-input')
+    if (!el) return
+    const clean = tag.replace(/^[^\s]+\s/, '') // strip emoji
+    el.value = el.value ? el.value + ', ' + clean : clean
+    el.focus()
+  }
+
+  window.generateRecipeFromPrompt = async () => {
+    const prompt = document.getElementById('generate-recipe-input')?.value.trim()
+    if (!prompt) { showToast('Tell me what you want to make', 'error'); return }
+    const btn = document.getElementById('generate-recipe-btn')
+    const status = document.getElementById('generate-recipe-status')
+    if (btn) { btn.disabled = true; btn.textContent = '✨ Generating...' }
+    if (status) status.textContent = 'Creating your recipe...'
+    try {
+      const result = await generateRecipeFromMood(prompt)
+      if (!result?.name) throw new Error('No recipe generated')
+      state.editingRecipe = { ...state.editingRecipe, ...result }
+      document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+      showToast(`"${result.name}" generated — review and save`, 'success')
+    } catch (err) {
+      if (status) status.textContent = 'Generation failed — try rephrasing'
+      if (btn) { btn.disabled = false; btn.textContent = '✨ Generate recipe' }
+    }
   }
 
   window.setRecipeServings = (val, recipeId) => {
