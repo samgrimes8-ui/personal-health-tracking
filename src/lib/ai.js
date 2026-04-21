@@ -468,3 +468,17 @@ Respond ONLY with a JSON object, no markdown:
   }], { max_tokens: 600 })
   return parseJSON(data)
 }
+
+export async function readBarcodeFromImage(imageBase64) {
+  // Last resort — use Claude to visually read the barcode number
+  const data = await callProxy('food', [{
+    role: 'user',
+    content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
+      { type: 'text', text: `Read the barcode number in this image. Return ONLY the numeric barcode digits, nothing else. If you cannot read it clearly, return the word "null".` }
+    ]
+  }], { max_tokens: 50 })
+  const text = typeof data === 'string' ? data.trim() : ''
+  const match = text.match(/\d{6,14}/)
+  return match ? match[0] : null
+}

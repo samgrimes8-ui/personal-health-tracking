@@ -17,7 +17,7 @@ import {
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
-  generateRecipeInstructions, extractBodyScan, fetchOgMetadata
+  generateRecipeInstructions, extractBodyScan, fetchOgMetadata, readBarcodeFromImage
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -2941,7 +2941,16 @@ async function doAnalyze() {
       if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Reading label...'
       return await analyzeNutritionLabel(state.labelImageBase64)
     } else {
-      showToast('Use the scan or manual barcode entry above', 'error'); return null
+      // Barcode mode — trigger the file input if nothing scanned yet
+      const barcodeInput = document.getElementById('barcode-manual-input')
+      const manualCode = barcodeInput?.value.trim()
+      if (manualCode) {
+        return await new Promise(resolve => {
+          lookupBarcode(manualCode).then(resolve).catch(() => resolve(null))
+        })
+      }
+      document.getElementById('barcode-file-input')?.click()
+      return null
     }
   }
   return null
@@ -3344,9 +3353,26 @@ function wireGlobals() {
         if (status) status.textContent = `Found: ${code} — looking up...`
         await lookupBarcode(code)
       } else {
-        if (status) status.textContent = 'Could not read barcode — type the number below'
-        const input = document.getElementById('barcode-manual-input')
-        if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
+        // 3. Claude visual fallback — reads the number from the image
+        if (status) status.textContent = 'Trying AI barcode reader...'
+        try {
+          const b64 = dataUrl.split(',')[1]
+          const aiCode = await readBarcodeFromImage(b64)
+          if (aiCode) {
+            if (status) status.textContent = `Read: ${aiCode} — looking up...`
+            const input = document.getElementById('barcode-manual-input')
+            if (input) input.value = aiCode
+            await lookupBarcode(aiCode)
+          } else {
+            if (status) status.textContent = 'Could not read barcode — type the number below'
+            const input = document.getElementById('barcode-manual-input')
+            if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
+          }
+        } catch {
+          if (status) status.textContent = 'Could not read barcode — type the number below'
+          const input = document.getElementById('barcode-manual-input')
+          if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
+        }
       }
     } catch (e) {
       if (status) status.textContent = 'Read failed — type the number below'
