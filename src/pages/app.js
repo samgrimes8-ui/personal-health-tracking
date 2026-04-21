@@ -4677,17 +4677,30 @@ function wireGlobals() {
     const calDiff = Math.abs(cal - impliedCal)
     const warnings = []
 
-    if (cal < 1200) {
-      warnings.push(`⚠️ ${cal} kcal is below the safe minimum (1200 kcal). Very low calorie diets should only be followed under medical supervision.`)
+    // Calculate personalized minimums from BMR if we have body metrics
+    const m = state.bodyMetrics || {}
+    const bmr = calcBMR(m)  // already accounts for weight/height/sex/age/BF%
+    const safeFloor = bmr ? Math.round(bmr * 0.85) : 1200  // 85% of BMR is the clinical minimum
+    const absoluteFloor = 1000  // below this is dangerous for anyone
+
+    if (cal < absoluteFloor) {
+      warnings.push(`⚠️ ${cal} kcal is dangerously low. No adult should eat fewer than ${absoluteFloor} kcal without direct medical supervision.`)
+    } else if (bmr && cal < safeFloor) {
+      const deficit = Math.round(bmr - cal)
+      warnings.push(`⚠️ ${cal} kcal is below your estimated BMR of ${Math.round(bmr)} kcal — the calories your body burns at complete rest. Eating ${deficit} kcal less than your BMR can cause muscle loss, fatigue, and metabolic slowdown.${m.weight_kg ? ` Based on your current weight and stats.` : ''}`)
+    } else if (!bmr && cal < 1200) {
+      warnings.push(`⚠️ ${cal} kcal is below the general safe minimum. Add your body metrics to get a personalized recommendation.`)
     }
-    if (cal < 1500 && state.bodyMetrics?.sex !== 'female') {
-      warnings.push(`⚠️ ${cal} kcal may be too low for most men. Typical minimums are 1500–1800 kcal.`)
-    }
+
     if (pro < 50) {
       warnings.push(`⚠️ ${pro}g protein is very low and may cause muscle loss. Most adults need at least 50–60g daily.`)
     }
+    if (m.weight_kg && pro < m.weight_kg * 0.8) {
+      const minPro = Math.round(m.weight_kg * 0.8)
+      warnings.push(`⚠️ ${pro}g protein is below the recommended minimum of ${minPro}g for your weight (0.8g per kg body weight).`)
+    }
     if (pro > 400) {
-      warnings.push(`⚠️ ${pro}g protein is unusually high. Most research supports up to 2.2g/kg of body weight.`)
+      warnings.push(`⚠️ ${pro}g protein is unusually high. Most research supports up to 2.2g/kg body weight.`)
     }
     if (calDiff > 200) {
       warnings.push(`⚠️ Your calories (${cal} kcal) don't match your macros (${impliedCal} kcal from ${pro}g P + ${carb}g C + ${fat}g F). Consider using the lock system to balance them.`)
