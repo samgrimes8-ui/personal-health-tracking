@@ -6562,6 +6562,85 @@ function wireGlobals() {
   window.quickLogFoodItem = async (id) => {
     const item = state.foodItems.find(f => f.id === id)
     if (!item) return
+
+    const components = item.components || []
+
+    // If food has components, ask how to log
+    if (components.length > 1) {
+      const choice = await new Promise(resolve => {
+        const sheet = document.createElement('div')
+        sheet.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:flex-end;justify-content:center'
+        sheet.innerHTML = `
+          <div style="background:var(--bg2);border-radius:var(--r3) var(--r3) 0 0;width:100%;max-width:480px;padding:20px 20px 32px">
+            <div style="width:36px;height:4px;background:var(--border2);border-radius:2px;margin:0 auto 16px"></div>
+            <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:4px">Log ${esc(item.name)}</div>
+            <div style="font-size:13px;color:var(--text3);margin-bottom:16px">This food has ${components.length} components. How do you want to log it?</div>
+
+            <button id="log-as-one"
+              style="width:100%;padding:14px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:10px;text-align:left;display:flex;align-items:center;gap:12px">
+              <span style="font-size:22px">🍽️</span>
+              <div>
+                <div>Log as one food</div>
+                <div style="font-size:11px;font-weight:400;opacity:0.8">${Math.round(item.calories)} kcal · P${Math.round(item.protein)}g C${Math.round(item.carbs)}g F${Math.round(item.fat)}g</div>
+              </div>
+            </button>
+
+            <button id="log-components"
+              style="width:100%;padding:14px;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-size:14px;font-weight:500;font-family:inherit;cursor:pointer;margin-bottom:10px;text-align:left;display:flex;align-items:center;gap:12px">
+              <span style="font-size:22px">📋</span>
+              <div>
+                <div>Log individual components</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:2px">${components.map(c => esc(c.name)).join(', ')}</div>
+              </div>
+            </button>
+
+            <button id="log-cancel"
+              style="width:100%;padding:12px;background:none;border:none;color:var(--text3);font-size:14px;font-family:inherit;cursor:pointer">
+              Cancel
+            </button>
+          </div>
+        `
+        document.body.appendChild(sheet)
+        document.getElementById('log-as-one').onclick = () => { document.body.removeChild(sheet); resolve('one') }
+        document.getElementById('log-components').onclick = () => { document.body.removeChild(sheet); resolve('components') }
+        document.getElementById('log-cancel').onclick = () => { document.body.removeChild(sheet); resolve(null) }
+        sheet.onclick = (e) => { if (e.target === sheet) { document.body.removeChild(sheet); resolve(null) } }
+      })
+
+      if (!choice) return
+
+      if (choice === 'components') {
+        // Log each component as a separate entry
+        let logged = 0
+        for (const comp of components) {
+          try {
+            const entry = await addMealEntry(state.user.id, {
+              name: comp.name,
+              calories: comp.calories || 0,
+              protein: comp.protein || 0,
+              carbs: comp.carbs || 0,
+              fat: comp.fat || 0,
+              fiber: comp.fiber || 0,
+              sugar: comp.sugar || 0,
+              base_calories: comp.calories || 0,
+              base_protein: comp.protein || 0,
+              base_carbs: comp.carbs || 0,
+              base_fat: comp.fat || 0,
+              servings_consumed: comp.qty || 1,
+              food_item_id: id,
+            })
+            state.log.unshift(entry)
+            logged++
+          } catch (err) { console.error('Component log error:', err) }
+        }
+        updateStats()
+        refreshTodayLog()
+        showToast(`${logged} components logged!`, 'success')
+        return
+      }
+    }
+
+    // Log as one food (default for foods without components or user chose "as one")
     try {
       const entry = await addMealEntry(state.user.id, {
         ...item,
@@ -6569,7 +6648,7 @@ function wireGlobals() {
         base_carbs: item.carbs, base_fat: item.fat,
         base_fiber: item.fiber, base_sugar: item.sugar,
         servings_consumed: 1,
-        food_item_id: id  // always link back to the food item
+        food_item_id: id
       })
       state.log.unshift(entry)
       updateStats()
