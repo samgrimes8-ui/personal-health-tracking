@@ -476,51 +476,70 @@ function renderShell(container) {
     <div class="modal-overlay" id="checkin-modal">
       <div class="modal-box" style="max-width:480px">
         <button class="modal-close" onclick="closeCheckinModal()">×</button>
-        <h3>Weekly check-in</h3>
+        <h3>Log weight</h3>
 
-        <!-- Section 1: Manual metrics -->
-        <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:14px">
-          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">📊 Measurements</div>
+        <!-- Quick entry: just weight + date -->
+        <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:10px">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
             <div class="modal-field"><label id="ci-weight-label">Weight (lbs)</label><input type="number" step="0.1" id="ci-weight" placeholder="210" /></div>
-            <div class="modal-field"><label>Body fat %</label><input type="number" step="0.1" id="ci-bf" placeholder="17" /></div>
-            <div class="modal-field"><label>Muscle mass (lbs)</label><input type="number" step="0.1" id="ci-muscle" placeholder="101" /></div>
-            <div class="modal-field"><label>Check-in date</label><input type="date" id="ci-date" /></div>
+            <div class="modal-field"><label>Date</label><input type="date" id="ci-date" /></div>
           </div>
         </div>
 
-        <!-- Section 2: Scan upload -->
-        <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:14px">
-          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">📄 InBody / DEXA scan</div>
-          <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Upload your scan and AI will extract all metrics automatically — or fill in manually above.</div>
-          <div id="scan-upload-area" onclick="document.getElementById('scan-file-input').click()"
-            style="border:1.5px dashed var(--border2);border-radius:var(--r);padding:14px;text-align:center;cursor:pointer;background:var(--bg2);transition:border-color 0.2s"
-            onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
-            <div id="scan-upload-inner">
-              <div style="font-size:28px;margin-bottom:4px">📷</div>
-              <div style="font-size:13px;color:var(--accent);font-weight:500">Tap to upload scan</div>
-              <div style="font-size:11px;color:var(--text3);margin-top:2px">Photo, screenshot, or PDF · AI reads all values</div>
+        <!-- Toggle for more details -->
+        <button onclick="toggleCheckinDetails()" id="ci-details-toggle"
+          style="width:100%;background:none;border:1px solid var(--border2);border-radius:var(--r);padding:9px;font-size:13px;color:var(--text3);font-family:inherit;cursor:pointer;margin-bottom:10px;display:flex;align-items:center;justify-content:center;gap:6px">
+          <span id="ci-details-arrow">▸</span> Add body composition details
+        </button>
+
+        <!-- Expandable details -->
+        <div id="ci-details-panel" style="display:none">
+          <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:10px">
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">📊 Body composition</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="modal-field">
+                <label>Body fat % <span style="font-weight:400;color:var(--text3);font-size:10px">(optional)</span></label>
+                <input type="number" step="0.1" id="ci-bf" placeholder="17" />
+              </div>
+              <div class="modal-field">
+                <label id="ci-muscle-label">Muscle mass (lbs) <span style="font-weight:400;color:var(--text3);font-size:10px">(optional)</span></label>
+                <input type="number" step="0.1" id="ci-muscle" placeholder="101" />
+              </div>
             </div>
           </div>
-          <input type="file" id="scan-file-input" accept="application/pdf,image/*" style="display:none" onchange="handleScanUpload(this.files[0])" />
-          <div id="scan-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center;min-height:18px"></div>
-          <!-- Scan date — only shown after upload or manually -->
-          <div class="modal-field" style="margin-top:10px">
-            <label>Scan date <span style="font-weight:400;color:var(--text3);font-size:10px">(date on the report)</span></label>
-            <input type="date" id="ci-scan-date" style="width:100%;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none" />
+
+          <!-- Scan upload -->
+          <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:10px">
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">📄 InBody / DEXA scan</div>
+            <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Upload your scan and AI extracts all metrics automatically.</div>
+            <div id="scan-upload-area" onclick="document.getElementById('scan-file-input').click()"
+              style="border:1.5px dashed var(--border2);border-radius:var(--r);padding:14px;text-align:center;cursor:pointer;background:var(--bg2)"
+              onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+              <div id="scan-upload-inner">
+                <div style="font-size:24px;margin-bottom:4px">📄</div>
+                <div style="font-size:13px;color:var(--text2)">Upload scan (PDF or image)</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract your metrics automatically</div>
+              </div>
+            </div>
+            <input type="file" id="scan-file-input" accept="application/pdf,image/*" style="display:none" onchange="handleScanUpload(this.files[0])" />
+            <div id="scan-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center;min-height:18px"></div>
+            <div class="modal-field" style="margin-top:10px">
+              <label>Scan date <span style="font-weight:400;color:var(--text3);font-size:10px">(date on the report)</span></label>
+              <input type="date" id="ci-scan-date" style="width:100%;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none" />
+            </div>
           </div>
         </div>
 
         <!-- Notes -->
         <div class="modal-field" style="margin-bottom:16px">
-          <label>Notes (optional)</label>
-          <textarea id="ci-notes" placeholder="How are you feeling? Energy levels, sleep, observations..."
+          <label>Notes <span style="font-weight:400;color:var(--text3);font-size:10px">(optional)</span></label>
+          <textarea id="ci-notes" placeholder="How are you feeling? Energy levels, sleep..."
             style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none;resize:none;min-height:56px"></textarea>
         </div>
 
         <div class="modal-actions">
           <button class="btn-cancel" onclick="closeCheckinModal()">Cancel</button>
-          <button class="btn-save" onclick="saveCheckinHandler()">Save check-in</button>
+          <button class="btn-save" onclick="saveCheckinHandler()">Save</button>
         </div>
       </div>
     </div>
@@ -2509,7 +2528,7 @@ function renderGoalsPage(container) {
 
     <button onclick="openCheckinModal()"
       style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:16px;display:flex;align-items:center;justify-content:center;gap:8px">
-      📊 Log this week's check-in
+      📊 Log weight
     </button>
 
     <div class="upload-card" style="margin-bottom:16px">
@@ -2685,7 +2704,7 @@ function renderGoalsPage(container) {
       <div class="section-title">Weekly check-in</div>
       <button onclick="openCheckinModal()"
         style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:8px">
-        📊 Log this week's check-in
+        📊 Log weight
       </button>
       <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:12px">
         Upload your InBody or DEXA scan to auto-extract body composition data
@@ -4066,6 +4085,17 @@ function wireGlobals() {
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
+  window.toggleCheckinDetails = () => {
+    const panel = document.getElementById('ci-details-panel')
+    const arrow = document.getElementById('ci-details-arrow')
+    const toggle = document.getElementById('ci-details-toggle')
+    if (!panel) return
+    const isOpen = panel.style.display !== 'none'
+    panel.style.display = isOpen ? 'none' : 'block'
+    if (arrow) arrow.textContent = isOpen ? '▸' : '▾'
+    if (toggle) toggle.style.color = isOpen ? 'var(--text3)' : 'var(--accent)'
+  }
+
   window.openCheckinModal = () => {
     state.pendingCheckinScan = null
     const isImperial = state.units === 'imperial'
@@ -4074,9 +4104,8 @@ function wireGlobals() {
     document.getElementById('ci-scan-date').value = today
     const wLabel = document.getElementById('ci-weight-label')
     if (wLabel) wLabel.textContent = isImperial ? 'Weight (lbs)' : 'Weight (kg)'
-    const mLabel = document.querySelector('#checkin-modal label[for-muscle]') || 
-      document.querySelector('#checkin-modal .modal-field:nth-child(3) label')
-    if (mLabel) mLabel.textContent = isImperial ? 'Muscle mass (lbs)' : 'Muscle mass (kg)'
+    const mLabel = document.getElementById('ci-muscle-label')
+    if (mLabel) mLabel.innerHTML = `${isImperial ? 'Muscle mass (lbs)' : 'Muscle mass (kg)'} <span style="font-weight:400;color:var(--text3);font-size:10px">(optional)</span>`
     const bm = state.bodyMetrics
     document.getElementById('ci-weight').value = bm?.weight_kg
       ? (isImperial ? +(bm.weight_kg * 2.20462).toFixed(1) : bm.weight_kg) : ''
@@ -4086,6 +4115,11 @@ function wireGlobals() {
     document.getElementById('ci-notes').value = ''
     document.getElementById('scan-status').textContent = ''
     document.getElementById('scan-upload-inner').innerHTML = '<div style="font-size:24px;margin-bottom:4px">📄</div><div style="font-size:13px;color:var(--text2)">Upload scan (PDF or image)</div><div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract your metrics automatically</div>'
+    // Collapse details panel on open
+    const panel = document.getElementById('ci-details-panel')
+    const arrow = document.getElementById('ci-details-arrow')
+    if (panel) panel.style.display = 'none'
+    if (arrow) arrow.textContent = '▸'
     document.getElementById('checkin-modal').classList.add('open')
   }
 
@@ -4100,6 +4134,12 @@ function wireGlobals() {
     const inner = document.getElementById('scan-upload-inner')
     if (status) status.textContent = 'Reading scan...'
     if (inner) inner.innerHTML = '<div style="font-size:24px">⏳</div><div style="font-size:13px;color:var(--text2)">Extracting metrics...</div>'
+
+    // Auto-expand details panel when scan is uploaded
+    const panel = document.getElementById('ci-details-panel')
+    const arrow = document.getElementById('ci-details-arrow')
+    if (panel) panel.style.display = 'block'
+    if (arrow) arrow.textContent = '▾'
 
     const isImperial = state.units === 'imperial'
     const resetUpload = (msg) => {
