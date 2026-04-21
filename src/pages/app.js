@@ -2252,12 +2252,9 @@ function renderPlanRecipeModal(recipe) {
 
 // Scale number+unit mentions in a step by a multiplier
 function scaleStepText(step, baseServings, targetServings) {
-  // Always escape the raw step text first for safety
   const safeStep = esc(step)
   if (!baseServings || !targetServings) return safeStep
   const multiplier = targetServings / baseServings
-  if (Math.abs(multiplier - 1) < 0.01) return safeStep
-  // Now replace number+unit patterns in the already-escaped text
   return safeStep.replace(/(\d+(?:\.\d+)?(?:\/\d+)?)\s*(cups?|tbsp|tablespoons?|tsp|teaspoons?|oz|ounces?|lbs?|pounds?|\bg\b|kg|ml|liters?|litres?|cloves?|slices?|pieces?|cans?|pints?|quarts?)/gi,
     (match, num, unit) => {
       const base = num.includes('/') ? (() => { const [n,d] = num.split('/').map(Number); return n/d })() : parseFloat(num)
