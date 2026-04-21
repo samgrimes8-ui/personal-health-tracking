@@ -1918,6 +1918,21 @@ function renderRecipeModalContent(recipe, mode = 'view') {
   return `
     <div style="position:relative">
 
+      ${isNew ? `
+        <div onclick="document.getElementById('cookbook-file-input').click()"
+          style="background:rgba(232,197,71,0.08);border-bottom:1.5px dashed rgba(232,197,71,0.35);padding:12px 16px;display:flex;align-items:center;gap:10px;cursor:pointer">
+          <span style="font-size:22px">📖</span>
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600;color:var(--accent)">Import from cookbook</div>
+            <div style="font-size:11px;color:var(--text3)">Tap to photograph a recipe — AI fills everything in</div>
+          </div>
+          <span id="cookbook-spinner" style="display:none">⏳</span>
+        </div>
+        <input type="file" id="cookbook-file-input" accept="image/*" capture="environment" style="display:none"
+          onchange="handleCookbookPhoto(this.files[0])" />
+        <div id="cookbook-status" style="font-size:11px;color:var(--text3);padding:2px 16px;text-align:center;min-height:14px;background:rgba(232,197,71,0.04)"></div>
+      ` : ''}
+
       <!-- Sticky header: name + plan button -->
       <div style="position:sticky;top:0;z-index:10;background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 16px 10px">
         <button class="modal-close" onclick="closeRecipeModal()" style="top:10px;right:12px">×</button>
