@@ -4982,14 +4982,11 @@ function wireGlobals() {
       showToast('Calories unlocked — one macro must always float', 'success')
     }
 
-    // Re-render macro fields
-    const container = document.getElementById('goal-cal')?.closest('[style*="grid"]')?.parentElement
-    if (container) {
-      const parent = container.parentElement
-      if (parent) {
-        parent.innerHTML = buildMacroFields(state.goals)
-        showMacroBalanceHint()
-      }
+    // Re-render only the macro fields div (not its parent which contains save buttons)
+    const macroDiv = document.getElementById('goal-cal')?.closest('[style*="grid"]')?.parentElement
+    if (macroDiv) {
+      macroDiv.outerHTML = buildMacroFields(state.goals)
+      showMacroBalanceHint()
     }
   }
 
