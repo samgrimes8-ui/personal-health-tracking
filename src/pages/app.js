@@ -1918,23 +1918,6 @@ function renderRecipeModalContent(recipe, mode = 'view') {
   return `
     <div style="position:relative">
 
-      <!-- Cookbook import — pinned at very top, always visible for new recipes -->
-      ${isNew ? `
-        <div style="background:rgba(232,197,71,0.08);border-bottom:1.5px dashed rgba(232,197,71,0.35);padding:10px 16px;display:flex;align-items:center;gap:10px;cursor:pointer"
-          onclick="document.getElementById('cookbook-file-input').click()">
-          <span style="font-size:22px">📖</span>
-          <div style="flex:1">
-            <div style="font-size:13px;font-weight:600;color:var(--accent)">Import from cookbook</div>
-            <div style="font-size:11px;color:var(--text3)">Tap to photograph a recipe page — AI fills everything in</div>
-          </div>
-          <span id="cookbook-spinner" style="display:none">⏳</span>
-          <span style="color:var(--text3);font-size:16px">›</span>
-        </div>
-        <input type="file" id="cookbook-file-input" accept="image/*" capture="environment" style="display:none"
-          onchange="handleCookbookPhoto(this.files[0])" />
-        <div id="cookbook-status" style="font-size:11px;color:var(--text3);padding:4px 16px;text-align:center;min-height:16px;background:rgba(232,197,71,0.04)"></div>
-      ` : ''}
-
       <!-- Sticky header: name + plan button -->
       <div style="position:sticky;top:0;z-index:10;background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 16px 10px">
         <button class="modal-close" onclick="closeRecipeModal()" style="top:10px;right:12px">×</button>
@@ -4700,8 +4683,158 @@ function wireGlobals() {
 
   window.openNewRecipeModal = () => {
     state.editingRecipe = { name: '', description: '', servings: 4, serving_label: 'serving', calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, ingredients: [] }
-    document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+    // Show method picker instead of jumping straight to form
+    document.getElementById('recipe-modal-content').innerHTML = `
+      <div style="position:relative">
+        <button class="modal-close" onclick="closeRecipeModal()" style="position:absolute;top:12px;right:12px">×</button>
+        <div style="padding:28px 20px 24px">
+          <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:6px">Add a recipe</div>
+          <div style="font-size:13px;color:var(--text3);margin-bottom:24px">How do you want to add it?</div>
+
+          <!-- Option 1: Link -->
+          <button onclick="openNewRecipeFromLink()"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
+            onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+            <div style="width:44px;height:44px;background:rgba(232,197,71,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">🔗</div>
+            <div>
+              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Paste a link</div>
+              <div style="font-size:12px;color:var(--text3)">Instagram, website, YouTube — AI extracts the recipe</div>
+            </div>
+            <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
+          </button>
+
+          <!-- Option 2: Photo -->
+          <button onclick="document.getElementById('new-recipe-photo-input').click()"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
+            onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+            <div style="width:44px;height:44px;background:rgba(76,175,130,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">📸</div>
+            <div>
+              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Take a photo</div>
+              <div style="font-size:12px;color:var(--text3)">Photograph a cookbook, recipe card, or screenshot</div>
+            </div>
+            <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
+          </button>
+          <input type="file" id="new-recipe-photo-input" accept="image/*" capture="environment" style="display:none"
+            onchange="openNewRecipeFromPhoto(this.files[0])" />
+
+          <!-- Option 3: Manual -->
+          <button onclick="openNewRecipeManual()"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
+            onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+            <div style="width:44px;height:44px;background:rgba(91,156,246,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">✏️</div>
+            <div>
+              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Add manually</div>
+              <div style="font-size:12px;color:var(--text3)">Type in the name, ingredients and macros yourself</div>
+            </div>
+            <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
+          </button>
+        </div>
+      </div>
+    `
     document.getElementById('recipe-modal').classList.add('open')
+  }
+
+  window.openNewRecipeFromLink = () => {
+    document.getElementById('recipe-modal-content').innerHTML = `
+      <div style="position:relative">
+        <button class="modal-close" onclick="closeRecipeModal()" style="position:absolute;top:12px;right:12px">×</button>
+        <div style="padding:28px 20px 24px">
+          <button onclick="openNewRecipeModal()" style="background:none;border:none;color:var(--text3);font-size:13px;font-family:inherit;cursor:pointer;padding:0;margin-bottom:16px;display:flex;align-items:center;gap:4px">
+            ← Back
+          </button>
+          <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:6px">Paste a link</div>
+          <div style="font-size:13px;color:var(--text3);margin-bottom:20px">Works with recipe websites, Instagram, YouTube, TikTok and more</div>
+          <input type="url" id="new-recipe-url" placeholder="https://..." autofocus
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:15px;font-family:inherit;outline:none;margin-bottom:10px"
+            onkeydown="if(event.key==='Enter')importRecipeFromLink()" />
+          <div style="font-size:12px;color:var(--text3);margin-bottom:20px">Or describe the dish name to search for it</div>
+          <input type="text" id="new-recipe-dish" placeholder="e.g. Chicken tikka masala..."
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:15px;font-family:inherit;outline:none;margin-bottom:20px"
+            onkeydown="if(event.key==='Enter')importRecipeFromLink()" />
+          <button onclick="importRecipeFromLink()" id="import-link-btn"
+            style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
+            Import recipe
+          </button>
+          <div id="import-link-status" style="font-size:12px;color:var(--text3);margin-top:10px;text-align:center;min-height:18px"></div>
+        </div>
+      </div>
+    `
+  }
+
+  window.importRecipeFromLink = async () => {
+    const url = document.getElementById('new-recipe-url')?.value.trim()
+    const dish = document.getElementById('new-recipe-dish')?.value.trim()
+    if (!url && !dish) { showToast('Enter a link or dish name', 'error'); return }
+    const btn = document.getElementById('import-link-btn')
+    const status = document.getElementById('import-link-status')
+    if (btn) { btn.disabled = true; btn.textContent = 'Importing...' }
+    if (status) status.textContent = 'Searching for recipe...'
+    try {
+      const result = await analyzeDishBySearch(dish || url, url)
+      if (!result) throw new Error('No recipe found')
+      state.editingRecipe = { ...state.editingRecipe, ...result, source_url: url || '' }
+      document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+      showToast('Recipe imported — review and save', 'success')
+    } catch (err) {
+      if (status) status.textContent = 'Could not import — try a different link or dish name'
+      if (btn) { btn.disabled = false; btn.textContent = 'Import recipe' }
+    }
+  }
+
+  window.openNewRecipeFromPhoto = async (file) => {
+    if (!file) return
+    // Show loading screen
+    document.getElementById('recipe-modal-content').innerHTML = `
+      <div style="padding:60px 20px;text-align:center">
+        <div style="font-size:40px;margin-bottom:16px">📖</div>
+        <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:8px">Reading recipe...</div>
+        <div style="font-size:13px;color:var(--text3)">AI is extracting ingredients and instructions</div>
+        <div style="margin-top:20px"><span class="analyzing-spinner"></span></div>
+      </div>
+    `
+    try {
+      // Resize image
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader(); reader.onload = e => res(e.target.result); reader.onerror = rej; reader.readAsDataURL(file)
+      })
+      const b64 = await new Promise(res => {
+        const img = new Image()
+        img.onload = () => {
+          const MAX = 1500
+          let { width: w, height: h } = img
+          if (w > MAX || h > MAX) { const s = MAX / Math.max(w, h); w = Math.round(w*s); h = Math.round(h*s) }
+          const canvas = document.createElement('canvas')
+          canvas.width = w; canvas.height = h
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+          res(canvas.toDataURL('image/jpeg', 0.85).split(',')[1])
+        }
+        img.src = dataUrl
+      })
+      const extracted = await Promise.race([
+        extractRecipeFromPhoto(b64),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30000))
+      ])
+      if (!extracted?.name) throw new Error('Could not read recipe')
+      state.editingRecipe = {
+        ...state.editingRecipe,
+        name: extracted.name || '',
+        description: extracted.description || '',
+        servings: extracted.servings || 4,
+        ingredients: (extracted.ingredients || []).map(i => ({ amount: String(i.amount||''), unit: i.unit||'', name: i.name||'' })),
+        instructions: extracted.instructions ? { steps: extracted.instructions, prep_time: extracted.prep_time, cook_time: extracted.cook_time } : null,
+        notes: extracted.notes || '',
+      }
+      document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+      showToast(`"${extracted.name}" extracted — review and save`, 'success')
+    } catch (err) {
+      // Fall back to manual form with error message
+      document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
+      showToast('Could not read photo — fill in manually', 'error')
+    }
+  }
+
+  window.openNewRecipeManual = () => {
+    document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
   }
 
   window.setRecipeServings = (val, recipeId) => {
