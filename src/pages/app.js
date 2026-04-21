@@ -5180,31 +5180,50 @@ function wireGlobals() {
     const status = document.getElementById('comp-label-status')
     if (!file) return
     if (status) status.textContent = 'Reading label...'
-    const reader = new FileReader()
-    reader.onload = async (ev) => {
-      const b64 = ev.target.result.split(',')[1]
-      try {
-        const result = await analyzeNutritionLabel(b64)
-        if (result) {
-          state.pendingComponent = {
-            name: result.name || 'Food Item',
-            calories: result.calories || 0,
-            protein: result.protein || 0,
-            carbs: result.carbs || 0,
-            fat: result.fat || 0,
-            fiber: result.fiber || 0,
-            sugar: result.sugar || 0,
-            serving_size: result.serving_size || '',
-            _base: { calories: result.calories||0, protein: result.protein||0, carbs: result.carbs||0, fat: result.fat||0, fiber: result.fiber||0, sugar: result.sugar||0 }
-          }
-          if (status) status.textContent = `✓ Read: ${result.name || 'Food Item'}`
-          showComponentResult(state.pendingComponent)
+    try {
+      // Read file
+      const dataUrl = await new Promise((res, rej) => {
+        const reader = new FileReader()
+        reader.onload = e => res(e.target.result)
+        reader.onerror = rej
+        reader.readAsDataURL(file)
+      })
+      // Resize to max 1500px — iPhone photos exceed 5MB Claude limit
+      const b64 = await new Promise(res => {
+        const img = new Image()
+        img.onload = () => {
+          const MAX = 1500
+          let { width: w, height: h } = img
+          if (w > MAX || h > MAX) { const s = MAX / Math.max(w, h); w = Math.round(w*s); h = Math.round(h*s) }
+          const canvas = document.createElement('canvas')
+          canvas.width = w; canvas.height = h
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+          res(canvas.toDataURL('image/jpeg', 0.85).split(',')[1])
         }
-      } catch (err) {
-        if (status) status.textContent = 'Could not read label — try describe instead'
+        img.onerror = () => res(dataUrl.split(',')[1])
+        img.src = dataUrl
+      })
+      const result = await analyzeNutritionLabel(b64)
+      if (result) {
+        state.pendingComponent = {
+          name: result.name || 'Food Item',
+          calories: result.calories || 0,
+          protein: result.protein || 0,
+          carbs: result.carbs || 0,
+          fat: result.fat || 0,
+          fiber: result.fiber || 0,
+          sugar: result.sugar || 0,
+          serving_size: result.serving_size || '',
+          _base: { calories: result.calories||0, protein: result.protein||0, carbs: result.carbs||0, fat: result.fat||0, fiber: result.fiber||0, sugar: result.sugar||0 }
+        }
+        if (status) status.textContent = `✓ ${result.name || 'Food Item'}`
+        showComponentResult(state.pendingComponent)
+      } else {
+        if (status) status.textContent = 'Could not read label — try Describe tab'
       }
+    } catch (err) {
+      if (status) status.textContent = 'Failed — try Describe tab'
     }
-    reader.readAsDataURL(file)
   }
 
   window.filterCompSavedSearch = (q) => {
@@ -5427,8 +5446,37 @@ function wireGlobals() {
     const status = document.getElementById('comp-barcode-status')
     if (!file) return
     if (status) status.textContent = 'Reading barcode...'
+
+    const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = e => r(e.target.result); fr.readAsDataURL(file) })
+
     try {
-      const code = await decodeBarcodeFromFile(file)
+      // 1. Native BarcodeDetector + ZXing
+      let code = await decodeBarcodeFromFile(file)
+
+      // 2. Claude visual fallback
+      if (!code) {
+        if (status) status.textContent = 'Trying AI barcode reader...'
+        const b64 = await new Promise(res => {
+          const img = new Image()
+          img.onload = () => {
+            const MAX = 1500
+            let { width: w, height: h } = img
+            if (w > MAX || h > MAX) { const s = MAX / Math.max(w, h); w = Math.round(w*s); h = Math.round(h*s) }
+            const canvas = document.createElement('canvas')
+            canvas.width = w; canvas.height = h
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+            res(canvas.toDataURL('image/jpeg', 0.85).split(',')[1])
+          }
+          img.onerror = () => res(dataUrl.split(',')[1])
+          img.src = dataUrl
+        })
+        code = await readBarcodeFromImage(b64).catch(() => null)
+        if (code) {
+          const input = document.getElementById('comp-barcode-manual')
+          if (input) input.value = code
+        }
+      }
+
       if (code) {
         if (status) status.textContent = `Found: ${code} — looking up...`
         const bres = await fetch(`/api/barcode?upc=${code}`)
