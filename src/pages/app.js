@@ -2934,7 +2934,9 @@ async function doAnalyze() {
       if (!desc) { showToast('Please describe the food first', 'error'); return null }
       return await analyzeFoodItem(desc)
     } else if (state.foodMode === 'label') {
-      if (!state.labelImageBase64) { showToast('Please upload a nutrition label photo first', 'error'); return null }
+      if (!state.labelImageBase64) { showToast('Please snap or upload a nutrition label first', 'error'); return null }
+      const btn = document.getElementById('analyze-btn')
+      if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Reading label...'
       return await analyzeNutritionLabel(state.labelImageBase64)
     } else {
       showToast('Use the scan or manual barcode entry above', 'error'); return null
@@ -3165,15 +3167,33 @@ function wireGlobals() {
     closeSidebar()
   }
 
+  function updateAnalyzeBtn() {
+    const btn = document.getElementById('analyze-btn')
+    if (!btn) return
+    const labels = {
+      photo:   '📸 Analyze photo',
+      recipe:  '✨ Analyze recipe',
+      link:    '🔍 Search & analyze',
+      food:    {
+        search:  '✨ Analyze with AI',
+        label:   '📷 Read label',
+        barcode: '🔍 Look up barcode',
+      }
+    }
+    if (state.currentMode === 'food') {
+      btn.textContent = labels.food[state.foodMode] || '✨ Analyze with AI'
+    } else {
+      btn.textContent = labels[state.currentMode] || '✨ Analyze with AI'
+    }
+  }
+
   window.switchMode = (mode) => {
     state.currentMode = mode
     if (mode !== 'photo') state.imageBase64 = null
-    // Toggle panels
     ;['recipe', 'photo', 'link', 'food'].forEach(m => {
       const panel = document.getElementById(`mode-${m}`)
       if (panel) panel.classList.toggle('active', m === mode)
     })
-    // Toggle tab buttons — use data-mode attribute
     document.querySelectorAll('.mode-tab[data-mode]').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === mode)
     })
@@ -3181,6 +3201,7 @@ function wireGlobals() {
       if (state.foodMode === 'label') wireLabelFileInput()
       if (state.foodMode === 'barcode') wireBarcodeInput()
     }
+    updateAnalyzeBtn()
   }
 
   window.setFoodMode = (mode) => {
@@ -3193,6 +3214,7 @@ function wireGlobals() {
     })
     if (mode === 'label') wireLabelFileInput()
     if (mode === 'barcode') wireBarcodeInput()
+    updateAnalyzeBtn()
   }
 
   // ── Barcode scanner ─────────────────────────────────────────────

@@ -249,32 +249,7 @@ Respond ONLY with a JSON object, no markdown:
   return parseJSON(data)
 }
 
-export async function analyzeNutritionLabel(imageBase64) {
-  // Reads a nutrition facts panel photo
-  const data = await callProxy('food', [{
-    role: 'user',
-    content: [
-      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
-      { type: 'text', text: `Read the nutrition facts label in this image and extract the values exactly as printed. 
-Respond ONLY with a JSON object, no markdown:
-{
-  "name": "product name if visible, else 'Food Item'",
-  "brand": "brand name if visible or empty string",
-  "serving_size": "serving size as printed",
-  "calories": number,
-  "protein": number,
-  "carbs": number,
-  "fat": number,
-  "fiber": number,
-  "sugar": number,
-  "sodium": number,
-  "confidence": "high",
-  "notes": "any values that were unclear"
-}` }
-    ]
-  }], { max_tokens: 600 })
-  return parseJSON(data)
-}
+
 
 export async function generateRecipeInstructions(recipe) {
   const ingredientList = (recipe.ingredients || [])
@@ -370,4 +345,126 @@ export async function fetchOgMetadata(url) {
     if (!res.ok) return null
     return await res.json()
   } catch { return null }
+}
+
+// ─── Nutrition Label OCR (free-first, Claude fallback) ────────────────────────
+
+async function tryFreeOcr(imageBase64) {
+  // OCR.space free tier — no API key needed for basic use
+  try {
+    const formData = new FormData()
+    formData.append('base64Image', 'data:image/jpeg;base64,' + imageBase64)
+    formData.append('language', 'eng')
+    formData.append('isOverlayRequired', 'false')
+    formData.append('detectOrientation', 'true')
+    formData.append('scale', 'true')
+    formData.append('OCREngine', '2') // Engine 2 handles printed text better
+
+    const res = await Promise.race([
+      fetch('https://api.ocr.space/parse/image', { method: 'POST', body: formData }),
+      new Promise((_, r) => setTimeout(() => r(new Error('OCR timeout')), 8000))
+    ])
+    if (!res.ok) return null
+    const data = await res.json()
+    if (data.IsErroredOnProcessing) return null
+    return data.ParsedResults?.[0]?.ParsedText || null
+  } catch { return null }
+}
+
+function parseNutritionText(text) {
+  if (!text || text.length < 20) return null
+
+  const num = (patterns) => {
+    for (const p of patterns) {
+      const m = text.match(p)
+      if (m) {
+        const v = parseFloat(m[1].replace(/,/g, ''))
+        if (!isNaN(v)) return v
+      }
+    }
+    return null
+  }
+
+  const calories = num([
+    /calories[\s:]*(\d+)/i,
+    /energy[\s:]*(\d+)\s*kcal/i,
+    /cal[\.\s]*(\d+)/i,
+  ])
+  const protein = num([
+    /protein[\s:]*(\d+\.?\d*)\s*g/i,
+    /proteins[\s:]*(\d+\.?\d*)/i,
+  ])
+  const carbs = num([
+    /total\s+carb(?:ohydrate)?s?[\s:]*(\d+\.?\d*)\s*g/i,
+    /carbohydrate[\s:]*(\d+\.?\d*)/i,
+    /carbs[\s:]*(\d+\.?\d*)/i,
+  ])
+  const fat = num([
+    /total\s+fat[\s:]*(\d+\.?\d*)\s*g/i,
+    /fat[\s:]*(\d+\.?\d*)\s*g/i,
+  ])
+  const fiber = num([
+    /dietary\s+fiber[\s:]*(\d+\.?\d*)\s*g/i,
+    /fiber[\s:]*(\d+\.?\d*)/i,
+  ])
+  const sugar = num([
+    /total\s+sugars?[\s:]*(\d+\.?\d*)\s*g/i,
+    /sugars?[\s:]*(\d+\.?\d*)/i,
+  ])
+  const sodium = num([
+    /sodium[\s:]*(\d+\.?\d*)\s*mg/i,
+  ])
+  const servingSize = text.match(/serving\s+size[\s:]*([^\n]{3,30})/i)?.[1]?.trim() || null
+
+  // Need at least calories + one macro to be useful
+  if (!calories || (!protein && !carbs && !fat)) return null
+
+  return {
+    name: 'Food Item',
+    brand: '',
+    serving_size: servingSize || '1 serving',
+    calories: calories || 0,
+    protein: protein || 0,
+    carbs: carbs || 0,
+    fat: fat || 0,
+    fiber: fiber || 0,
+    sugar: sugar || 0,
+    sodium: sodium || 0,
+    confidence: 'high',
+    notes: 'Extracted via OCR',
+  }
+}
+
+export async function analyzeNutritionLabel(imageBase64) {
+  // Step 1: Try free OCR + regex parsing
+  const ocrText = await tryFreeOcr(imageBase64)
+  if (ocrText) {
+    const parsed = parseNutritionText(ocrText)
+    if (parsed) return parsed
+  }
+
+  // Step 2: Fall back to Claude (costs tokens but handles complex/rotated labels)
+  const data = await callProxy('food', [{
+    role: 'user',
+    content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
+      { type: 'text', text: `Read the nutrition facts label in this image and extract the values exactly as printed.
+Respond ONLY with a JSON object, no markdown:
+{
+  "name": "product name if visible, else 'Food Item'",
+  "brand": "brand name if visible or empty string",
+  "serving_size": "serving size as printed",
+  "calories": number,
+  "protein": number,
+  "carbs": number,
+  "fat": number,
+  "fiber": number,
+  "sugar": number,
+  "sodium": number,
+  "confidence": "high",
+  "notes": "any values that were unclear"
+}` }
+    ]
+  }], { max_tokens: 600 })
+  return parseJSON(data)
 }
