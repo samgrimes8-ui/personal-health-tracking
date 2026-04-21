@@ -4721,9 +4721,19 @@ function wireGlobals() {
               <div style="font-size:13px;color:var(--text2);background:var(--bg3);border-radius:var(--r);padding:10px 12px;margin-bottom:8px;line-height:1.5">
                 ${w}
               </div>`).join('')}
-            <div style="font-size:12px;color:var(--text3);margin:12px 0 16px;line-height:1.5">
-              We recommend speaking with a dietitian before setting aggressive targets.
-              ${state.providers?.length ? `<a onclick="document.body.removeChild(document.body.lastChild);switchPage('providers')" style="color:var(--protein);cursor:pointer;text-decoration:underline"> Connect with a provider →</a>` : ''}
+            <div style="background:rgba(76,175,130,0.1);border:1px solid rgba(76,175,130,0.3);border-radius:var(--r);padding:14px;margin:12px 0 16px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span style="font-size:18px">🩺</span>
+                <div style="font-size:13px;font-weight:600;color:var(--protein)">Speak with a dietitian</div>
+              </div>
+              <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+                A registered dietitian can help you set safe, effective targets tailored to your body and goals.
+                ${state.providers?.length ? `<a onclick="document.body.removeChild(document.body.lastChild);switchPage('providers')" style="color:var(--protein);cursor:pointer;text-decoration:underline"> Meet our providers →</a>` : ''}
+              </div>
+              <button onclick="showComingSoon(this)"
+                style="width:100%;padding:10px;background:rgba(76,175,130,0.2);border:1px solid var(--protein);border-radius:var(--r);color:var(--protein);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+                📅 Schedule a free consultation
+              </button>
             </div>
             <div style="display:flex;gap:10px">
               <button id="goal-warn-cancel"
@@ -5119,6 +5129,23 @@ function wireGlobals() {
       hint.textContent = `Macros = ${implied} kcal · Calories set to ${cal} (${diff > 0 ? '+' : ''}${implied - cal})`
       hint.style.color = 'var(--text3)'
     }
+  }
+
+  window.showComingSoon = (btn) => {
+    if (!btn) return
+    const orig = btn.innerHTML
+    btn.innerHTML = '🚀 Coming soon — stay tuned!'
+    btn.style.background = 'rgba(232,197,71,0.15)'
+    btn.style.borderColor = 'var(--accent)'
+    btn.style.color = 'var(--accent)'
+    btn.disabled = true
+    setTimeout(() => {
+      btn.innerHTML = orig
+      btn.style.background = 'rgba(76,175,130,0.2)'
+      btn.style.borderColor = 'var(--protein)'
+      btn.style.color = 'var(--protein)'
+      btn.disabled = false
+    }, 3000)
   }
 
   window.handleSignOut = async () => {
