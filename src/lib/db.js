@@ -1049,32 +1049,35 @@ export async function copyBroadcastToPlanner(userId, broadcast, weekStart, selec
   const targetStartDate = new Date(wy, wmo - 1, wd)
 
   const rows = items.map(item => {
-    // Compute day_of_week and actual_date relative to the target week
-    let dayOffset = 0
+    // Compute day_of_week: prefer actual_date offset from sourceStart; fall back to stored day_of_week
+    let dayIdx = 0
     if (item.actual_date) {
       const [iy, im, id] = item.actual_date.split('-').map(Number)
       const itemDate = new Date(iy, im - 1, id)
-      dayOffset = Math.round((itemDate - sourceStartDate) / (1000 * 60 * 60 * 24))
+      const offset = Math.round((itemDate - sourceStartDate) / (1000 * 60 * 60 * 24))
+      dayIdx = Math.max(0, Math.min(6, offset))
+    } else if (Number.isInteger(item.day_of_week)) {
+      dayIdx = Math.max(0, Math.min(6, item.day_of_week))
     }
-    // Clamp to 0–6 (one week)
-    const dayIdx = Math.max(0, Math.min(6, dayOffset))
 
     const actualDate = new Date(targetStartDate)
     actualDate.setDate(actualDate.getDate() + dayIdx)
     const actualDateStr = `${actualDate.getFullYear()}-${String(actualDate.getMonth()+1).padStart(2,'0')}-${String(actualDate.getDate()).padStart(2,'0')}`
+
+    const name = item.meal_name || item._name || item.recipe_name || 'Meal'
 
     return {
       user_id: userId,
       week_start_date: weekStart,
       day_of_week: dayIdx,
       actual_date: actualDateStr,
-      meal_name: item._name || item.recipe_name || 'Meal',
-      calories: item.calories ?? item._calories ?? 0,
-      protein: item.protein ?? 0,
-      carbs: item.carbs ?? 0,
-      fat: item.fat ?? 0,
-      fiber: item.fiber ?? 0,
-      is_leftover: false,
+      meal_name: name,
+      calories: Number(item.calories ?? item._calories ?? 0),
+      protein: Number(item.protein ?? 0),
+      carbs: Number(item.carbs ?? 0),
+      fat: Number(item.fat ?? 0),
+      fiber: Number(item.fiber ?? 0),
+      is_leftover: !!item.is_leftover,
       planned_servings: item.planned_servings ?? 1,
       recipe_id: item.recipe_id || null,
       meal_type: item.meal_type || null,

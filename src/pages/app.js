@@ -5278,7 +5278,7 @@ function wireGlobals() {
                   style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin-top:2px;flex-shrink:0" />
                 <div style="flex:1;min-width:0">
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    <div style="font-size:13px;color:var(--text);font-weight:500">${esc(item._name || item.recipe_name || 'Meal')}</div>
+                    <div style="font-size:13px;color:var(--text);font-weight:500">${esc(item._name || item.meal_name || item.recipe_name || 'Meal')}</div>
                     ${mealTypeBadge(item.meal_type)}
                   </div>
                   <div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
@@ -5452,20 +5452,33 @@ function wireGlobals() {
 
       // Pull all meals from today → end_date
       const { meals } = await getPlannerRange(state.user.id, today, endDate)
-      const plan_data = (meals || []).map(item => ({
-        recipe_id: item.recipe_id || null,
-        food_item_id: item.food_item_id || null,
-        meal_type: item.meal_type || 'dinner',
-        planned_servings: item.planned_servings || 1,
-        actual_date: item.actual_date,
-        _name: item.recipe?.name || item.food_item?.name || '',
-        _calories: item.recipe?.calories || item.food_item?.calories || 0,
-        calories: item.recipe?.calories || item.food_item?.calories || 0,
-        protein: item.recipe?.protein || item.food_item?.protein || 0,
-        carbs: item.recipe?.carbs || item.food_item?.carbs || 0,
-        fat: item.recipe?.fat || item.food_item?.fat || 0,
-        recipe_name: item.recipe?.name || item.food_item?.name || '',
-      }))
+      const plan_data = (meals || []).map(item => {
+        // Real row shape from meal_planner: meal_name, calories, protein, carbs, fat, fiber,
+        // day_of_week, week_start_date, recipe_id, meal_type, planned_servings, actualDate
+        const name = item.meal_name || item.recipe?.name || item.food_item?.name || 'Meal'
+        const cal  = Number(item.calories ?? item.recipe?.calories ?? item.food_item?.calories ?? 0)
+        const p    = Number(item.protein  ?? item.recipe?.protein  ?? item.food_item?.protein  ?? 0)
+        const c    = Number(item.carbs    ?? item.recipe?.carbs    ?? item.food_item?.carbs    ?? 0)
+        const f    = Number(item.fat      ?? item.recipe?.fat      ?? item.food_item?.fat      ?? 0)
+        const fib  = Number(item.fiber    ?? item.recipe?.fiber    ?? item.food_item?.fiber    ?? 0)
+        return {
+          recipe_id: item.recipe_id || null,
+          meal_type: item.meal_type || 'dinner',
+          planned_servings: item.planned_servings || 1,
+          actual_date: item.actualDate || item.actual_date || null,
+          day_of_week: item.day_of_week ?? null,
+          _name: name,
+          meal_name: name,
+          recipe_name: name,
+          _calories: cal,
+          calories: cal,
+          protein: p,
+          carbs: c,
+          fat: f,
+          fiber: fib,
+          is_leftover: !!item.is_leftover,
+        }
+      })
 
       await saveBroadcast({
         ...(id ? { id } : {}),
