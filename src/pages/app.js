@@ -1331,8 +1331,8 @@ function renderMealPlanView(planner) {
             </div>
           </div>
 
-          <!-- Meal slots -->
-          <div style="padding:8px">
+          <!-- Meal slots (stacked on mobile, 2x2 grid on desktop) -->
+          <div class="planner-day-slots" style="padding:8px">
             ${MEAL_SLOTS.map(slot => {
               const slotMeals = dayMeals.filter(m =>
                 (m.meal_type || 'dinner').toLowerCase() === slot.key

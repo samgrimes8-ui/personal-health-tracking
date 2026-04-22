@@ -258,6 +258,20 @@ body {
 .planner-meal-del:hover { color: var(--red); }
 .planner-add-btn { width: 100%; background: none; border: none; color: var(--text3); font-size: 12px; padding: 8px; cursor: pointer; font-family: inherit; transition: color 0.15s; text-align: center; }
 .planner-add-btn:hover { color: var(--accent); }
+
+/* Planner meal slots: single column (stacked) on mobile, 2x2 grid on
+   desktop so empty "+ Add" rows don't stretch the full page width. */
+.planner-day-slots {
+  display: flex;
+  flex-direction: column;
+}
+@media (min-width: 900px) {
+  .planner-day-slots {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 14px;
+  }
+}
 .leftovers-badge { font-size: 10px; background: rgba(122,180,232,0.15); color: var(--carbs); border-radius: 4px; padding: 1px 5px; margin-left: 4px; }
 
 /* MODALS */
