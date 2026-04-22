@@ -604,6 +604,13 @@ function renderShell(container) {
       </div>
     </div>
 
+    <!-- Copy broadcast preview modal -->
+    <div class="modal-overlay" id="copy-broadcast-modal">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:0;width:100%;max-width:560px;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;position:relative">
+        <div id="copy-broadcast-content" style="overflow-y:auto;flex:1"></div>
+      </div>
+    </div>
+
     <div class="toast" id="toast"></div>
   `
   updateSidebar()
@@ -5093,7 +5100,7 @@ function wireGlobals() {
               </div>
               <button onclick="copyBroadcastHandler('${b.id}','${p.user_id}')"
                 style="flex-shrink:0;padding:7px 12px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">
-                Copy to my week
+                Preview & copy
               </button>
             </div>
           </div>
@@ -5106,20 +5113,199 @@ function wireGlobals() {
 
   window.copyBroadcastHandler = async (broadcastId, providerId) => {
     try {
-      // Load the broadcast
+      // Load the broadcast so we can preview its meals
       const broadcasts = await getProviderBroadcasts(providerId, true)
       const broadcast = broadcasts.find(b => b.id === broadcastId)
       if (!broadcast) { showToast('Plan not found', 'error'); return }
+      if (!broadcast.plan_data?.length) { showToast('This plan has no meals', 'error'); return }
 
-      const weekStart = getWeekStart()
-      const count = await copyBroadcastToPlanner(state.user.id, broadcast, weekStart)
+      // Stash on window so the confirm handler can read it without re-fetching
+      window._pendingCopyBroadcast = broadcast
 
-      // Refresh planner state
-      const planner = await getPlannerWeek(state.user.id, weekStart)
-      if (planner) state.planner = planner
-
-      showToast(`Copied ${count} meals to your week!`, 'success')
+      // Default target = current week start (Monday)
+      const defaultWeek = getWeekStart()
+      document.getElementById('copy-broadcast-content').innerHTML = renderCopyBroadcastPreview(broadcast, defaultWeek)
+      document.getElementById('copy-broadcast-modal').classList.add('open')
     } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.closeCopyBroadcastModal = () => {
+    document.getElementById('copy-broadcast-modal').classList.remove('open')
+    window._pendingCopyBroadcast = null
+  }
+
+  window.toggleAllCopyMeals = (checked) => {
+    document.querySelectorAll('.copy-meal-check').forEach(cb => { cb.checked = checked })
+    updateCopySummary()
+  }
+
+  window.updateCopySummary = updateCopySummary
+  function updateCopySummary() {
+    const checks = document.querySelectorAll('.copy-meal-check')
+    const selected = Array.from(checks).filter(c => c.checked).length
+    const total = checks.length
+    const el = document.getElementById('copy-selected-count')
+    if (el) el.textContent = `${selected} of ${total} meal${total===1?'':'s'} selected`
+    const btn = document.getElementById('copy-confirm-btn')
+    if (btn) btn.disabled = selected === 0
+    // Keep the header checkbox in sync
+    const headerCheck = document.getElementById('copy-select-all')
+    if (headerCheck) {
+      if (selected === 0) { headerCheck.checked = false; headerCheck.indeterminate = false }
+      else if (selected === total) { headerCheck.checked = true; headerCheck.indeterminate = false }
+      else { headerCheck.checked = false; headerCheck.indeterminate = true }
+    }
+  }
+
+  window.confirmCopyBroadcast = async () => {
+    const broadcast = window._pendingCopyBroadcast
+    if (!broadcast) return
+    const btn = document.getElementById('copy-confirm-btn')
+    try {
+      const checks = Array.from(document.querySelectorAll('.copy-meal-check'))
+      const selectedIndices = checks.filter(c => c.checked).map(c => Number(c.dataset.idx))
+      if (!selectedIndices.length) { showToast('Select at least one meal', 'error'); return }
+
+      const weekStart = document.getElementById('copy-target-week')?.value || getWeekStart()
+
+      if (btn) { btn.disabled = true; btn.textContent = 'Copying...' }
+      const count = await copyBroadcastToPlanner(state.user.id, broadcast, weekStart, selectedIndices)
+
+      // Refresh planner state if user copied into the week they're currently viewing
+      const viewedWeek = state.plannerWeekStart || getWeekStart()
+      if (weekStart === viewedWeek) {
+        const planner = await getPlannerWeek(state.user.id, weekStart)
+        if (planner) state.planner = planner
+      }
+
+      closeCopyBroadcastModal()
+      showToast(`Copied ${count} meal${count===1?'':'s'} to your planner!`, 'success')
+      renderPage()
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+      if (btn) { btn.disabled = false; btn.textContent = 'Copy selected meals' }
+    }
+  }
+
+  function renderCopyBroadcastPreview(broadcast, defaultWeekStart) {
+    const meals = broadcast.plan_data || []
+
+    // Build a list of { origIdx, item } so we preserve the index for selection
+    const indexed = meals.map((item, origIdx) => ({ origIdx, item }))
+
+    // Group by actual_date (fall back to a single "All meals" bucket)
+    const groups = {}
+    indexed.forEach(({ origIdx, item }) => {
+      const key = item.actual_date || 'unspecified'
+      if (!groups[key]) groups[key] = []
+      groups[key].push({ origIdx, item })
+    })
+    const sortedKeys = Object.keys(groups).sort()
+
+    // Target week options: this week + next 4 weeks
+    const weekOptions = []
+    const base = new Date(defaultWeekStart + 'T12:00:00')
+    for (let i = 0; i < 5; i++) {
+      const d = new Date(base); d.setDate(d.getDate() + i * 7)
+      const val = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+      const end = new Date(d); end.setDate(end.getDate() + 6)
+      const label = i === 0
+        ? `This week (${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})})`
+        : i === 1
+          ? `Next week (${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})})`
+          : `${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})}`
+      weekOptions.push(`<option value="${val}"${i===0?' selected':''}>${label}</option>`)
+    }
+
+    const dayFmt = (key) => {
+      if (key === 'unspecified') return 'Meals'
+      const d = new Date(key + 'T12:00:00')
+      return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+    }
+
+    const mealTypeBadge = (type) => {
+      if (!type) return ''
+      const colors = {
+        breakfast: 'background:rgba(232,197,71,0.15);color:var(--accent)',
+        lunch: 'background:rgba(122,180,232,0.15);color:var(--carbs)',
+        dinner: 'background:rgba(232,154,122,0.15);color:var(--fat)',
+        snack: 'background:rgba(126,200,160,0.15);color:var(--protein)',
+      }
+      return `<span style="font-size:10px;padding:2px 6px;border-radius:4px;text-transform:capitalize;${colors[type]||'background:var(--bg3);color:var(--text3)'}">${type}</span>`
+    }
+
+    return `
+      <!-- Header -->
+      <div style="padding:20px 20px 14px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg2);z-index:2">
+        <div style="display:flex;align-items:start;justify-content:space-between;gap:12px;margin-bottom:6px">
+          <div style="min-width:0;flex:1">
+            <div style="font-family:'DM Serif Display',serif;font-size:20px;color:var(--text);line-height:1.2">${esc(broadcast.title || 'Meal plan')}</div>
+            ${broadcast.description ? `<div style="font-size:12px;color:var(--text2);margin-top:4px">${esc(broadcast.description)}</div>` : ''}
+          </div>
+          <button onclick="closeCopyBroadcastModal()" style="background:transparent;border:none;color:var(--text3);font-size:20px;cursor:pointer;padding:0 4px;line-height:1">×</button>
+        </div>
+        <div style="font-size:11px;color:var(--text3)">Preview the meals, uncheck any you don't want, then pick a target week.</div>
+      </div>
+
+      <!-- Target week selector -->
+      <div style="padding:14px 20px;border-bottom:1px solid var(--border);background:var(--bg3)">
+        <label style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:6px">Copy into</label>
+        <select id="copy-target-week" style="width:100%;padding:9px 10px;background:var(--bg2);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px">
+          ${weekOptions.join('')}
+        </select>
+      </div>
+
+      <!-- Select-all row -->
+      <div style="padding:10px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--text)">
+          <input type="checkbox" id="copy-select-all" checked
+            onchange="toggleAllCopyMeals(this.checked)"
+            style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer" />
+          Select all
+        </label>
+        <div id="copy-selected-count" style="font-size:12px;color:var(--text2)">${meals.length} of ${meals.length} meals selected</div>
+      </div>
+
+      <!-- Meals grouped by day -->
+      <div style="padding:4px 0">
+        ${sortedKeys.map(key => `
+          <div style="padding:14px 20px 4px">
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">${dayFmt(key)}</div>
+            ${groups[key].map(({ origIdx, item }) => `
+              <label style="display:flex;align-items:start;gap:12px;padding:10px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;transition:border-color 0.15s">
+                <input type="checkbox" class="copy-meal-check" data-idx="${origIdx}" checked
+                  onchange="updateCopySummary()"
+                  style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin-top:2px;flex-shrink:0" />
+                <div style="flex:1;min-width:0">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <div style="font-size:13px;color:var(--text);font-weight:500">${esc(item._name || item.recipe_name || 'Meal')}</div>
+                    ${mealTypeBadge(item.meal_type)}
+                  </div>
+                  <div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
+                    <span>${Math.round(item.calories ?? item._calories ?? 0)} cal</span>
+                    <span style="color:var(--protein)">P ${Math.round(item.protein ?? 0)}g</span>
+                    <span style="color:var(--carbs)">C ${Math.round(item.carbs ?? 0)}g</span>
+                    <span style="color:var(--fat)">F ${Math.round(item.fat ?? 0)}g</span>
+                  </div>
+                </div>
+              </label>
+            `).join('')}
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Sticky footer -->
+      <div style="padding:14px 20px;border-top:1px solid var(--border);background:var(--bg2);display:flex;gap:8px;position:sticky;bottom:0">
+        <button onclick="closeCopyBroadcastModal()"
+          style="flex:1;padding:10px;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:500;cursor:pointer">
+          Cancel
+        </button>
+        <button id="copy-confirm-btn" onclick="confirmCopyBroadcast()"
+          style="flex:1.5;padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">
+          Copy selected meals
+        </button>
+      </div>
+    `
   }
 
   window.openNewBroadcastModal = () => {

@@ -1025,18 +1025,62 @@ export async function getFollowerCount(providerId) {
   return count ?? 0
 }
 
-export async function copyBroadcastToPlanner(userId, broadcast, weekStart) {
+export async function copyBroadcastToPlanner(userId, broadcast, weekStart, selectedIndices = null) {
   if (!supabase || !broadcast?.plan_data?.length) return 0
-  const rows = broadcast.plan_data.map(item => ({
-    user_id: userId,
-    recipe_id: item.recipe_id || null,
-    food_item_id: item.food_item_id || null,
-    meal_type: item.meal_type || 'dinner',
-    planned_servings: item.planned_servings || 1,
-    actual_date: item.actual_date || weekStart,
-    week_start_date: weekStart,
-    notes: item.notes || null,
-  }))
+
+  // If selectedIndices is provided, only copy those; otherwise copy all
+  const items = selectedIndices
+    ? broadcast.plan_data.filter((_, i) => selectedIndices.includes(i))
+    : broadcast.plan_data
+
+  if (!items.length) return 0
+
+  // Determine the broadcast's start date to compute day offsets.
+  // Prefer explicit start_date; fall back to week_start; finally to the earliest item date.
+  let sourceStart = broadcast.start_date || broadcast.week_start
+  if (!sourceStart) {
+    const dates = items.map(i => i.actual_date).filter(Boolean).sort()
+    sourceStart = dates[0] || weekStart
+  }
+  const [sy, sm, sd] = sourceStart.split('-').map(Number)
+  const sourceStartDate = new Date(sy, sm - 1, sd)
+
+  const [wy, wmo, wd] = weekStart.split('-').map(Number)
+  const targetStartDate = new Date(wy, wmo - 1, wd)
+
+  const rows = items.map(item => {
+    // Compute day_of_week and actual_date relative to the target week
+    let dayOffset = 0
+    if (item.actual_date) {
+      const [iy, im, id] = item.actual_date.split('-').map(Number)
+      const itemDate = new Date(iy, im - 1, id)
+      dayOffset = Math.round((itemDate - sourceStartDate) / (1000 * 60 * 60 * 24))
+    }
+    // Clamp to 0–6 (one week)
+    const dayIdx = Math.max(0, Math.min(6, dayOffset))
+
+    const actualDate = new Date(targetStartDate)
+    actualDate.setDate(actualDate.getDate() + dayIdx)
+    const actualDateStr = `${actualDate.getFullYear()}-${String(actualDate.getMonth()+1).padStart(2,'0')}-${String(actualDate.getDate()).padStart(2,'0')}`
+
+    return {
+      user_id: userId,
+      week_start_date: weekStart,
+      day_of_week: dayIdx,
+      actual_date: actualDateStr,
+      meal_name: item._name || item.recipe_name || 'Meal',
+      calories: item.calories ?? item._calories ?? 0,
+      protein: item.protein ?? 0,
+      carbs: item.carbs ?? 0,
+      fat: item.fat ?? 0,
+      fiber: item.fiber ?? 0,
+      is_leftover: false,
+      planned_servings: item.planned_servings ?? 1,
+      recipe_id: item.recipe_id || null,
+      meal_type: item.meal_type || null,
+    }
+  })
+
   const { error } = await supabase.from('meal_planner').insert(rows)
   if (error) throw error
   return rows.length
