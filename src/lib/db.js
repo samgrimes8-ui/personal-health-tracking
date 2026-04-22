@@ -894,6 +894,11 @@ export async function uploadProviderAvatar(userId, file) {
   if (!supabase) return null
   const ext = file.name.split('.').pop() || 'jpg'
   const path = `${userId}/avatar.${ext}`
+  // Delete any existing avatars for this user first
+  const { data: existing } = await supabase.storage.from('provider-avatars').list(userId)
+  if (existing?.length) {
+    await supabase.storage.from('provider-avatars').remove(existing.map(f => `${userId}/${f.name}`))
+  }
   const { error } = await supabase.storage.from('provider-avatars').upload(path, file, { upsert: true })
   if (error) throw error
   const { data } = supabase.storage.from('provider-avatars').getPublicUrl(path)
