@@ -2669,58 +2669,68 @@ function weeksToGoal(m) {
 }
 
 function renderBroadcastForm(b) {
-  const planItems = (b.plan_data || [])
+  const today = localDateStr(new Date())
+  // Default end date: 6 days from today (1 week)
+  const defaultEnd = (() => { const d = new Date(); d.setDate(d.getDate() + 6); return localDateStr(d) })()
+  const endDate = b.end_date || defaultEnd
+  const startDate = b.start_date || today
+
   return `
     <div style="padding:20px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <div style="font-family:'DM Serif Display',serif;font-size:20px;color:var(--text)">${b.id ? 'Edit plan' : 'New broadcast'}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <div style="font-family:'DM Serif Display',serif;font-size:20px;color:var(--text)">${b.id ? 'Edit plan' : 'Share meal plan'}</div>
         <button onclick="closeBroadcastModal()" style="background:none;border:none;font-size:22px;color:var(--text3);cursor:pointer">×</button>
       </div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:20px">Followers can copy your planned meals to their week</div>
       <input type="hidden" id="bc-id" value="${b.id || ''}" />
+      <input type="hidden" id="bc-start" value="${startDate}" />
 
+      <!-- Date range -->
+      <div style="background:var(--bg3);border-radius:var(--r);padding:14px 16px;margin-bottom:16px">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Date range</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="flex:1;text-align:center">
+            <div style="font-size:11px;color:var(--text3);margin-bottom:4px">From</div>
+            <div style="font-size:15px;font-weight:600;color:var(--accent)">Today</div>
+            <div style="font-size:11px;color:var(--text3)">${new Date(today + 'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})}</div>
+          </div>
+          <div style="color:var(--text3);font-size:18px">→</div>
+          <div style="flex:1;text-align:center">
+            <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Through</div>
+            <input type="date" id="bc-end" value="${endDate}" min="${today}"
+              style="width:100%;background:var(--bg2);border:1px solid var(--accent);border-radius:8px;padding:6px 8px;color:var(--accent);font-size:13px;font-weight:600;font-family:inherit;outline:none;text-align:center;cursor:pointer"
+              onchange="previewBroadcastPlan(this.value)" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Meal preview -->
+      <div id="bc-plan-preview" style="margin-bottom:16px">
+        <div style="background:var(--bg3);border-radius:var(--r);padding:12px;font-size:12px;color:var(--text3);text-align:center">
+          Loading your meals...
+        </div>
+      </div>
+
+      <!-- Title (optional) -->
       <div class="modal-field" style="margin-bottom:12px">
-        <label>Title</label>
-        <input type="text" id="bc-title" value="${esc(b.title || '')}" placeholder="e.g. Week of April 21 · High protein plan"
+        <label>Title <span style="font-weight:400;color:var(--text3);font-size:10px">(optional — auto-generates if blank)</span></label>
+        <input type="text" id="bc-title" value="${esc(b.title || '')}" placeholder="e.g. High protein week · April plan"
           style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none" />
       </div>
 
-      <div class="modal-field" style="margin-bottom:12px">
-        <label>Description <span style="font-weight:400;color:var(--text3);font-size:10px">(optional)</span></label>
-        <textarea id="bc-desc" placeholder="What's the focus this week? Macros, theme, notes for followers..."
-          style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none;resize:none;min-height:60px">${esc(b.description || '')}</textarea>
-      </div>
-
+      <!-- Notes -->
       <div class="modal-field" style="margin-bottom:16px">
-        <label>Week starting</label>
-        <input type="date" id="bc-week" value="${b.week_start || ''}"
-          style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none"
-          onchange="previewBroadcastPlan(this.value)" />
+        <label>Notes <span style="font-weight:400;color:var(--text3);font-size:10px">(optional)</span></label>
+        <textarea id="bc-desc" placeholder="Macro targets, tips, focus for this plan..."
+          style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none;resize:none;min-height:56px">${esc(b.description || '')}</textarea>
       </div>
 
-      <div id="bc-plan-preview" style="margin-bottom:16px">
-        ${planItems.length ? `
-          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Plan includes ${planItems.length} meals</div>
-          <div style="display:flex;flex-direction:column;gap:4px">
-            ${planItems.slice(0, 5).map(item => `
-              <div style="font-size:12px;color:var(--text2);padding:5px 8px;background:var(--bg3);border-radius:4px;display:flex;justify-content:space-between">
-                <span>${esc(item._name || 'Meal')}</span>
-                <span style="color:var(--text3)">${item.meal_type || ''} · ${item._calories ? Math.round(item._calories) + ' kcal' : ''}</span>
-              </div>
-            `).join('')}
-            ${planItems.length > 5 ? `<div style="font-size:11px;color:var(--text3);padding:4px 8px">+ ${planItems.length - 5} more meals</div>` : ''}
-          </div>
-        ` : `
-          <div style="background:var(--bg3);border-radius:var(--r);padding:12px;font-size:12px;color:var(--text3);text-align:center">
-            Select a week to import meals from your planner
-          </div>
-        `}
-      </div>
-
+      <!-- Publish toggle -->
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
         <input type="checkbox" id="bc-published" ${b.is_published ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer" />
         <div>
-          <div style="font-size:13px;color:var(--text);font-weight:500">Publish immediately</div>
-          <div style="font-size:11px;color:var(--text3)">Followers can copy this plan to their week</div>
+          <div style="font-size:13px;color:var(--text);font-weight:500">Publish & share link</div>
+          <div style="font-size:11px;color:var(--text3)">Makes this plan visible to followers and shareable</div>
         </div>
       </div>
 
@@ -2731,7 +2741,7 @@ function renderBroadcastForm(b) {
         </button>
         <button id="bc-save-btn" onclick="saveBroadcastHandler()"
           style="flex:2;padding:12px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:14px;font-weight:700;font-family:inherit;cursor:pointer">
-          ${b.is_published ? '✓ Save & publish' : 'Save draft'}
+          ${b.is_published ? '✓ Save & share' : 'Save draft'}
         </button>
       </div>
     </div>
@@ -5113,17 +5123,18 @@ function wireGlobals() {
   }
 
   window.openNewBroadcastModal = () => {
-    const weekStart = getWeekStart()
+    const today = localDateStr(new Date())
+    const defaultEnd = (() => { const d = new Date(); d.setDate(d.getDate() + 6); return localDateStr(d) })()
     document.getElementById('broadcast-modal-content').innerHTML = renderBroadcastForm({
-      week_start: weekStart,
+      start_date: today,
+      end_date: defaultEnd,
       title: '',
       description: '',
       is_published: false,
       plan_data: [],
     })
     document.getElementById('broadcast-modal').classList.add('open')
-    // Auto-preview the current week's meals
-    setTimeout(() => previewBroadcastPlan(weekStart), 100)
+    setTimeout(() => previewBroadcastPlan(defaultEnd), 100)
   }
 
   window.editBroadcastHandler = async (id) => {
@@ -5131,10 +5142,9 @@ function wireGlobals() {
     if (!broadcast) return
     document.getElementById('broadcast-modal-content').innerHTML = renderBroadcastForm(broadcast)
     document.getElementById('broadcast-modal').classList.add('open')
-    // If it already has plan_data don't re-fetch, otherwise preview the week
-    if (!broadcast.plan_data?.length && broadcast.week_start) {
-      setTimeout(() => previewBroadcastPlan(broadcast.week_start), 100)
-    }
+    // Always re-preview from today to end_date to show current planner state
+    const endDate = broadcast.end_date || broadcast.week_start
+    if (endDate) setTimeout(() => previewBroadcastPlan(endDate), 100)
   }
 
   window.closeBroadcastModal = () => {
@@ -5234,41 +5244,69 @@ function wireGlobals() {
 
   window.saveBroadcastHandler = async () => {
     const id = document.getElementById('bc-id')?.value || null
-    const title = document.getElementById('bc-title')?.value.trim()
+    const today = localDateStr(new Date())
+    const endDate = document.getElementById('bc-end')?.value
+    let title = document.getElementById('bc-title')?.value.trim()
     const description = document.getElementById('bc-desc')?.value.trim()
-    const week_start = document.getElementById('bc-week')?.value
     const is_published = document.getElementById('bc-published')?.checked || false
 
-    if (!title) { showToast('Add a title', 'error'); return }
-    if (!week_start) { showToast('Select a week', 'error'); return }
+    if (!endDate) { showToast('Pick an end date', 'error'); return }
+    if (endDate < today) { showToast('End date must be today or later', 'error'); return }
 
-    // Build plan_data from current planner for that week
-    const plannerData = await getPlannerWeek(state.user.id, week_start)
-    const plan_data = (plannerData || []).map(item => ({
-      recipe_id: item.recipe_id || null,
-      food_item_id: item.food_item_id || null,
-      meal_type: item.meal_type || 'dinner',
-      planned_servings: item.planned_servings || 1,
-      actual_date: item.actual_date,
-      notes: item.notes || null,
-      // Snapshot the recipe name for display
-      _name: item.recipe?.name || item.food_item?.name || '',
-      _calories: item.recipe?.calories || item.food_item?.calories || 0,
-    }))
+    // Auto-generate title if blank
+    if (!title) {
+      const startFmt = new Date(today + 'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})
+      const endFmt = new Date(endDate + 'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})
+      title = `${startFmt} – ${endFmt} meal plan`
+    }
 
     try {
       const btn = document.getElementById('bc-save-btn')
       if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
 
+      // Pull all meals from today → end_date
+      const { meals } = await getPlannerRange(state.user.id, today, endDate)
+      const plan_data = (meals || []).map(item => ({
+        recipe_id: item.recipe_id || null,
+        food_item_id: item.food_item_id || null,
+        meal_type: item.meal_type || 'dinner',
+        planned_servings: item.planned_servings || 1,
+        actual_date: item.actual_date,
+        _name: item.recipe?.name || item.food_item?.name || '',
+        _calories: item.recipe?.calories || item.food_item?.calories || 0,
+        calories: item.recipe?.calories || item.food_item?.calories || 0,
+        protein: item.recipe?.protein || item.food_item?.protein || 0,
+        carbs: item.recipe?.carbs || item.food_item?.carbs || 0,
+        fat: item.recipe?.fat || item.food_item?.fat || 0,
+        recipe_name: item.recipe?.name || item.food_item?.name || '',
+      }))
+
       await saveBroadcast({
         ...(id ? { id } : {}),
         provider_id: state.user.id,
-        title, description, week_start, is_published, plan_data
+        title, description,
+        week_start: today, // keep for backward compat
+        start_date: today,
+        end_date: endDate,
+        is_published,
+        plan_data
       })
       state.myBroadcasts = await getProviderBroadcasts(state.user.id, false)
       closeBroadcastModal()
       renderPage()
-      showToast(is_published ? '🎉 Plan published!' : 'Draft saved', 'success')
+      if (is_published) {
+        const updated = state.myBroadcasts.find(b => !id || b.id === id)
+        const token = updated?.share_token
+        if (token) {
+          const url = `${window.location.origin}/api/plan/${token}`
+          navigator.clipboard.writeText(url).catch(() => {})
+          showToast('🎉 Published! Link copied — share with patients or post on social', 'success')
+        } else {
+          showToast('🎉 Plan published!', 'success')
+        }
+      } else {
+        showToast('Draft saved', 'success')
+      }
     } catch (err) {
       showToast('Error: ' + err.message, 'error')
       const btn = document.getElementById('bc-save-btn')
@@ -5276,46 +5314,57 @@ function wireGlobals() {
     }
   }
 
-  window.previewBroadcastPlan = async (weekStart) => {
+  window.previewBroadcastPlan = async (endDate) => {
     const preview = document.getElementById('bc-plan-preview')
-    if (!preview || !weekStart) return
-    preview.innerHTML = `<div style="font-size:12px;color:var(--text3);text-align:center;padding:8px">Loading meals for that week...</div>`
+    if (!preview || !endDate) return
+    const today = localDateStr(new Date())
+    if (endDate < today) {
+      preview.innerHTML = `<div style="background:var(--bg3);border-radius:var(--r);padding:12px;font-size:12px;color:var(--red);text-align:center">End date must be today or later</div>`
+      return
+    }
+    preview.innerHTML = `<div style="font-size:12px;color:var(--text3);text-align:center;padding:8px">Loading meals...</div>`
     try {
-      const plannerData = await getPlannerWeek(state.user.id, weekStart)
-      const items = plannerData || []
-      if (!items.length) {
-        // Find weeks that do have meals to suggest
-        const weeksWithMeals = (state.weeksWithMeals || []).slice(0, 4)
+      const { meals } = await getPlannerRange(state.user.id, today, endDate)
+      if (!meals?.length) {
         preview.innerHTML = `
-          <div style="background:var(--bg3);border-radius:var(--r);padding:12px;font-size:12px;color:var(--text3);text-align:center">
-            No meals planned for this week
-            ${weeksWithMeals.length ? `
-              <div style="margin-top:10px;font-size:11px;color:var(--text3);margin-bottom:6px">Weeks with meals:</div>
-              <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center">
-                ${weeksWithMeals.map(w => `
-                  <button onclick="document.getElementById('bc-week').value='${w}';previewBroadcastPlan('${w}')"
-                    style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;font-size:11px;color:var(--accent);cursor:pointer;font-family:inherit">
-                    ${new Date(w + 'T12:00:00').toLocaleDateString([], {month:'short', day:'numeric'})}
-                  </button>
-                `).join('')}
-              </div>
-            ` : '<br>Add meals to your planner first'}
+          <div style="background:var(--bg3);border-radius:var(--r);padding:14px;font-size:12px;color:var(--text3);text-align:center">
+            <div style="font-size:20px;margin-bottom:6px">📅</div>
+            No meals planned between today and ${new Date(endDate + 'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'})}
+            <div style="margin-top:8px;font-size:11px">Add meals to your planner first, then share them here</div>
           </div>`
         return
       }
+      // Group by date
+      const byDate = {}
+      meals.forEach(m => {
+        const d = m.actual_date || today
+        if (!byDate[d]) byDate[d] = []
+        byDate[d].push(m)
+      })
+      const days = Object.keys(byDate).sort()
       preview.innerHTML = `
-        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">${items.length} meals from your planner</div>
-        <div style="display:flex;flex-direction:column;gap:4px">
-          ${items.slice(0, 6).map(item => `
-            <div style="font-size:12px;color:var(--text2);padding:5px 8px;background:var(--bg3);border-radius:4px;display:flex;justify-content:space-between">
-              <span>${esc(item.recipe?.name || item.food_item?.name || 'Meal')}</span>
-              <span style="color:var(--text3)">${item.meal_type || ''}</span>
-            </div>
-          `).join('')}
-          ${items.length > 6 ? `<div style="font-size:11px;color:var(--text3);padding:4px 8px">+ ${items.length - 6} more</div>` : ''}
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
+          ${meals.length} meal${meals.length !== 1 ? 's' : ''} across ${days.length} day${days.length !== 1 ? 's' : ''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto">
+          ${days.map(date => {
+            const dayMeals = byDate[date]
+            const dayLabel = new Date(date + 'T12:00:00').toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})
+            return `
+              <div style="background:var(--bg3);border-radius:var(--r);padding:8px 10px">
+                <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">${dayLabel}</div>
+                ${dayMeals.map(m => `
+                  <div style="font-size:12px;color:var(--text2);display:flex;justify-content:space-between;align-items:center;padding:2px 0">
+                    <span>${esc(m.recipe?.name || m.food_item?.name || 'Meal')}</span>
+                    <span style="color:var(--text3);font-size:11px">${m.meal_type || ''}</span>
+                  </div>`).join('')}
+              </div>`
+          }).join('')}
         </div>
       `
-    } catch { preview.innerHTML = `<div style="font-size:12px;color:var(--text3);text-align:center;padding:8px">Could not load planner</div>` }
+    } catch {
+      preview.innerHTML = `<div style="font-size:12px;color:var(--text3);text-align:center;padding:8px">Could not load planner</div>`
+    }
   }
 
   // ─── Macro target lock / rebalance ────────────────────────────────────────────
