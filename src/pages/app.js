@@ -5127,10 +5127,20 @@ function wireGlobals() {
       // Stash on window so the confirm handler can read it without re-fetching
       window._pendingCopyBroadcast = broadcast
 
-      // Default target = current week start (Monday)
+      // Default target = current week start (Sunday)
       const defaultWeek = getWeekStart()
       document.getElementById('copy-broadcast-content').innerHTML = renderCopyBroadcastPreview(broadcast, defaultWeek)
       document.getElementById('copy-broadcast-modal').classList.add('open')
+
+      // Defensive: force every checkbox to `checked` and sync the counter.
+      // The HTML `checked` attribute can get overridden by browser restoration
+      // behavior, so we explicitly set the property after render.
+      requestAnimationFrame(() => {
+        document.querySelectorAll('.copy-meal-check').forEach(cb => { cb.checked = true })
+        const all = document.getElementById('copy-select-all')
+        if (all) { all.checked = true; all.indeterminate = false }
+        updateCopySummary()
+      })
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
@@ -5169,6 +5179,9 @@ function wireGlobals() {
     try {
       const checks = Array.from(document.querySelectorAll('.copy-meal-check'))
       const selectedIndices = checks.filter(c => c.checked).map(c => Number(c.dataset.idx))
+      console.log('[copyBroadcast] total checkboxes in DOM:', checks.length,
+                  'checked:', selectedIndices.length,
+                  'indices:', selectedIndices)
       if (!selectedIndices.length) { showToast('Select at least one meal', 'error'); return }
 
       const weekStart = document.getElementById('copy-target-week')?.value || getWeekStart()
@@ -5277,11 +5290,11 @@ function wireGlobals() {
           <div style="padding:14px 20px 4px">
             <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">${dayFmt(key)}</div>
             ${groups[key].map(({ origIdx, item }) => `
-              <label style="display:flex;align-items:start;gap:12px;padding:10px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;transition:border-color 0.15s">
-                <input type="checkbox" class="copy-meal-check" data-idx="${origIdx}" checked
+              <label for="copy-check-${origIdx}" style="display:flex;align-items:start;gap:12px;padding:10px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;transition:border-color 0.15s">
+                <input type="checkbox" id="copy-check-${origIdx}" class="copy-meal-check" data-idx="${origIdx}" checked
                   onchange="updateCopySummary()"
                   style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin-top:2px;flex-shrink:0" />
-                <div style="flex:1;min-width:0">
+                <div style="flex:1;min-width:0;pointer-events:none">
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <div style="font-size:13px;color:var(--text);font-weight:500">${esc(item._name || item.meal_name || item.recipe_name || 'Meal')}</div>
                     ${mealTypeBadge(item.meal_type)}
