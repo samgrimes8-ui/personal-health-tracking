@@ -42,7 +42,7 @@ export default async function handler(req, res) {
   // Fetch broadcast by share token
   const { data: broadcast, error } = await supabase
     .from('provider_broadcasts')
-    .select('*, user_profiles!provider_id(provider_name, provider_specialty, provider_bio, provider_slug, provider_avatar_url)')
+    .select('*')
     .eq('share_token', token)
     .eq('is_published', true)
     .maybeSingle()
@@ -66,32 +66,72 @@ export default async function handler(req, res) {
     return
   }
 
-  const provider = broadcast.user_profiles || {}
-  const plan = broadcast.plan_data || []
-  const weekStart = new Date(broadcast.week_start + 'T12:00:00')
+  // Fetch provider profile separately. Do column-by-column selects with
+  // progressive fallback so missing columns (older user_profiles schemas)
+  // don't blow up the whole request. Only the provider header needs this.
+  let providerProfile = {}
+  try {
+    const { data: p } = await supabase
+      .from('user_profiles')
+      .select('provider_name, provider_specialty, provider_bio, provider_slug, provider_avatar_url')
+      .eq('id', broadcast.provider_id)
+      .maybeSingle()
+    if (p) providerProfile = p
+  } catch (e) {
+    // Some columns may not exist on older schemas — retry with the minimal set
+    try {
+      const { data: p } = await supabase
+        .from('user_profiles')
+        .select('provider_name, provider_specialty')
+        .eq('id', broadcast.provider_id)
+        .maybeSingle()
+      if (p) providerProfile = p
+    } catch (e2) {
+      console.warn('[/api/plan/[token]] could not fetch provider profile:', e2?.message)
+    }
+  }
 
-  // Group meals by day
-  const byDay = {}
-  plan.forEach(meal => {
-    const key = meal.actual_date || meal.day_of_week
-    if (!byDay[key]) byDay[key] = []
-    byDay[key].push(meal)
-  })
+  // Attach the profile under the same shape the rest of the template expects
+  broadcast.user_profiles = providerProfile
 
-  // Calculate weekly totals
-  const totals = plan.reduce((acc, m) => {
-    const cal = (m.calories || 0) * (m.planned_servings || 1)
-    acc.calories += cal
-    acc.protein += (m.protein || 0) * (m.planned_servings || 1)
-    acc.carbs += (m.carbs || 0) * (m.planned_servings || 1)
-    acc.fat += (m.fat || 0) * (m.planned_servings || 1)
-    return acc
-  }, { calories: 0, protein: 0, carbs: 0, fat: 0 })
+  try {
+    const provider = broadcast.user_profiles || {}
+    const plan = Array.isArray(broadcast.plan_data) ? broadcast.plan_data : []
 
-  const appUrl = `https://personal-health-tracking.vercel.app`
-  const shareUrl = `${appUrl}/api/plan/${token}`
+    // Parse week_start defensively — handle null, date-only, or full timestamp
+    let weekStart = new Date()
+    if (broadcast.week_start) {
+      const ws = String(broadcast.week_start)
+      weekStart = new Date(ws.includes('T') ? ws : ws + 'T12:00:00')
+      if (isNaN(weekStart.getTime())) weekStart = new Date()
+    }
 
-  const dayKeys = Object.keys(byDay).sort()
+    // Group meals by day — use explicit string keys so day_of_week=0 (Sunday)
+    // isn't swallowed by the || fallback
+    const byDay = {}
+    plan.forEach(meal => {
+      let key
+      if (meal.actual_date) key = meal.actual_date
+      else if (meal.day_of_week != null) key = `dow-${meal.day_of_week}`
+      else key = 'unsorted'
+      if (!byDay[key]) byDay[key] = []
+      byDay[key].push(meal)
+    })
+
+    // Calculate weekly totals
+    const totals = plan.reduce((acc, m) => {
+      const cal = (m.calories || 0) * (m.planned_servings || 1)
+      acc.calories += cal
+      acc.protein += (m.protein || 0) * (m.planned_servings || 1)
+      acc.carbs += (m.carbs || 0) * (m.planned_servings || 1)
+      acc.fat += (m.fat || 0) * (m.planned_servings || 1)
+      return acc
+    }, { calories: 0, protein: 0, carbs: 0, fat: 0 })
+
+    const appUrl = `https://personal-health-tracking.vercel.app`
+    const shareUrl = `${appUrl}/api/plan/${token}`
+
+    const dayKeys = Object.keys(byDay).sort()
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -173,11 +213,14 @@ export default async function handler(req, res) {
     <!-- Meals by day -->
     ${dayKeys.length ? dayKeys.map(key => {
       const meals = byDay[key]
-      // key might be a date string or day_of_week number
-      const isDate = key.includes('-')
+      // key formats: 'YYYY-MM-DD' date, 'dow-N' day_of_week, or 'unsorted'
+      const isDate = /^\d{4}-\d{2}-\d{2}$/.test(key)
+      const isDow = key.startsWith('dow-')
       const dayLabel = isDate
         ? new Date(key + 'T12:00:00').toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
-        : (DAYS[parseInt(key)] || key)
+        : isDow
+          ? (DAYS[parseInt(key.slice(4))] || key)
+          : 'Other'
 
       return `<div class="day-section">
         <div class="day-header">${esc(dayLabel)}</div>
@@ -228,6 +271,21 @@ export default async function handler(req, res) {
 </html>`
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8')
-  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600')
-  res.status(200).send(html)
+    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600')
+    res.status(200).send(html)
+  } catch (renderErr) {
+    console.error('[/api/plan/[token]] render error:', {
+      token,
+      message: renderErr?.message,
+      stack: renderErr?.stack?.split('\n').slice(0, 5).join('\n'),
+      broadcastId: broadcast?.id,
+      week_start: broadcast?.week_start,
+      plan_data_type: typeof broadcast?.plan_data,
+      plan_data_length: Array.isArray(broadcast?.plan_data) ? broadcast.plan_data.length : 'not array',
+    })
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.status(500).send(`<!DOCTYPE html><html><body style="background:#0f0e0d;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh">
+      <div style="text-align:center"><div style="font-size:48px">⚠️</div><div style="font-size:18px;margin-top:16px">Couldn't render this plan</div><div style="font-size:12px;color:#888;margin-top:8px">Details logged — please contact the provider.</div></div>
+    </body></html>`)
+  }
 }
