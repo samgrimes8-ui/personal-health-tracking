@@ -1027,56 +1027,55 @@ export async function getFollowerCount(providerId) {
   return count ?? 0
 }
 
-export async function copyBroadcastToPlanner(userId, broadcast, weekStart, selectedIndices = null) {
+export async function copyBroadcastToPlanner(userId, broadcast, startDate, selectedIndices = null) {
   if (!supabase || !broadcast?.plan_data?.length) return 0
 
   // If selectedIndices is provided, only copy those; otherwise copy all
-  const items = selectedIndices
+  let items = selectedIndices
     ? broadcast.plan_data.filter((_, i) => selectedIndices.includes(i))
     : broadcast.plan_data
 
   if (!items.length) return 0
 
-  // The broadcast may span across a week boundary (e.g. Tue → following Sun).
-  // We preserve each meal's position *relative to the broadcast's start day*
-  // and land it on the target week so the weekdays line up naturally.
-  //
-  // Example: broadcast Tue Apr 21 → Sun Apr 27, target week Apr 19 (Sun):
-  //   - Tue Apr 22 (offset 1) → Apr 19 + source_weekday(2) + 1 = Apr 22 (Tue) ✓
-  //   - Sun Apr 26 (offset 5) → Apr 19 + source_weekday(2) + 5 = Apr 26 (Sun) ✓
-  const sourceStart = broadcast.start_date || broadcast.week_start || null
-  let sourceStartDate = null
-  let sourceStartWeekday = 0
-  if (sourceStart) {
-    const [sy, sm, sd] = sourceStart.split('-').map(Number)
-    sourceStartDate = new Date(sy, sm - 1, sd)
-    sourceStartWeekday = sourceStartDate.getDay() // 0=Sun..6=Sat
+  // Sort by actual_date so we place meals in chronological order and
+  // the first selected meal lands on the user's chosen start date.
+  items = [...items].sort((a, b) => {
+    const ad = a.actual_date || ''
+    const bd = b.actual_date || ''
+    return ad.localeCompare(bd)
+  })
+
+  // Anchor = date of the earliest selected meal. All offsets are computed
+  // relative to this, so if the user only picks Wed + Fri meals (original
+  // Tue–Sun plan), Wed lands on the start date and Fri lands +2 days later.
+  let anchorDate = null
+  const firstWithDate = items.find(i => i.actual_date)
+  if (firstWithDate) {
+    const [ay, am, ad] = firstWithDate.actual_date.split('-').map(Number)
+    anchorDate = new Date(ay, am - 1, ad)
   }
 
-  const [wy, wmo, wd] = weekStart.split('-').map(Number)
-  const targetStartDate = new Date(wy, wmo - 1, wd)
+  const [stY, stM, stD] = startDate.split('-').map(Number)
+  const startDateObj = new Date(stY, stM - 1, stD)
 
   const pad = n => String(n).padStart(2, '0')
   const ds = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
 
-  const rows = items.map(item => {
-    // Days-from-broadcast-start for this meal
-    let offset = 0
-    if (item.actual_date && sourceStartDate) {
+  const rows = items.map((item, i) => {
+    // Offset = days between this meal's original date and the anchor.
+    // Falls back to sequential ordering if actual_date is missing.
+    let offset = i
+    if (item.actual_date && anchorDate) {
       const [iy, im, id] = item.actual_date.split('-').map(Number)
       const itemDate = new Date(iy, im - 1, id)
-      offset = Math.max(0, Math.round((itemDate - sourceStartDate) / (1000 * 60 * 60 * 24)))
-    } else if (Number.isInteger(item.day_of_week)) {
-      offset = Math.max(0, Math.min(6, item.day_of_week - sourceStartWeekday))
+      offset = Math.max(0, Math.round((itemDate - anchorDate) / (1000 * 60 * 60 * 24)))
     }
 
-    // Land at: target_week_start + source_weekday + offset
-    // This keeps weekdays aligned: Tue → Tue, Sun → Sun, etc.
-    const actualDate = new Date(targetStartDate)
-    actualDate.setDate(actualDate.getDate() + sourceStartWeekday + offset)
+    const actualDate = new Date(startDateObj)
+    actualDate.setDate(actualDate.getDate() + offset)
     const actualDateStr = ds(actualDate)
 
-    // Compute the Sunday-based week that contains this date
+    // Compute the Sunday-based week this date belongs to
     const dayIdx = actualDate.getDay()
     const weekStartForRow = new Date(actualDate)
     weekStartForRow.setDate(weekStartForRow.getDate() - dayIdx)

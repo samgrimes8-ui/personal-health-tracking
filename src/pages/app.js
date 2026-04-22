@@ -5141,6 +5141,7 @@ function wireGlobals() {
         const all = document.getElementById('copy-select-all')
         if (all) { all.checked = true; all.indeterminate = false }
         updateCopySummary()
+        if (typeof updateCopyEndPreview === 'function') updateCopyEndPreview()
       })
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
@@ -5194,6 +5195,32 @@ function wireGlobals() {
     }
   }
 
+  // Live preview of when the plan will end, based on the chosen start date
+  // and the broadcast's duration.
+  window.updateCopyEndPreview = () => {
+    const input = document.getElementById('copy-start-date')
+    const out = document.getElementById('copy-end-preview')
+    const broadcast = window._pendingCopyBroadcast
+    if (!input || !out || !broadcast) return
+    const startStr = input.value
+    if (!startStr) { out.textContent = ''; return }
+    // Compute plan length from the broadcast's date range
+    const dates = (broadcast.plan_data || []).map(m => m.actual_date).filter(Boolean).sort()
+    let planDays = (broadcast.plan_data || []).length || 1
+    if (dates.length) {
+      const [sy, sm, sd] = dates[0].split('-').map(Number)
+      const [ey, em, ed] = dates[dates.length - 1].split('-').map(Number)
+      planDays = Math.max(1, Math.round((new Date(ey, em-1, ed) - new Date(sy, sm-1, sd)) / (1000*60*60*24)) + 1)
+    }
+    const [y, m, d] = startStr.split('-').map(Number)
+    const endDate = new Date(y, m-1, d + planDays - 1)
+    const startFmt = new Date(y, m-1, d).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'})
+    const endFmt = endDate.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'})
+    out.textContent = planDays === 1
+      ? `Plan runs on ${startFmt}`
+      : `Plan runs ${startFmt} → ${endFmt} (${planDays} days)`
+  }
+
   window.confirmCopyBroadcast = async () => {
     const broadcast = window._pendingCopyBroadcast
     if (!broadcast) return
@@ -5204,15 +5231,22 @@ function wireGlobals() {
       const selectedIndices = Array.from(sel).sort((a, b) => a - b)
       if (!selectedIndices.length) { showToast('Select at least one meal', 'error'); return }
 
-      const weekStart = document.getElementById('copy-target-week')?.value || getWeekStart()
+      const startDate = document.getElementById('copy-start-date')?.value || localDateStr(new Date())
 
       if (btn) { btn.disabled = true; btn.textContent = 'Copying...' }
-      const count = await copyBroadcastToPlanner(state.user.id, broadcast, weekStart, selectedIndices)
+      const count = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices)
 
-      // Navigate the planner to the target week and reload it so the new meals
-      // are visible immediately — don't require the user to hunt for them
-      state.weekStart = weekStart
-      const planner = await getPlannerWeek(state.user.id, weekStart)
+      // Compute the Sunday-based week that contains the start date,
+      // navigate the planner there, and reload it so the new meals are visible
+      const [sy, sm, sd] = startDate.split('-').map(Number)
+      const startD = new Date(sy, sm - 1, sd)
+      const sundayD = new Date(startD)
+      sundayD.setDate(sundayD.getDate() - sundayD.getDay())
+      const pad = n => String(n).padStart(2, '0')
+      const targetWeek = `${sundayD.getFullYear()}-${pad(sundayD.getMonth()+1)}-${pad(sundayD.getDate())}`
+
+      state.weekStart = targetWeek
+      const planner = await getPlannerWeek(state.user.id, targetWeek)
       if (planner) state.planner = planner
 
       closeCopyBroadcastModal()
@@ -5240,20 +5274,16 @@ function wireGlobals() {
     })
     const sortedKeys = Object.keys(groups).sort()
 
-    // Target week options: this week + next 4 weeks
-    const weekOptions = []
-    const base = new Date(defaultWeekStart + 'T12:00:00')
-    for (let i = 0; i < 5; i++) {
-      const d = new Date(base); d.setDate(d.getDate() + i * 7)
-      const val = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-      const end = new Date(d); end.setDate(end.getDate() + 6)
-      const label = i === 0
-        ? `This week (${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})})`
-        : i === 1
-          ? `Next week (${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})})`
-          : `${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})}`
-      weekOptions.push(`<option value="${val}"${i===0?' selected':''}>${label}</option>`)
-    }
+    // "Start on" date picker setup
+    const todayStr = localDateStr(new Date())
+    const planDays = (() => {
+      const dates = meals.map(m => m.actual_date).filter(Boolean).sort()
+      if (!dates.length) return meals.length
+      const [sy, sm, sd] = dates[0].split('-').map(Number)
+      const [ey, em, ed] = dates[dates.length - 1].split('-').map(Number)
+      const span = Math.round((new Date(ey, em-1, ed) - new Date(sy, sm-1, sd)) / (1000*60*60*24)) + 1
+      return Math.max(1, span)
+    })()
 
     const dayFmt = (key) => {
       if (key === 'unspecified') return 'Meals'
@@ -5282,15 +5312,16 @@ function wireGlobals() {
           </div>
           <button onclick="closeCopyBroadcastModal()" style="background:transparent;border:none;color:var(--text3);font-size:20px;cursor:pointer;padding:0 4px;line-height:1">×</button>
         </div>
-        <div style="font-size:11px;color:var(--text3)">Preview the meals, uncheck any you don't want, then pick a target week.</div>
+        <div style="font-size:11px;color:var(--text3)">Preview the meals, uncheck any you don't want, then pick a start date.</div>
       </div>
 
-      <!-- Target week selector -->
+      <!-- Start date picker -->
       <div style="padding:14px 20px;border-bottom:1px solid var(--border);background:var(--bg3)">
-        <label style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:6px">Copy into</label>
-        <select id="copy-target-week" style="width:100%;padding:9px 10px;background:var(--bg2);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px">
-          ${weekOptions.join('')}
-        </select>
+        <label for="copy-start-date" style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:6px">Start on</label>
+        <input type="date" id="copy-start-date" value="${todayStr}" min="${todayStr}"
+          onchange="updateCopyEndPreview()"
+          style="width:100%;padding:9px 10px;background:var(--bg2);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px" />
+        <div id="copy-end-preview" style="font-size:11px;color:var(--text3);margin-top:6px"></div>
       </div>
 
       <!-- Select-all row -->
