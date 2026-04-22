@@ -2834,8 +2834,17 @@ function renderMyProviderChannel() {
             <div style="font-size:11px;color:var(--text3)">Week of ${new Date(b.week_start + 'T12:00:00').toLocaleDateString([], {month:'short', day:'numeric'})}</div>
             ${b.description ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(b.description)}</div>` : ''}
             <div style="font-size:11px;color:var(--text3);margin-top:4px">${(b.plan_data || []).length} meals planned</div>
+            ${b.is_published && b.share_token ? `
+            <div style="font-size:11px;color:var(--accent);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">
+              🔗 personal-health-tracking.vercel.app/api/plan/${b.share_token}
+            </div>` : ''}
           </div>
-          <div style="display:flex;gap:6px;flex-shrink:0">
+          <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
+            ${b.is_published && b.share_token ? `
+            <button onclick="shareBroadcastLink('${b.share_token}', this)"
+              style="background:rgba(232,197,71,0.1);border:1px solid rgba(232,197,71,0.3);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--accent);cursor:pointer;font-family:inherit">
+              🔗 Share link
+            </button>` : ''}
             <button onclick="editBroadcastHandler('${b.id}')"
               style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--text2);cursor:pointer;font-family:inherit">
               Edit
@@ -5079,6 +5088,16 @@ function wireGlobals() {
     document.getElementById('broadcast-modal').classList.remove('open')
   }
 
+  window.shareBroadcastLink = (token, btn) => {
+    const url = `${window.location.origin}/api/plan/${token}`
+    navigator.clipboard.writeText(url).then(() => {
+      if (btn) { btn.textContent = '✓ Copied!'; setTimeout(() => btn.textContent = '🔗 Share link', 2000) }
+    }).catch(() => {
+      // Fallback for browsers that block clipboard
+      prompt('Copy this link:', url)
+    })
+  }
+
   window.toggleBroadcastPublished = async (id, currentlyPublished) => {
     try {
       const broadcast = state.myBroadcasts.find(b => b.id === id)
@@ -5086,7 +5105,20 @@ function wireGlobals() {
       await saveBroadcast({ ...broadcast, is_published: !currentlyPublished })
       state.myBroadcasts = await getProviderBroadcasts(state.user.id, false)
       renderPage()
-      showToast(currentlyPublished ? 'Unpublished' : '🎉 Published! Followers can now copy this plan', 'success')
+      if (!currentlyPublished) {
+        // Show the share link after publishing
+        const updated = state.myBroadcasts.find(b => b.id === id)
+        const token = updated?.share_token
+        if (token) {
+          const url = `${window.location.origin}/api/plan/${token}`
+          navigator.clipboard.writeText(url).catch(() => {})
+          showToast('🎉 Published! Link copied — share with patients or post on social', 'success')
+        } else {
+          showToast('🎉 Published! Followers can now copy this plan', 'success')
+        }
+      } else {
+        showToast('Unpublished', 'success')
+      }
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 

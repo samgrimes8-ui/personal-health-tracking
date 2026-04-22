@@ -912,12 +912,27 @@ export async function getProviderBroadcasts(providerId, publishedOnly = true) {
 
 export async function saveBroadcast(broadcast) {
   if (!supabase) return null
+  // Auto-generate share token for new broadcasts
+  if (!broadcast.share_token) {
+    broadcast.share_token = Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 8)
+  }
   const { data, error } = await supabase
     .from('provider_broadcasts')
     .upsert({ ...broadcast, updated_at: new Date().toISOString() }, { onConflict: 'id' })
     .select()
     .single()
   if (error) throw error
+  return data
+}
+
+export async function getBroadcastByToken(token) {
+  if (!supabase) return null
+  const { data } = await supabase
+    .from('provider_broadcasts')
+    .select('*, user_profiles!provider_id(provider_name, provider_specialty, provider_bio)')
+    .eq('share_token', token)
+    .eq('is_published', true)
+    .maybeSingle()
   return data
 }
 
