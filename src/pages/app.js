@@ -1346,12 +1346,13 @@ function renderMealPlanView(planner) {
                 ${slotMeals.length ? slotMeals.map(m => {
                   const isLeftover = m.recipe_id && recipeFirstDay[m.recipe_id] && recipeFirstDay[m.recipe_id] !== m.actual_date
                   return `<div style="display:flex;align-items:center;gap:6px;padding:7px 8px;background:var(--bg3);border-radius:var(--r);margin-bottom:3px;cursor:pointer"
-                    draggable="true"
                     data-meal-id="${m.id}"
-                    ondragstart="handlePlannerDragStart(event, '${m.id}')"
-                    ondragend="handlePlannerDragEnd(event)"
                     onclick="openEditModal('${m.id}', 'planner', {d:${di}})">
-                    <span style="color:var(--text3);font-size:14px;cursor:grab;user-select:none;padding:0 2px;flex-shrink:0;line-height:1"
+                    <span draggable="true"
+                      ondragstart="handlePlannerDragStart(event, '${m.id}')"
+                      ondragend="handlePlannerDragEnd(event)"
+                      onclick="event.stopPropagation()"
+                      style="color:var(--text3);font-size:14px;cursor:grab;user-select:none;padding:4px 6px;flex-shrink:0;line-height:1;touch-action:none"
                       title="Drag to another day">⋮⋮</span>
                     <div style="flex:1;min-width:0">
                       <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
@@ -5173,7 +5174,44 @@ function wireGlobals() {
       cb.checked = !!checked
       if (checked) window._copySelection.add(Number(cb.dataset.idx))
     })
+    // If excluding leftovers, re-apply that filter on top of select-all
+    const exclude = document.getElementById('copy-exclude-leftovers')?.checked
+    if (checked && exclude) applyLeftoverExclusion()
     updateCopySummary()
+  }
+
+  // Uncheck (or recheck) all leftover meals in one shot.
+  window.toggleExcludeLeftovers = (excluded) => {
+    if (!window._copySelection) window._copySelection = new Set()
+    const broadcast = window._pendingCopyBroadcast
+    if (!broadcast) return
+    const plan = broadcast.plan_data || []
+    plan.forEach((item, i) => {
+      if (item.is_leftover) {
+        const cb = document.getElementById(`copy-check-${i}`)
+        if (excluded) {
+          window._copySelection.delete(i)
+          if (cb) cb.checked = false
+        } else {
+          window._copySelection.add(i)
+          if (cb) cb.checked = true
+        }
+      }
+    })
+    updateCopySummary()
+  }
+
+  // Helper used by Select-all when Exclude-leftovers is already on
+  function applyLeftoverExclusion() {
+    const broadcast = window._pendingCopyBroadcast
+    if (!broadcast || !window._copySelection) return
+    ;(broadcast.plan_data || []).forEach((item, i) => {
+      if (item.is_leftover) {
+        window._copySelection.delete(i)
+        const cb = document.getElementById(`copy-check-${i}`)
+        if (cb) cb.checked = false
+      }
+    })
   }
 
   // Toggle one meal — called from the card's onclick handler.
@@ -5338,15 +5376,25 @@ function wireGlobals() {
         <div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4">Meals will fill one per day. You can move them around later from the planner.</div>
       </div>
 
-      <!-- Select-all row -->
-      <div style="padding:10px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px">
-        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--text)">
-          <input type="checkbox" id="copy-select-all" checked
-            onchange="toggleAllCopyMeals(this.checked)"
-            style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer" />
-          Select all
-        </label>
-        <div id="copy-selected-count" style="font-size:12px;color:var(--text2)">${meals.length} of ${meals.length} meals selected</div>
+      <!-- Select-all row + exclude leftovers toggle -->
+      <div style="padding:10px 20px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--text)">
+            <input type="checkbox" id="copy-select-all" checked
+              onchange="toggleAllCopyMeals(this.checked)"
+              style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer" />
+            Select all
+          </label>
+          <div id="copy-selected-count" style="font-size:12px;color:var(--text2)">${meals.length} of ${meals.length} meals selected</div>
+        </div>
+        ${meals.some(m => m.is_leftover) ? `
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:12px;color:var(--text2);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+            <input type="checkbox" id="copy-exclude-leftovers"
+              onchange="toggleExcludeLeftovers(this.checked)"
+              style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer" />
+            Exclude leftovers — skip meals marked ♻️ Leftover
+          </label>
+        ` : ''}
       </div>
 
       <!-- Meals grouped by day -->
@@ -5354,7 +5402,7 @@ function wireGlobals() {
         ${meals.some(m => m.is_leftover) ? `
           <div style="margin:4px 20px 8px;padding:10px 12px;background:rgba(122,180,232,0.08);border:1px solid rgba(122,180,232,0.2);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.45">
             <span style="color:var(--carbs);font-weight:500">ℹ️ About leftovers:</span>
-            Some meals are marked <span style="color:var(--text)">♻️ Leftover</span> — they'll keep that flag when copied, so your planner knows they don't need a fresh prep. Uncheck any leftover days you'd rather skip or cook fresh instead.
+            Meals marked <span style="color:var(--text)">♻️ Leftover</span> will keep that flag when copied, so your planner knows they don't need a fresh prep. Use the toggle above to skip them all at once, or uncheck individual ones below.
           </div>
         ` : ''}
         ${sortedKeys.map(key => `
@@ -6274,17 +6322,55 @@ function wireGlobals() {
   // Perform the actual move: call DB, then reload the current week so
   // the meal appears on its new day. If the target date is in a different
   // Sunday-week, navigate there so the user sees the result.
+  //
+  // If the moved meal is a "source" (recipe_id present, not a leftover),
+  // any linked leftovers (same recipe_id, is_leftover: true, later date)
+  // are shifted by the same delta so their day-gap is preserved.
   async function performMovePlannerMeal(mealId, targetDate) {
     const current = localDateStr(new Date(state.weekStart + 'T00:00:00'))
     try {
+      // Find the source meal's original date + recipe_id so we know what
+      // to do with its linked leftovers (if any).
+      const sourceMeal = findPlannerMealById(mealId)
+      const originalDate = sourceMeal?.actual_date || null
+      const recipeId = sourceMeal?.recipe_id || null
+      const sourceIsLeftover = !!sourceMeal?.is_leftover
+
+      // Find linked leftovers we need to shift along.
+      // Only apply when moving the NON-leftover source meal; if a user drags
+      // a leftover card itself, we only move that one.
+      let linkedLeftovers = []
+      if (recipeId && !sourceIsLeftover && originalDate) {
+        linkedLeftovers = findLinkedLeftovers(recipeId, originalDate, mealId)
+      }
+
+      // Move the source
       await movePlannerMeal(state.user.id, mealId, targetDate)
+
+      // Shift each linked leftover by the same delta (in days)
+      if (linkedLeftovers.length > 0) {
+        const [oy, om, od] = originalDate.split('-').map(Number)
+        const [ty, tm, td] = targetDate.split('-').map(Number)
+        const origD = new Date(oy, om - 1, od)
+        const tgtD = new Date(ty, tm - 1, td)
+        const deltaDays = Math.round((tgtD - origD) / (1000 * 60 * 60 * 24))
+        const pad = n => String(n).padStart(2, '0')
+        await Promise.all(linkedLeftovers.map(async (lo) => {
+          if (!lo.actual_date) return
+          const [ly, lm, ld] = lo.actual_date.split('-').map(Number)
+          const newD = new Date(ly, lm - 1, ld + deltaDays)
+          const newDateStr = `${newD.getFullYear()}-${pad(newD.getMonth()+1)}-${pad(newD.getDate())}`
+          try { await movePlannerMeal(state.user.id, lo.id, newDateStr) } catch {}
+        }))
+      }
+
       // Compute the Sunday-week containing targetDate
       const [ty, tm, td] = targetDate.split('-').map(Number)
       const tDate = new Date(ty, tm - 1, td)
       const sunDate = new Date(tDate)
       sunDate.setDate(sunDate.getDate() - sunDate.getDay())
-      const pad = n => String(n).padStart(2, '0')
-      const targetWeek = `${sunDate.getFullYear()}-${pad(sunDate.getMonth()+1)}-${pad(sunDate.getDate())}`
+      const pad2 = n => String(n).padStart(2, '0')
+      const targetWeek = `${sunDate.getFullYear()}-${pad2(sunDate.getMonth()+1)}-${pad2(sunDate.getDate())}`
       if (targetWeek !== current) state.weekStart = targetWeek
       // Reload planner for the week now being viewed
       const planner = await getPlannerWeek(state.user.id, state.weekStart)
@@ -6292,10 +6378,32 @@ function wireGlobals() {
       state.groceryItems = null
       renderPage()
       const fmt = tDate.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
-      showToast(`Moved to ${fmt}`, 'success')
+      if (linkedLeftovers.length > 0) {
+        showToast(`Moved to ${fmt} (+ ${linkedLeftovers.length} leftover${linkedLeftovers.length===1?'':'s'})`, 'success')
+      } else {
+        showToast(`Moved to ${fmt}`, 'success')
+      }
     } catch (err) {
       showToast('Error moving meal: ' + err.message, 'error')
     }
+  }
+
+  // Find planner meals that are leftovers of a given recipe, scheduled later
+  // than the source meal's original date. Searches both the currently-loaded
+  // week and the next week (since leftovers often span across weeks).
+  function findLinkedLeftovers(recipeId, sourceOriginalDate, sourceMealId) {
+    const results = []
+    if (!state.planner?.meals) return results
+    for (const day of state.planner.meals) {
+      for (const m of (day || [])) {
+        if (String(m.id) === String(sourceMealId)) continue
+        if (!m.recipe_id || m.recipe_id !== recipeId) continue
+        if (!m.is_leftover) continue
+        if (!m.actual_date || m.actual_date <= sourceOriginalDate) continue
+        results.push(m)
+      }
+    }
+    return results
   }
 
   // — Drag and drop —
