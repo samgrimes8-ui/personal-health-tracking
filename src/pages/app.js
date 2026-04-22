@@ -5490,9 +5490,11 @@ function wireGlobals() {
 
       if (btn) { btn.disabled = true; btn.textContent = 'Copying...' }
       const result = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices, window._copyMealTypes || {})
-      // Back-compat: old callers expected a number, new version returns {mealsCopied, recipesAdded}
+      // Back-compat: old callers expected a number, new version returns {mealsCopied, recipesAdded, diagnostics}
       const mealsCopied = typeof result === 'number' ? result : (result?.mealsCopied || 0)
       const recipesAdded = typeof result === 'number' ? 0 : (result?.recipesAdded || 0)
+      const diagnostics = typeof result === 'number' ? [] : (result?.diagnostics || [])
+      const recipesFailed = diagnostics.filter(d => d.status !== 'imported' && d.status !== 'already-owned' && d.status !== 'dedupe-by-name').length
 
       // Compute the Sunday-based week that contains the start date,
       // navigate the planner there, and reload it so the new meals are visible
@@ -5516,10 +5518,17 @@ function wireGlobals() {
       }
 
       closeCopyBroadcastModal()
-      const msg = recipesAdded > 0
-        ? `Copied ${mealsCopied} meal${mealsCopied===1?'':'s'} and added ${recipesAdded} recipe${recipesAdded===1?'':'s'} to your library!`
-        : `Copied ${mealsCopied} meal${mealsCopied===1?'':'s'} to your planner!`
-      showToast(msg, 'success')
+
+      // If any recipes failed to import, show a visible on-screen diagnostic
+      // (much easier to read on mobile than the console)
+      if (recipesFailed > 0) {
+        showCopyDiagnostics(diagnostics, mealsCopied, recipesAdded)
+      } else {
+        const msg = recipesAdded > 0
+          ? `Copied ${mealsCopied} meal${mealsCopied===1?'':'s'} and added ${recipesAdded} recipe${recipesAdded===1?'':'s'} to your library!`
+          : `Copied ${mealsCopied} meal${mealsCopied===1?'':'s'} to your planner!`
+        showToast(msg, 'success')
+      }
       // Route to planner page so user sees the result
       switchPage('planner')
     } catch (err) {
@@ -5527,6 +5536,58 @@ function wireGlobals() {
       showToast('Error: ' + (err?.message || err), 'error')
       if (btn) { btn.disabled = false; btn.textContent = 'Copy selected meals' }
     }
+  }
+
+  // Render a visible, dismissible diagnostic alert listing exactly which
+  // recipes failed to import and why. Much easier to read on mobile than
+  // hunting through the browser console.
+  window.showCopyDiagnostics = (diagnostics, mealsCopied, recipesAdded) => {
+    const failed = diagnostics.filter(d =>
+      d.status !== 'imported' && d.status !== 'already-owned' && d.status !== 'dedupe-by-name'
+    )
+    if (!failed.length) return
+    const rows = failed.map(d => {
+      let detail = ''
+      if (d.status === 'fetch-failed') {
+        const parts = []
+        if (d.apiStatus != null) parts.push(`API ${d.apiStatus}`)
+        if (d.apiErrBody) parts.push(d.apiErrBody)
+        if (d.directErr) parts.push(`direct: ${d.directErr}`)
+        detail = parts.join(' · ') || 'no source'
+      } else if (d.status === 'insert-failed' || d.status === 'insert-threw') {
+        detail = d.insertErr || 'insert failed'
+      }
+      return `<div style="padding:8px 10px;background:var(--bg3);border-radius:var(--r);margin-bottom:6px;font-size:12px">
+        <div style="color:var(--text);font-weight:500">${esc(d.name || d.origId.slice(0,8))}</div>
+        <div style="color:var(--red);font-size:11px;margin-top:2px">${esc(d.status)}</div>
+        ${detail ? `<div style="color:var(--text3);font-size:10px;margin-top:2px;word-break:break-word">${esc(detail)}</div>` : ''}
+      </div>`
+    }).join('')
+
+    // Reuse the broadcast modal container for display
+    const modal = document.getElementById('copy-broadcast-modal')
+    const content = document.getElementById('copy-broadcast-content')
+    if (!modal || !content) return
+    content.innerHTML = `
+      <div style="padding:20px">
+        <div style="display:flex;align-items:start;justify-content:space-between;gap:12px;margin-bottom:10px">
+          <div>
+            <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text)">Partial import</div>
+            <div style="font-size:12px;color:var(--text2);margin-top:4px">Copied ${mealsCopied} meal${mealsCopied===1?'':'s'}. ${recipesAdded} recipe${recipesAdded===1?'':'s'} saved to your library.</div>
+          </div>
+          <button onclick="closeCopyBroadcastModal()" style="background:transparent;border:none;color:var(--text3);font-size:20px;cursor:pointer;padding:0 4px;line-height:1">×</button>
+        </div>
+        <div style="padding:10px 12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:var(--r);font-size:12px;color:var(--text2);line-height:1.5;margin-bottom:12px">
+          ${failed.length} recipe${failed.length===1?'':'s'} couldn't be imported. Your meals still copied with names and macros — they just won't have a View recipe link.
+        </div>
+        <div style="max-height:300px;overflow-y:auto">${rows}</div>
+        <button onclick="closeCopyBroadcastModal()"
+          style="width:100%;margin-top:12px;padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">
+          Got it
+        </button>
+      </div>
+    `
+    modal.classList.add('open')
   }
 
   function renderCopyBroadcastPreview(broadcast, defaultWeekStart) {
@@ -7190,10 +7251,21 @@ function wireGlobals() {
 
   window.generateInstructionsHandler = async (recipeId) => {
     const btn = document.getElementById('gen-instr-btn')
+    const recipe = state.recipes.find(r => r.id === recipeId)
+    if (!recipe) { showToast('Recipe not found', 'error'); return }
+
+    // Ownership check: AI-generated instructions get saved via a user_id-scoped
+    // UPDATE, so we can only save them on recipes the current user owns.
+    // Recipes fetched from another provider's broadcast have been injected
+    // into state.recipes for read-only viewing — those must be copied to the
+    // user's library first (by copying the broadcast into their planner).
+    if (recipe.user_id && recipe.user_id !== state.user.id) {
+      showToast("You can only generate instructions for recipes in your own library. Copy this meal plan to your planner first.", 'error')
+      return
+    }
+
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="analyzing-spinner"></span> Generating...' }
     try {
-      const recipe = state.recipes.find(r => r.id === recipeId)
-      if (!recipe) return
       const result = await generateRecipeInstructions(recipe)
       if (!result?.steps?.length) throw new Error('No instructions returned')
 

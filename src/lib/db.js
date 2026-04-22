@@ -457,15 +457,18 @@ export async function saveRecipeInstructions(userId, recipeId, instructions) {
     .eq('id', recipeId)
     .eq('user_id', userId)
     .select('id, instructions')
-    .single()
+    .maybeSingle()
   if (error) {
     console.error('saveRecipeInstructions error:', error)
     throw new Error(error.message)
   }
-  if (!data?.instructions) {
-    throw new Error('Save appeared to succeed but instructions not returned from DB')
+  if (!data) {
+    // 0 rows updated — most commonly means the recipe belongs to another user
+    throw new Error("Can't save to this recipe — it isn't in your library. Copy the meal plan to your planner first, which imports the recipe.")
   }
-  console.log('Instructions saved OK:', recipeId)
+  if (!data.instructions) {
+    throw new Error('Save appeared to succeed but instructions were not returned from DB')
+  }
   return data
 }
 
@@ -1100,6 +1103,7 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
   // so every planner row ends up pointing to the user's own recipe.
   const uniqueRecipeIds = [...new Set(items.map(i => i.recipe_id).filter(Boolean))]
   const recipeIdMap = {} // original_id -> new_library_id
+  const diagnostics = [] // human-readable per-recipe outcome
 
   console.log('[copyBroadcast] unique recipe_ids to import:', uniqueRecipeIds)
   console.log('[copyBroadcast] broadcast.share_token:', broadcast?.share_token)
@@ -1118,7 +1122,7 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
     const alreadyOwnsById = userRecipes.find(r => r.id === origId)
     if (alreadyOwnsById) {
       recipeIdMap[origId] = origId
-      console.log('[copyBroadcast]', origId, '→ already in library by id')
+      diagnostics.push({ origId, name: alreadyOwnsById.name, status: 'already-owned' })
       continue
     }
 
@@ -1130,28 +1134,33 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
       if (data) source = data
       if (error) directErr = error
     }
-    console.log('[copyBroadcast]', origId, 'direct read:', source ? 'found' : 'not found', directErr || '')
 
+    let apiStatus = null, apiErrBody = null
     // Fall back to the service-role API using the broadcast share_token
     if (!source && broadcast?.share_token) {
       try {
         const url = `/api/broadcast-recipe?broadcast_token=${encodeURIComponent(broadcast.share_token)}&recipe_id=${encodeURIComponent(origId)}`
         const resp = await fetch(url)
-        console.log('[copyBroadcast]', origId, 'API fallback status:', resp.status)
+        apiStatus = resp.status
         if (resp.ok) {
           source = await resp.json()
         } else {
-          const errBody = await resp.text().catch(() => '')
-          console.warn('[copyBroadcast]', origId, 'API error body:', errBody)
+          apiErrBody = await resp.text().catch(() => '')
         }
       } catch (e) {
-        console.warn('[copyBroadcast]', origId, 'API fetch threw:', e)
+        apiErrBody = String(e?.message || e)
       }
     }
 
     if (!source) {
-      // Couldn't fetch — leave the recipe_id null so the planner row still saves
-      console.warn('[copyBroadcast]', origId, '→ NOT importable, planner row will have recipe_id=null')
+      diagnostics.push({
+        origId,
+        name: null,
+        status: 'fetch-failed',
+        directErr: directErr?.message || null,
+        apiStatus,
+        apiErrBody: apiErrBody?.slice(0, 200) || null,
+      })
       recipeIdMap[origId] = null
       continue
     }
@@ -1163,7 +1172,7 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
     )
     if (existingByName) {
       recipeIdMap[origId] = existingByName.id
-      console.log('[copyBroadcast]', origId, '→ matched existing by name:', existingByName.id)
+      diagnostics.push({ origId, name: source.name, status: 'dedupe-by-name' })
       continue
     }
 
@@ -1176,17 +1185,16 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
         .insert(payload)
         .select('id, name')
         .single()
-      if (insErr) {
-        console.warn('[copyBroadcast]', origId, 'insert failed:', insErr)
-      }
       if (insErr || !inserted) {
+        diagnostics.push({ origId, name: source.name, status: 'insert-failed', insertErr: insErr?.message || 'no data returned' })
         recipeIdMap[origId] = null
       } else {
         recipeIdMap[origId] = inserted.id
-        userRecipes.push(inserted) // so subsequent iterations dedupe against it
+        userRecipes.push(inserted)
+        diagnostics.push({ origId, name: inserted.name, status: 'imported', newId: inserted.id })
       }
     } catch (e) {
-      console.warn('[copyBroadcast]', origId, 'insert threw:', e)
+      diagnostics.push({ origId, name: source.name, status: 'insert-threw', insertErr: String(e?.message || e) })
       recipeIdMap[origId] = null
     }
   }
@@ -1240,5 +1248,5 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
 
   // Count only the recipe ids that weren't in the user's library before this copy
   const recipesAdded = Object.values(recipeIdMap).filter(id => id && !initialIds.has(id)).length
-  return { mealsCopied: rows.length, recipesAdded }
+  return { mealsCopied: rows.length, recipesAdded, diagnostics }
 }
