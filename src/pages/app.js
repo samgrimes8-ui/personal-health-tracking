@@ -5129,6 +5129,8 @@ function wireGlobals() {
 
       // Initialize selection state: by default, ALL meals are selected
       window._copySelection = new Set(broadcast.plan_data.map((_, i) => i))
+      // Default spacing is 'pack' (one meal per day, sequential)
+      window._copySpacing = 'pack'
 
       // Default target = current week start (Sunday)
       const defaultWeek = getWeekStart()
@@ -5150,6 +5152,7 @@ function wireGlobals() {
     document.getElementById('copy-broadcast-modal').classList.remove('open')
     window._pendingCopyBroadcast = null
     window._copySelection = null
+    window._copySpacing = null
   }
 
   window.toggleAllCopyMeals = (checked) => {
@@ -5193,10 +5196,45 @@ function wireGlobals() {
       else if (selected === total) { headerCheck.checked = true; headerCheck.indeterminate = false }
       else { headerCheck.checked = false; headerCheck.indeterminate = true }
     }
+    // Show spacing toggle only when user has deselected some meals
+    const spacingRow = document.getElementById('copy-spacing-row')
+    if (spacingRow) {
+      const isPartial = selected > 0 && selected < total
+      spacingRow.style.display = isPartial ? 'block' : 'none'
+    }
+    // Refresh end-date preview since selection affects it
+    if (typeof updateCopyEndPreview === 'function') updateCopyEndPreview()
   }
 
-  // Live preview of when the plan will end, based on the chosen start date
-  // and the broadcast's duration.
+  // Choose spacing mode for partial copies.
+  window.setCopySpacing = (mode) => {
+    window._copySpacing = mode
+    const packBtn = document.getElementById('copy-space-pack')
+    const gapsBtn = document.getElementById('copy-space-gaps')
+    const hint = document.getElementById('copy-spacing-hint')
+    const startInput = document.getElementById('copy-start-date')
+    const startStr = startInput?.value || ''
+    if (packBtn && gapsBtn) {
+      const active = 'background:var(--accent);color:#1a1500;font-weight:600'
+      const inactive = 'background:transparent;color:var(--text2);font-weight:500'
+      if (mode === 'pack') {
+        packBtn.setAttribute('style', `flex:1;padding:7px 10px;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;cursor:pointer;${active}`)
+        gapsBtn.setAttribute('style', `flex:1;padding:7px 10px;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;cursor:pointer;${inactive}`)
+      } else {
+        packBtn.setAttribute('style', `flex:1;padding:7px 10px;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;cursor:pointer;${inactive}`)
+        gapsBtn.setAttribute('style', `flex:1;padding:7px 10px;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;cursor:pointer;${active}`)
+      }
+    }
+    if (hint) {
+      hint.textContent = mode === 'pack'
+        ? 'Meals fill sequential days, one per day starting from your start date.'
+        : 'Gaps from the original plan are preserved. Skipped meals leave empty days in between.'
+    }
+    if (typeof updateCopyEndPreview === 'function') updateCopyEndPreview()
+  }
+
+  // Live preview of when the plan will end, based on the chosen start date,
+  // selected meals, and spacing mode. Matches what copyBroadcastToPlanner does.
   window.updateCopyEndPreview = () => {
     const input = document.getElementById('copy-start-date')
     const out = document.getElementById('copy-end-preview')
@@ -5204,18 +5242,38 @@ function wireGlobals() {
     if (!input || !out || !broadcast) return
     const startStr = input.value
     if (!startStr) { out.textContent = ''; return }
-    // Compute plan length from the broadcast's date range
-    const dates = (broadcast.plan_data || []).map(m => m.actual_date).filter(Boolean).sort()
-    let planDays = (broadcast.plan_data || []).length || 1
-    if (dates.length) {
-      const [sy, sm, sd] = dates[0].split('-').map(Number)
-      const [ey, em, ed] = dates[dates.length - 1].split('-').map(Number)
-      planDays = Math.max(1, Math.round((new Date(ey, em-1, ed) - new Date(sy, sm-1, sd)) / (1000*60*60*24)) + 1)
+
+    const allItems = broadcast.plan_data || []
+    const sel = window._copySelection || new Set()
+    const selectedCount = sel.size
+    if (selectedCount === 0) { out.textContent = ''; return }
+
+    const isPartial = selectedCount < allItems.length
+    const spacing = window._copySpacing || 'pack'
+
+    // Compute how many days the copy will span.
+    //   pack (or all selected) → N days, one meal per day
+    //   keep-gaps + partial → distance between first and last selected meal in original plan
+    let planDays = selectedCount
+    if (isPartial && spacing === 'keep-gaps') {
+      const selectedItems = [...sel].map(i => allItems[i]).filter(Boolean)
+      const allDates = [...new Set(allItems.map(i => i.actual_date).filter(Boolean))].sort()
+      const dateToDayIdx = new Map(allDates.map((d, i) => [d, i]))
+      const selDayIdxs = selectedItems
+        .map(it => dateToDayIdx.get(it.actual_date))
+        .filter(x => x !== undefined)
+      if (selDayIdxs.length > 0) {
+        const firstIdx = Math.min(...selDayIdxs)
+        const lastIdx = Math.max(...selDayIdxs)
+        planDays = Math.max(selectedCount, lastIdx - firstIdx + 1)
+      }
     }
+
     const [y, m, d] = startStr.split('-').map(Number)
-    const endDate = new Date(y, m-1, d + planDays - 1)
-    const startFmt = new Date(y, m-1, d).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'})
-    const endFmt = endDate.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'})
+    const startD = new Date(y, m - 1, d)
+    const endD = new Date(y, m - 1, d + planDays - 1)
+    const startFmt = startD.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'})
+    const endFmt = endD.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'})
     out.textContent = planDays === 1
       ? `Plan runs on ${startFmt}`
       : `Plan runs ${startFmt} → ${endFmt} (${planDays} days)`
@@ -5232,9 +5290,10 @@ function wireGlobals() {
       if (!selectedIndices.length) { showToast('Select at least one meal', 'error'); return }
 
       const startDate = document.getElementById('copy-start-date')?.value || localDateStr(new Date())
+      const spacing = window._copySpacing || 'pack'
 
       if (btn) { btn.disabled = true; btn.textContent = 'Copying...' }
-      const count = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices)
+      const count = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices, spacing)
 
       // Compute the Sunday-based week that contains the start date,
       // navigate the planner there, and reload it so the new meals are visible
@@ -5322,6 +5381,24 @@ function wireGlobals() {
           onchange="updateCopyEndPreview()"
           style="width:100%;padding:9px 10px;background:var(--bg2);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px" />
         <div id="copy-end-preview" style="font-size:11px;color:var(--text3);margin-top:6px"></div>
+      </div>
+
+      <!-- Spacing toggle (only shown when user has deselected some meals) -->
+      <div id="copy-spacing-row" style="display:none;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--bg3)">
+        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">Day spacing</div>
+        <div style="display:flex;gap:6px;background:var(--bg2);padding:3px;border-radius:var(--r);border:1px solid var(--border2)">
+          <button id="copy-space-pack" onclick="setCopySpacing('pack')"
+            style="flex:1;padding:7px 10px;background:var(--accent);color:#1a1500;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer">
+            Pack together
+          </button>
+          <button id="copy-space-gaps" onclick="setCopySpacing('keep-gaps')"
+            style="flex:1;padding:7px 10px;background:transparent;color:var(--text2);border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;font-weight:500;cursor:pointer">
+            Keep gaps
+          </button>
+        </div>
+        <div id="copy-spacing-hint" style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.4">
+          Meals fill sequential days starting ${todayStr}. Useful for meal-prep runs.
+        </div>
       </div>
 
       <!-- Select-all row -->

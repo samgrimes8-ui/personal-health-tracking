@@ -1027,32 +1027,58 @@ export async function getFollowerCount(providerId) {
   return count ?? 0
 }
 
-export async function copyBroadcastToPlanner(userId, broadcast, startDate, selectedIndices = null) {
+export async function copyBroadcastToPlanner(userId, broadcast, startDate, selectedIndices = null, spacing = 'pack') {
   if (!supabase || !broadcast?.plan_data?.length) return 0
 
-  // If selectedIndices is provided, only copy those; otherwise copy all
+  const allItems = broadcast.plan_data
+  const isPartial = Array.isArray(selectedIndices) && selectedIndices.length < allItems.length
+
+  // Filter to selected items (or all if none specified)
   let items = selectedIndices
-    ? broadcast.plan_data.filter((_, i) => selectedIndices.includes(i))
-    : broadcast.plan_data
+    ? allItems.filter((_, i) => selectedIndices.includes(i))
+    : allItems
 
   if (!items.length) return 0
 
-  // Sort by actual_date so we place meals in chronological order and
-  // the first selected meal lands on the user's chosen start date.
+  // Sort items by their original date so the sequence matches the broadcast
   items = [...items].sort((a, b) => {
     const ad = a.actual_date || ''
     const bd = b.actual_date || ''
     return ad.localeCompare(bd)
   })
 
-  // Anchor = date of the earliest selected meal. All offsets are computed
-  // relative to this, so if the user only picks Wed + Fri meals (original
-  // Tue–Sun plan), Wed lands on the start date and Fri lands +2 days later.
-  let anchorDate = null
-  const firstWithDate = items.find(i => i.actual_date)
-  if (firstWithDate) {
-    const [ay, am, ad] = firstWithDate.actual_date.split('-').map(Number)
-    anchorDate = new Date(ay, am - 1, ad)
+  // Compute day offsets (from start date) for each item.
+  //
+  // spacing = 'pack'      → one meal per day, sequential (start, start+1, start+2, ...)
+  // spacing = 'keep-gaps' → preserve gaps from the original plan (only matters when partial)
+  //
+  // "One meal per day" is a hard rule: even if the broadcast had 2 meals on
+  // the same day (e.g. lunch leftover + dinner), we stretch them to separate
+  // days so the planner shows one meal per slot.
+  let offsets = []
+  if (spacing === 'keep-gaps' && isPartial) {
+    // Use each item's day-index in the broadcast's unique sorted date list
+    // to compute its gap position. Skipped dates become gaps.
+    const allDates = [...new Set(allItems.map(i => i.actual_date).filter(Boolean))].sort()
+    const dateToDayIdx = new Map(allDates.map((d, i) => [d, i]))
+    // First selected item becomes offset 0; subsequent ones keep their gap
+    const firstItemIdx = items[0].actual_date ? (dateToDayIdx.get(items[0].actual_date) ?? 0) : 0
+    let lastOffset = -1
+    offsets = items.map(item => {
+      let targetOffset
+      if (item.actual_date && dateToDayIdx.has(item.actual_date)) {
+        targetOffset = dateToDayIdx.get(item.actual_date) - firstItemIdx
+      } else {
+        targetOffset = lastOffset + 1
+      }
+      // Guarantee one meal per day: if two items share a day, nudge forward
+      if (targetOffset <= lastOffset) targetOffset = lastOffset + 1
+      lastOffset = targetOffset
+      return targetOffset
+    })
+  } else {
+    // Pack: sequential, one per day
+    offsets = items.map((_, i) => i)
   }
 
   const [stY, stM, stD] = startDate.split('-').map(Number)
@@ -1062,15 +1088,7 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
   const ds = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
 
   const rows = items.map((item, i) => {
-    // Offset = days between this meal's original date and the anchor.
-    // Falls back to sequential ordering if actual_date is missing.
-    let offset = i
-    if (item.actual_date && anchorDate) {
-      const [iy, im, id] = item.actual_date.split('-').map(Number)
-      const itemDate = new Date(iy, im - 1, id)
-      offset = Math.max(0, Math.round((itemDate - anchorDate) / (1000 * 60 * 60 * 24)))
-    }
-
+    const offset = offsets[i]
     const actualDate = new Date(startDateObj)
     actualDate.setDate(actualDate.getDate() + offset)
     const actualDateStr = ds(actualDate)
@@ -1101,7 +1119,7 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
     }
   })
 
-  console.log('[copyBroadcast] inserting', rows.length, 'rows starting', startDate)
+  console.log('[copyBroadcast] inserting', rows.length, 'rows starting', startDate, 'spacing:', spacing)
 
   const { data, error } = await supabase.from('meal_planner').insert(rows).select()
   if (error) {
