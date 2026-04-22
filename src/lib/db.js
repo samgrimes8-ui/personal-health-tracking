@@ -1101,6 +1101,9 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
   const uniqueRecipeIds = [...new Set(items.map(i => i.recipe_id).filter(Boolean))]
   const recipeIdMap = {} // original_id -> new_library_id
 
+  console.log('[copyBroadcast] unique recipe_ids to import:', uniqueRecipeIds)
+  console.log('[copyBroadcast] broadcast.share_token:', broadcast?.share_token)
+
   // Load the user's existing recipes once to dedupe by name.
   // Freeze the set of initial ids so we can later count how many were newly added.
   let userRecipes = []
@@ -1113,25 +1116,42 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
   for (const origId of uniqueRecipeIds) {
     // If the user already owns this exact row (unlikely but possible), reuse it
     const alreadyOwnsById = userRecipes.find(r => r.id === origId)
-    if (alreadyOwnsById) { recipeIdMap[origId] = origId; continue }
+    if (alreadyOwnsById) {
+      recipeIdMap[origId] = origId
+      console.log('[copyBroadcast]', origId, '→ already in library by id')
+      continue
+    }
 
     // Fetch the source recipe (direct read first; may succeed if RLS permits)
     let source = null
+    let directErr = null
     {
-      const { data } = await supabase.from('recipes').select('*').eq('id', origId).maybeSingle()
+      const { data, error } = await supabase.from('recipes').select('*').eq('id', origId).maybeSingle()
       if (data) source = data
+      if (error) directErr = error
     }
+    console.log('[copyBroadcast]', origId, 'direct read:', source ? 'found' : 'not found', directErr || '')
 
     // Fall back to the service-role API using the broadcast share_token
     if (!source && broadcast?.share_token) {
       try {
-        const resp = await fetch(`/api/broadcast-recipe?broadcast_token=${encodeURIComponent(broadcast.share_token)}&recipe_id=${encodeURIComponent(origId)}`)
-        if (resp.ok) source = await resp.json()
-      } catch {}
+        const url = `/api/broadcast-recipe?broadcast_token=${encodeURIComponent(broadcast.share_token)}&recipe_id=${encodeURIComponent(origId)}`
+        const resp = await fetch(url)
+        console.log('[copyBroadcast]', origId, 'API fallback status:', resp.status)
+        if (resp.ok) {
+          source = await resp.json()
+        } else {
+          const errBody = await resp.text().catch(() => '')
+          console.warn('[copyBroadcast]', origId, 'API error body:', errBody)
+        }
+      } catch (e) {
+        console.warn('[copyBroadcast]', origId, 'API fetch threw:', e)
+      }
     }
 
     if (!source) {
       // Couldn't fetch — leave the recipe_id null so the planner row still saves
+      console.warn('[copyBroadcast]', origId, '→ NOT importable, planner row will have recipe_id=null')
       recipeIdMap[origId] = null
       continue
     }
@@ -1141,26 +1161,37 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
     const existingByName = userRecipes.find(r =>
       (r.name || '').trim().toLowerCase() === (source.name || '').trim().toLowerCase()
     )
-    if (existingByName) { recipeIdMap[origId] = existingByName.id; continue }
+    if (existingByName) {
+      recipeIdMap[origId] = existingByName.id
+      console.log('[copyBroadcast]', origId, '→ matched existing by name:', existingByName.id)
+      continue
+    }
 
     // Insert a fresh copy into the user's library
     try {
       const { share_token, is_shared, is_public, id, user_id, created_at, updated_at, ...fields } = source
+      const payload = { ...fields, user_id: userId, share_token: null, is_shared: false, is_public: false }
       const { data: inserted, error: insErr } = await supabase
         .from('recipes')
-        .insert({ ...fields, user_id: userId, share_token: null, is_shared: false, is_public: false })
+        .insert(payload)
         .select('id, name')
         .single()
+      if (insErr) {
+        console.warn('[copyBroadcast]', origId, 'insert failed:', insErr)
+      }
       if (insErr || !inserted) {
         recipeIdMap[origId] = null
       } else {
         recipeIdMap[origId] = inserted.id
         userRecipes.push(inserted) // so subsequent iterations dedupe against it
       }
-    } catch {
+    } catch (e) {
+      console.warn('[copyBroadcast]', origId, 'insert threw:', e)
       recipeIdMap[origId] = null
     }
   }
+
+  console.log('[copyBroadcast] final recipeIdMap:', recipeIdMap)
 
   // One meal per day, sequential from the start date.
   // Users can reorder meals on the planner after the copy.

@@ -5523,7 +5523,8 @@ function wireGlobals() {
       // Route to planner page so user sees the result
       switchPage('planner')
     } catch (err) {
-      showToast('Error: ' + err.message, 'error')
+      console.error('[copyBroadcast] fatal error:', err)
+      showToast('Error: ' + (err?.message || err), 'error')
       if (btn) { btn.disabled = false; btn.textContent = 'Copy selected meals' }
     }
   }
