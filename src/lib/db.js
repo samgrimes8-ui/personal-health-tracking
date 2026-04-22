@@ -1086,7 +1086,15 @@ export async function copyBroadcastToPlanner(userId, broadcast, weekStart, selec
     }
   })
 
-  const { error } = await supabase.from('meal_planner').insert(rows)
-  if (error) throw error
+  console.log('[copyBroadcast] source plan_data:', broadcast.plan_data)
+  console.log('[copyBroadcast] rows to insert:', rows)
+  console.log('[copyBroadcast] target weekStart:', weekStart, 'userId:', userId)
+
+  const { data, error } = await supabase.from('meal_planner').insert(rows).select()
+  if (error) {
+    console.error('[copyBroadcast] insert failed:', error)
+    throw error
+  }
+  console.log('[copyBroadcast] inserted rows:', data)
   return rows.length
 }

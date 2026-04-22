@@ -5176,16 +5176,16 @@ function wireGlobals() {
       if (btn) { btn.disabled = true; btn.textContent = 'Copying...' }
       const count = await copyBroadcastToPlanner(state.user.id, broadcast, weekStart, selectedIndices)
 
-      // Refresh planner state if user copied into the week they're currently viewing
-      const viewedWeek = state.plannerWeekStart || getWeekStart()
-      if (weekStart === viewedWeek) {
-        const planner = await getPlannerWeek(state.user.id, weekStart)
-        if (planner) state.planner = planner
-      }
+      // Navigate the planner to the target week and reload it so the new meals
+      // are visible immediately — don't require the user to hunt for them
+      state.weekStart = weekStart
+      const planner = await getPlannerWeek(state.user.id, weekStart)
+      if (planner) state.planner = planner
 
       closeCopyBroadcastModal()
       showToast(`Copied ${count} meal${count===1?'':'s'} to your planner!`, 'success')
-      renderPage()
+      // Route to planner page so user sees the result
+      switchPage('planner')
     } catch (err) {
       showToast('Error: ' + err.message, 'error')
       if (btn) { btn.disabled = false; btn.textContent = 'Copy selected meals' }
