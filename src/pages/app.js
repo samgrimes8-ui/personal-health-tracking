@@ -5127,14 +5127,15 @@ function wireGlobals() {
       // Stash on window so the confirm handler can read it without re-fetching
       window._pendingCopyBroadcast = broadcast
 
+      // Initialize selection state: by default, ALL meals are selected
+      window._copySelection = new Set(broadcast.plan_data.map((_, i) => i))
+
       // Default target = current week start (Sunday)
       const defaultWeek = getWeekStart()
       document.getElementById('copy-broadcast-content').innerHTML = renderCopyBroadcastPreview(broadcast, defaultWeek)
       document.getElementById('copy-broadcast-modal').classList.add('open')
 
-      // Defensive: force every checkbox to `checked` and sync the counter.
-      // The HTML `checked` attribute can get overridden by browser restoration
-      // behavior, so we explicitly set the property after render.
+      // Force every visible checkbox checked to match our Set + sync counter
       requestAnimationFrame(() => {
         document.querySelectorAll('.copy-meal-check').forEach(cb => { cb.checked = true })
         const all = document.getElementById('copy-select-all')
@@ -5147,18 +5148,39 @@ function wireGlobals() {
   window.closeCopyBroadcastModal = () => {
     document.getElementById('copy-broadcast-modal').classList.remove('open')
     window._pendingCopyBroadcast = null
+    window._copySelection = null
   }
 
   window.toggleAllCopyMeals = (checked) => {
-    document.querySelectorAll('.copy-meal-check').forEach(cb => { cb.checked = checked })
+    if (!window._copySelection) window._copySelection = new Set()
+    const checks = document.querySelectorAll('.copy-meal-check')
+    window._copySelection.clear()
+    checks.forEach(cb => {
+      cb.checked = !!checked
+      if (checked) window._copySelection.add(Number(cb.dataset.idx))
+    })
+    updateCopySummary()
+  }
+
+  // Toggle one meal — called from the card's onclick handler.
+  // Uses a JS-side Set as source of truth, then syncs the visible checkbox.
+  window.toggleCopyMeal = (idx, ev) => {
+    if (ev) { ev.preventDefault(); ev.stopPropagation() }
+    if (!window._copySelection) window._copySelection = new Set()
+    const n = Number(idx)
+    if (window._copySelection.has(n)) window._copySelection.delete(n)
+    else window._copySelection.add(n)
+    const cb = document.getElementById(`copy-check-${n}`)
+    if (cb) cb.checked = window._copySelection.has(n)
     updateCopySummary()
   }
 
   window.updateCopySummary = updateCopySummary
   function updateCopySummary() {
+    if (!window._copySelection) window._copySelection = new Set()
     const checks = document.querySelectorAll('.copy-meal-check')
-    const selected = Array.from(checks).filter(c => c.checked).length
     const total = checks.length
+    const selected = window._copySelection.size
     const el = document.getElementById('copy-selected-count')
     if (el) el.textContent = `${selected} of ${total} meal${total===1?'':'s'} selected`
     const btn = document.getElementById('copy-confirm-btn')
@@ -5177,10 +5199,12 @@ function wireGlobals() {
     if (!broadcast) return
     const btn = document.getElementById('copy-confirm-btn')
     try {
-      const checks = Array.from(document.querySelectorAll('.copy-meal-check'))
-      const selectedIndices = checks.filter(c => c.checked).map(c => Number(c.dataset.idx))
-      console.log('[copyBroadcast] total checkboxes in DOM:', checks.length,
-                  'checked:', selectedIndices.length,
+      // Read selection from our JS-side Set (source of truth), not the DOM
+      const sel = window._copySelection || new Set()
+      const selectedIndices = Array.from(sel).sort((a, b) => a - b)
+      const totalDom = document.querySelectorAll('.copy-meal-check').length
+      console.log('[copyBroadcast] total checkboxes in DOM:', totalDom,
+                  'checked (from Set):', selectedIndices.length,
                   'indices:', selectedIndices)
       if (!selectedIndices.length) { showToast('Select at least one meal', 'error'); return }
 
@@ -5290,10 +5314,10 @@ function wireGlobals() {
           <div style="padding:14px 20px 4px">
             <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">${dayFmt(key)}</div>
             ${groups[key].map(({ origIdx, item }) => `
-              <label for="copy-check-${origIdx}" style="display:flex;align-items:start;gap:12px;padding:10px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;transition:border-color 0.15s">
+              <div onclick="toggleCopyMeal(${origIdx}, event)" style="display:flex;align-items:start;gap:12px;padding:10px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;transition:border-color 0.15s;user-select:none">
                 <input type="checkbox" id="copy-check-${origIdx}" class="copy-meal-check" data-idx="${origIdx}" checked
-                  onchange="updateCopySummary()"
-                  style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin-top:2px;flex-shrink:0" />
+                  onclick="toggleCopyMeal(${origIdx}, event)"
+                  style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin-top:2px;flex-shrink:0;pointer-events:none" />
                 <div style="flex:1;min-width:0;pointer-events:none">
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <div style="font-size:13px;color:var(--text);font-weight:500">${esc(item._name || item.meal_name || item.recipe_name || 'Meal')}</div>
@@ -5306,7 +5330,7 @@ function wireGlobals() {
                     <span style="color:var(--fat)">F ${Math.round(item.fat ?? 0)}g</span>
                   </div>
                 </div>
-              </label>
+              </div>
             `).join('')}
           </div>
         `).join('')}
