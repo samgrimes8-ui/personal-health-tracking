@@ -2113,15 +2113,7 @@ function renderFoodItemModal(item, editingComponents) {
 function renderRecipesPage(container) {
   const allRecipes = state.recipes
   const q = (state.recipeSearch || '').trim().toLowerCase()
-  const recipes = q
-    ? allRecipes.filter(r => {
-        if ((r.name || '').toLowerCase().includes(q)) return true
-        if ((r.description || '').toLowerCase().includes(q)) return true
-        // Search ingredient names too so "chicken" finds all recipes with chicken
-        const ings = r.ingredients || []
-        return ings.some(ing => (ing.name || '').toLowerCase().includes(q))
-      })
-    : allRecipes
+  const recipes = searchRecipes(allRecipes, q)
   const unreadShares = (state.incomingShares || []).filter(s => !s.is_read)
   const allShares = state.incomingShares || []
 
@@ -2222,6 +2214,46 @@ function renderRecipeCard(r) {
       ` : ''}
     </div>
   `
+}
+
+// Rank a recipe against a search term. Higher score = better match.
+// 0 means no match (filter out).
+// Buckets (highest to lowest):
+//   100 — name starts with query (e.g. "chi" → "Chicken Tacos")
+//    80 — name contains query as whole word
+//    70 — name contains query anywhere
+//    40 — description contains query
+//    20 — an ingredient name contains query
+// Within each bucket, ties are broken by shorter name first, then alphabetical.
+function rankRecipeMatch(recipe, q) {
+  if (!q) return 1
+  const name = (recipe.name || '').toLowerCase()
+  const desc = (recipe.description || '').toLowerCase()
+  if (name.startsWith(q)) return 100
+  // "whole word" = preceded by start-of-string or non-letter
+  const wordRe = new RegExp(`(^|[^a-z0-9])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
+  if (wordRe.test(name)) return 80
+  if (name.includes(q)) return 70
+  if (desc.includes(q)) return 40
+  const ings = recipe.ingredients || []
+  if (ings.some(ing => (ing.name || '').toLowerCase().includes(q))) return 20
+  return 0
+}
+
+function searchRecipes(list, queryRaw) {
+  const q = (queryRaw || '').trim().toLowerCase()
+  if (!q) return list
+  return list
+    .map(r => ({ r, score: rankRecipeMatch(r, q) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      const an = (a.r.name || '').toLowerCase()
+      const bn = (b.r.name || '').toLowerCase()
+      if (an.length !== bn.length) return an.length - bn.length
+      return an.localeCompare(bn)
+    })
+    .map(x => x.r)
 }
 
 function buildOgCard(url, og) {
@@ -5093,14 +5125,7 @@ function wireGlobals() {
     const q = (value || '').trim().toLowerCase()
     const grid = document.getElementById('recipe-grid')
     if (!grid) return
-    const recipes = q
-      ? state.recipes.filter(r => {
-          if ((r.name || '').toLowerCase().includes(q)) return true
-          if ((r.description || '').toLowerCase().includes(q)) return true
-          const ings = r.ingredients || []
-          return ings.some(ing => (ing.name || '').toLowerCase().includes(q))
-        })
-      : state.recipes
+    const recipes = searchRecipes(state.recipes, q)
     if (!recipes.length) {
       grid.innerHTML = `<div class="log-card" style="grid-column:1/-1"><div class="log-empty" style="padding:40px">No recipes match "${esc(q)}".</div></div>`
     } else {
