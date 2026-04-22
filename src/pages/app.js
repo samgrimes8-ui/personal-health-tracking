@@ -1361,6 +1361,9 @@ function renderMealPlanView(planner) {
                       </div>
                       <div style="font-size:10px;color:var(--text3);margin-top:1px">${Math.round(m.calories || 0)} kcal · P${Math.round(m.protein||0)}g C${Math.round(m.carbs||0)}g F${Math.round(m.fat||0)}g</div>
                     </div>
+                    ${m.recipe_id ? `<button onclick="viewPlannerRecipe('${m.recipe_id}', event)"
+                      title="View recipe"
+                      style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1">📖</button>` : ''}
                     <button onclick="openMovePlannerMealMenu('${m.id}', '${m.actual_date || dateStr}', this);event.stopPropagation()"
                       style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1"
                       title="Move to another day">↔</button>
@@ -5264,12 +5267,47 @@ function wireGlobals() {
     if (ev) { ev.preventDefault(); ev.stopPropagation() }
     if (!recipeId) return
     try {
-      // Already in our library?
+      // 1) Already in the user's library?
       let recipe = (state.recipes || []).find(r => r.id === recipeId)
+
+      // 2) Try a direct read (works if RLS allows cross-user reads)
+      if (!recipe) recipe = await getRecipeByIdPublic(recipeId)
+
+      // 3) Fall back to the broadcast-auth API route (bypasses RLS via
+      //    service-role + broadcast_token auth)
       if (!recipe) {
-        recipe = await getRecipeByIdPublic(recipeId)
-        if (!recipe) { showToast('Recipe is not shared publicly', 'error'); return }
-        // Inject temporarily so openRecipeModal can find it
+        const bc = window._pendingCopyBroadcast
+        if (bc?.share_token) {
+          try {
+            const resp = await fetch(`/api/broadcast-recipe?broadcast_token=${encodeURIComponent(bc.share_token)}&recipe_id=${encodeURIComponent(recipeId)}`)
+            if (resp.ok) recipe = await resp.json()
+          } catch {}
+        }
+      }
+
+      if (!recipe) { showToast('Recipe unavailable — the provider may have unpublished it', 'error'); return }
+
+      // Inject a read-only copy so openRecipeModal can find it in state.recipes
+      if (!(state.recipes || []).some(r => r.id === recipeId)) {
+        if (!state.recipes) state.recipes = []
+        state.recipes.push({ ...recipe, _readonly: true })
+      }
+      window.openRecipeModal(recipeId, 'view')
+    } catch (err) { showToast('Error loading recipe: ' + err.message, 'error') }
+  }
+
+  // Used by the meal planner: fetches a recipe the user already has access to
+  // in their own library and opens the recipe modal. Falls back to
+  // getRecipeByIdPublic in case the recipe came from a copied broadcast and
+  // isn't cached in state yet.
+  window.viewPlannerRecipe = async (recipeId, ev) => {
+    if (ev) { ev.preventDefault(); ev.stopPropagation() }
+    if (!recipeId) return
+    try {
+      let recipe = (state.recipes || []).find(r => r.id === recipeId)
+      if (!recipe) recipe = await getRecipeByIdPublic(recipeId)
+      if (!recipe) { showToast('Recipe not found in your library', 'error'); return }
+      if (!(state.recipes || []).some(r => r.id === recipeId)) {
         if (!state.recipes) state.recipes = []
         state.recipes.push({ ...recipe, _readonly: true })
       }
