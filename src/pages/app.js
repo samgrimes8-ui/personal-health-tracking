@@ -2365,19 +2365,18 @@ function renderPlanRecipeModal(recipe) {
     const d = new Date(today)
     d.setDate(today.getDate() + i)
     const dateStr = localDateStr(d)
-    // Get week start (Sunday)
-    const ws = new Date(d)
-    ws.setDate(d.getDate() - d.getDay())
     days.push({
       dateStr,
-      label: DAYS_SHORT[d.getDay()],
       dayNum: d.getDate(),
       month: d.toLocaleDateString([], { month: 'short' }),
-      weekStart: localDateStr(ws),
       isToday: i === 0,
       isFirstOfMonth: d.getDate() === 1 || i === 0
     })
   }
+
+  // Pad the start so day 1 (today) lands on the correct column (Sun=0 … Sat=6)
+  const leadingBlanks = today.getDay()
+  const blankCells = Array(leadingBlanks).fill(null)
 
   return `
     <div style="padding:24px 24px 20px">
@@ -2389,6 +2388,7 @@ function renderPlanRecipeModal(recipe) {
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Pick day(s) to eat this</div>
       <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:20px" id="plan-day-grid">
         ${DAYS_SHORT.map(d => `<div style="text-align:center;font-size:10px;color:var(--text3);padding:2px 0">${d}</div>`).join('')}
+        ${blankCells.map(() => `<div></div>`).join('')}
         ${days.map(d => `
           <button data-date="${d.dateStr}"
             onclick="togglePlanDay('${d.dateStr}')"
