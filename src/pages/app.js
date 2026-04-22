@@ -5169,6 +5169,8 @@ function wireGlobals() {
     window._pendingCopyBroadcast = null
     window._copySelection = null
     window._copyMealTypes = null
+    window._copyCalMonth = null
+    closeCopyCalendar()
   }
 
   window.toggleAllCopyMeals = (checked) => {
@@ -5320,6 +5322,122 @@ function wireGlobals() {
       : `Plan runs ${startFmt} → ${endFmt} (${planDays} days)`
   }
 
+  // ── Calendar popup for start date ─────────────────────────────
+  // Uses purely local-date math (no UTC conversion) so timezones don't shift days.
+  function formatStartLabel(dateStr) {
+    if (!dateStr) return 'Pick a date'
+    const [y, m, d] = dateStr.split('-').map(Number)
+    const dt = new Date(y, m - 1, d)
+    return dt.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  }
+  window.formatStartLabel = formatStartLabel
+
+  window.toggleCopyCalendar = (ev) => {
+    if (ev) { ev.preventDefault(); ev.stopPropagation() }
+    const popup = document.getElementById('copy-calendar-popup')
+    if (!popup) return
+    if (popup.style.display === 'none') {
+      // Render the calendar at the currently-selected month
+      const current = document.getElementById('copy-start-date')?.value || localDateStr(new Date())
+      const [y, m] = current.split('-').map(Number)
+      window._copyCalMonth = { year: y, month: m - 1 } // month is 0-indexed
+      renderCopyCalendar()
+      popup.style.display = 'block'
+      // Close on outside click
+      setTimeout(() => {
+        document.addEventListener('click', handleCopyCalOutsideClick)
+      }, 0)
+    } else {
+      closeCopyCalendar()
+    }
+  }
+
+  function handleCopyCalOutsideClick(e) {
+    const popup = document.getElementById('copy-calendar-popup')
+    const btn = document.getElementById('copy-start-date-btn')
+    if (!popup) return
+    if (popup.contains(e.target) || (btn && btn.contains(e.target))) return
+    closeCopyCalendar()
+  }
+
+  function closeCopyCalendar() {
+    const popup = document.getElementById('copy-calendar-popup')
+    if (popup) popup.style.display = 'none'
+    document.removeEventListener('click', handleCopyCalOutsideClick)
+  }
+  window.closeCopyCalendar = closeCopyCalendar
+
+  window.copyCalNav = (delta) => {
+    if (!window._copyCalMonth) return
+    const next = new Date(window._copyCalMonth.year, window._copyCalMonth.month + delta, 1)
+    window._copyCalMonth = { year: next.getFullYear(), month: next.getMonth() }
+    renderCopyCalendar()
+  }
+
+  window.copyCalPick = (dateStr) => {
+    const input = document.getElementById('copy-start-date')
+    const label = document.getElementById('copy-start-date-label')
+    if (input) input.value = dateStr
+    if (label) label.textContent = formatStartLabel(dateStr)
+    closeCopyCalendar()
+    updateCopyEndPreview()
+  }
+
+  function renderCopyCalendar() {
+    const popup = document.getElementById('copy-calendar-popup')
+    if (!popup || !window._copyCalMonth) return
+    const { year, month } = window._copyCalMonth
+    const todayStr = localDateStr(new Date())
+    const selectedStr = document.getElementById('copy-start-date')?.value || todayStr
+
+    const firstOfMonth = new Date(year, month, 1)
+    const startWeekday = firstOfMonth.getDay() // 0=Sun
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+    const monthName = firstOfMonth.toLocaleDateString([], { month: 'long', year: 'numeric' })
+
+    // Weekday header (Sun..Sat)
+    const weekdayLabels = ['S','M','T','W','T','F','S']
+    const headerCells = weekdayLabels.map(w =>
+      `<div style="text-align:center;font-size:10px;color:var(--text3);padding:6px 0;font-weight:500;text-transform:uppercase;letter-spacing:0.04em">${w}</div>`
+    ).join('')
+
+    // Pad start, then days, then pad end to complete grid
+    const cells = []
+    for (let i = 0; i < startWeekday; i++) cells.push('<div></div>')
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+      const isToday = dateStr === todayStr
+      const isPast = dateStr < todayStr
+      const isSelected = dateStr === selectedStr
+
+      let bg = 'transparent', fg = 'var(--text)', border = '1px solid transparent'
+      if (isPast) { fg = 'var(--text3)'; bg = 'transparent' }
+      if (isToday) { border = '1px solid var(--accent)'; fg = 'var(--accent)' }
+      if (isSelected) { bg = 'var(--accent)'; fg = '#1a1500'; border = '1px solid var(--accent)' }
+
+      cells.push(`
+        <button type="button" ${isPast ? 'disabled' : ''} onclick="copyCalPick('${dateStr}')"
+          style="aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:12px;border-radius:8px;background:${bg};color:${fg};border:${border};cursor:${isPast?'not-allowed':'pointer'};font-family:inherit;padding:0;opacity:${isPast?0.4:1};transition:background 0.12s">
+          ${day}
+        </button>
+      `)
+    }
+
+    popup.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <button type="button" onclick="copyCalNav(-1)"
+          style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:transparent;border:1px solid var(--border2);border-radius:6px;color:var(--text2);cursor:pointer;font-family:inherit">‹</button>
+        <div style="font-size:14px;font-weight:500;color:var(--text)">${monthName}</div>
+        <button type="button" onclick="copyCalNav(1)"
+          style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:transparent;border:1px solid var(--border2);border-radius:6px;color:var(--text2);cursor:pointer;font-family:inherit">›</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
+        ${headerCells}
+        ${cells.join('')}
+      </div>
+    `
+  }
+
   window.confirmCopyBroadcast = async () => {
     const broadcast = window._pendingCopyBroadcast
     if (!broadcast) return
@@ -5415,11 +5533,15 @@ function wireGlobals() {
       </div>
 
       <!-- Start date picker -->
-      <div style="padding:14px 20px;border-bottom:1px solid var(--border);background:var(--bg3)">
-        <label for="copy-start-date" style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:6px">Start on</label>
-        <input type="date" id="copy-start-date" value="${todayStr}" min="${todayStr}"
-          onchange="updateCopyEndPreview()"
-          style="width:100%;padding:9px 10px;background:var(--bg2);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px" />
+      <div style="padding:14px 20px;border-bottom:1px solid var(--border);background:var(--bg3);position:relative">
+        <label style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:6px">Start on</label>
+        <input type="hidden" id="copy-start-date" value="${todayStr}" />
+        <button type="button" id="copy-start-date-btn" onclick="toggleCopyCalendar(event)"
+          style="width:100%;padding:11px 12px;background:var(--bg2);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px;cursor:pointer;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span id="copy-start-date-label">${formatStartLabel(todayStr)}</span>
+          <span style="color:var(--text3);font-size:14px">📅</span>
+        </button>
+        <div id="copy-calendar-popup" style="display:none;position:absolute;top:100%;left:20px;right:20px;margin-top:4px;z-index:20;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);box-shadow:0 10px 30px rgba(0,0,0,0.4);padding:14px"></div>
         <div id="copy-end-preview" style="font-size:11px;color:var(--text3);margin-top:6px"></div>
         <div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4">Meals will fill one per day. You can move them around later from the planner.</div>
       </div>
@@ -5495,8 +5617,8 @@ function wireGlobals() {
                   <div id="copy-meal-type-${origIdx}" style="display:flex;gap:4px;flex-wrap:wrap">${typeOptions}</div>
                   ${item.recipe_id ? `
                     <button type="button" onclick="viewCopyRecipe('${item.recipe_id}', event)"
-                      style="margin-left:auto;padding:4px 10px;background:transparent;border:1px solid var(--border2);border-radius:var(--r);font-size:10px;color:var(--text2);font-family:inherit;cursor:pointer;white-space:nowrap">
-                      View recipe →
+                      style="margin-left:auto;padding:5px 11px;background:rgba(232,197,71,0.08);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);font-size:11px;color:var(--accent);font-family:inherit;cursor:pointer;white-space:nowrap;font-weight:500">
+                      📖 View recipe
                     </button>
                   ` : ''}
                 </div>
