@@ -2,7 +2,7 @@ import { signOut } from '../lib/auth.js'
 import {
   getGoals, saveGoals as dbSaveGoals,
   getMealLog, addMealEntry, updateMealEntry, deleteMealEntry,
-  getPlannerWeek, addPlannerMeal, updatePlannerMeal, deletePlannerMeal,
+  getPlannerWeek, addPlannerMeal, updatePlannerMeal, deletePlannerMeal, movePlannerMeal,
   getUsageSummary, getAdminUserOverview, setUserPrivileges,
   getRecipes, upsertRecipe, deleteRecipe, getRecipeByName,
   getWeeksWithMeals, getPlannerRange,
@@ -1306,7 +1306,11 @@ function renderMealPlanView(planner) {
         const isToday = dateStr === localDateStr(new Date())
         const isPast = dateStr < localDateStr(new Date()) && !isToday
 
-        return `<div style="background:var(--bg2);border:1px solid ${isToday ? 'rgba(232,197,71,0.4)' : 'var(--border)'};border-radius:var(--r2);overflow:hidden;opacity:${isPast ? '0.7' : '1'}">
+        return `<div style="background:var(--bg2);border:1px solid ${isToday ? 'rgba(232,197,71,0.4)' : 'var(--border)'};border-radius:var(--r2);overflow:hidden;opacity:${isPast ? '0.7' : '1'}"
+          data-planner-day="${di}" data-planner-date="${dateStr}"
+          ondragover="handlePlannerDragOver(event, this)"
+          ondragleave="handlePlannerDragLeave(event, this)"
+          ondrop="handlePlannerDrop(event, '${dateStr}', this)">
           <!-- Day header -->
           <div style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;background:${isToday ? 'rgba(232,197,71,0.06)' : 'var(--bg3)'}">
             <div style="display:flex;align-items:center;gap:8px">
@@ -1341,8 +1345,14 @@ function renderMealPlanView(planner) {
                 <!-- Meals in this slot -->
                 ${slotMeals.length ? slotMeals.map(m => {
                   const isLeftover = m.recipe_id && recipeFirstDay[m.recipe_id] && recipeFirstDay[m.recipe_id] !== m.actual_date
-                  return `<div style="display:flex;align-items:center;gap:8px;padding:7px 8px;background:var(--bg3);border-radius:var(--r);margin-bottom:3px;cursor:pointer"
+                  return `<div style="display:flex;align-items:center;gap:6px;padding:7px 8px;background:var(--bg3);border-radius:var(--r);margin-bottom:3px;cursor:pointer"
+                    draggable="true"
+                    data-meal-id="${m.id}"
+                    ondragstart="handlePlannerDragStart(event, '${m.id}')"
+                    ondragend="handlePlannerDragEnd(event)"
                     onclick="openEditModal('${m.id}', 'planner', {d:${di}})">
+                    <span style="color:var(--text3);font-size:14px;cursor:grab;user-select:none;padding:0 2px;flex-shrink:0;line-height:1"
+                      title="Drag to another day">⋮⋮</span>
                     <div style="flex:1;min-width:0">
                       <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
                         ${isLeftover ? '<span style="font-size:10px;background:rgba(91,156,246,0.15);color:var(--carbs);border-radius:3px;padding:1px 4px;margin-right:4px">🥡 Leftover</span>' : ''}
@@ -1350,6 +1360,9 @@ function renderMealPlanView(planner) {
                       </div>
                       <div style="font-size:10px;color:var(--text3);margin-top:1px">${Math.round(m.calories || 0)} kcal · P${Math.round(m.protein||0)}g C${Math.round(m.carbs||0)}g F${Math.round(m.fat||0)}g</div>
                     </div>
+                    <button onclick="openMovePlannerMealMenu('${m.id}', '${m.actual_date || dateStr}', this);event.stopPropagation()"
+                      style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1"
+                      title="Move to another day">↔</button>
                     <button onclick="deletePlannerMealHandler('${m.id}',${di},0);event.stopPropagation()"
                       style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1">×</button>
                   </div>`
@@ -5129,8 +5142,6 @@ function wireGlobals() {
 
       // Initialize selection state: by default, ALL meals are selected
       window._copySelection = new Set(broadcast.plan_data.map((_, i) => i))
-      // Default spacing is 'pack' (one meal per day, sequential)
-      window._copySpacing = 'pack'
 
       // Default target = current week start (Sunday)
       const defaultWeek = getWeekStart()
@@ -5152,7 +5163,6 @@ function wireGlobals() {
     document.getElementById('copy-broadcast-modal').classList.remove('open')
     window._pendingCopyBroadcast = null
     window._copySelection = null
-    window._copySpacing = null
   }
 
   window.toggleAllCopyMeals = (checked) => {
@@ -5196,45 +5206,12 @@ function wireGlobals() {
       else if (selected === total) { headerCheck.checked = true; headerCheck.indeterminate = false }
       else { headerCheck.checked = false; headerCheck.indeterminate = true }
     }
-    // Show spacing toggle only when user has deselected some meals
-    const spacingRow = document.getElementById('copy-spacing-row')
-    if (spacingRow) {
-      const isPartial = selected > 0 && selected < total
-      spacingRow.style.display = isPartial ? 'block' : 'none'
-    }
     // Refresh end-date preview since selection affects it
     if (typeof updateCopyEndPreview === 'function') updateCopyEndPreview()
   }
 
-  // Choose spacing mode for partial copies.
-  window.setCopySpacing = (mode) => {
-    window._copySpacing = mode
-    const packBtn = document.getElementById('copy-space-pack')
-    const gapsBtn = document.getElementById('copy-space-gaps')
-    const hint = document.getElementById('copy-spacing-hint')
-    const startInput = document.getElementById('copy-start-date')
-    const startStr = startInput?.value || ''
-    if (packBtn && gapsBtn) {
-      const active = 'background:var(--accent);color:#1a1500;font-weight:600'
-      const inactive = 'background:transparent;color:var(--text2);font-weight:500'
-      if (mode === 'pack') {
-        packBtn.setAttribute('style', `flex:1;padding:7px 10px;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;cursor:pointer;${active}`)
-        gapsBtn.setAttribute('style', `flex:1;padding:7px 10px;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;cursor:pointer;${inactive}`)
-      } else {
-        packBtn.setAttribute('style', `flex:1;padding:7px 10px;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;cursor:pointer;${inactive}`)
-        gapsBtn.setAttribute('style', `flex:1;padding:7px 10px;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;cursor:pointer;${active}`)
-      }
-    }
-    if (hint) {
-      hint.textContent = mode === 'pack'
-        ? 'Meals fill sequential days, one per day starting from your start date.'
-        : 'Gaps from the original plan are preserved. Skipped meals leave empty days in between.'
-    }
-    if (typeof updateCopyEndPreview === 'function') updateCopyEndPreview()
-  }
-
-  // Live preview of when the plan will end, based on the chosen start date,
-  // selected meals, and spacing mode. Matches what copyBroadcastToPlanner does.
+  // Live preview of when the plan will end, based on the chosen start date
+  // and the number of meals selected (one meal per day).
   window.updateCopyEndPreview = () => {
     const input = document.getElementById('copy-start-date')
     const out = document.getElementById('copy-end-preview')
@@ -5243,32 +5220,10 @@ function wireGlobals() {
     const startStr = input.value
     if (!startStr) { out.textContent = ''; return }
 
-    const allItems = broadcast.plan_data || []
-    const sel = window._copySelection || new Set()
-    const selectedCount = sel.size
+    const selectedCount = (window._copySelection || new Set()).size
     if (selectedCount === 0) { out.textContent = ''; return }
 
-    const isPartial = selectedCount < allItems.length
-    const spacing = window._copySpacing || 'pack'
-
-    // Compute how many days the copy will span.
-    //   pack (or all selected) → N days, one meal per day
-    //   keep-gaps + partial → distance between first and last selected meal in original plan
-    let planDays = selectedCount
-    if (isPartial && spacing === 'keep-gaps') {
-      const selectedItems = [...sel].map(i => allItems[i]).filter(Boolean)
-      const allDates = [...new Set(allItems.map(i => i.actual_date).filter(Boolean))].sort()
-      const dateToDayIdx = new Map(allDates.map((d, i) => [d, i]))
-      const selDayIdxs = selectedItems
-        .map(it => dateToDayIdx.get(it.actual_date))
-        .filter(x => x !== undefined)
-      if (selDayIdxs.length > 0) {
-        const firstIdx = Math.min(...selDayIdxs)
-        const lastIdx = Math.max(...selDayIdxs)
-        planDays = Math.max(selectedCount, lastIdx - firstIdx + 1)
-      }
-    }
-
+    const planDays = selectedCount
     const [y, m, d] = startStr.split('-').map(Number)
     const startD = new Date(y, m - 1, d)
     const endD = new Date(y, m - 1, d + planDays - 1)
@@ -5290,10 +5245,9 @@ function wireGlobals() {
       if (!selectedIndices.length) { showToast('Select at least one meal', 'error'); return }
 
       const startDate = document.getElementById('copy-start-date')?.value || localDateStr(new Date())
-      const spacing = window._copySpacing || 'pack'
 
       if (btn) { btn.disabled = true; btn.textContent = 'Copying...' }
-      const count = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices, spacing)
+      const count = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices)
 
       // Compute the Sunday-based week that contains the start date,
       // navigate the planner there, and reload it so the new meals are visible
@@ -5381,24 +5335,7 @@ function wireGlobals() {
           onchange="updateCopyEndPreview()"
           style="width:100%;padding:9px 10px;background:var(--bg2);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px" />
         <div id="copy-end-preview" style="font-size:11px;color:var(--text3);margin-top:6px"></div>
-      </div>
-
-      <!-- Spacing toggle (only shown when user has deselected some meals) -->
-      <div id="copy-spacing-row" style="display:none;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--bg3)">
-        <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">Day spacing</div>
-        <div style="display:flex;gap:6px;background:var(--bg2);padding:3px;border-radius:var(--r);border:1px solid var(--border2)">
-          <button id="copy-space-pack" onclick="setCopySpacing('pack')"
-            style="flex:1;padding:7px 10px;background:var(--accent);color:#1a1500;border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer">
-            Pack together
-          </button>
-          <button id="copy-space-gaps" onclick="setCopySpacing('keep-gaps')"
-            style="flex:1;padding:7px 10px;background:transparent;color:var(--text2);border:none;border-radius:calc(var(--r) - 2px);font-family:inherit;font-size:12px;font-weight:500;cursor:pointer">
-            Keep gaps
-          </button>
-        </div>
-        <div id="copy-spacing-hint" style="font-size:11px;color:var(--text3);margin-top:6px;line-height:1.4">
-          Meals fill sequential days starting ${todayStr}. Useful for meal-prep runs.
-        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4">Meals will fill one per day. You can move them around later from the planner.</div>
       </div>
 
       <!-- Select-all row -->
@@ -6331,6 +6268,192 @@ function wireGlobals() {
       state.excludedIngredients = new Set()
       renderPage()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  // ── Move planner meal (drag + drop + tap menu) ───────────────────
+  // Perform the actual move: call DB, then reload the current week so
+  // the meal appears on its new day. If the target date is in a different
+  // Sunday-week, navigate there so the user sees the result.
+  async function performMovePlannerMeal(mealId, targetDate) {
+    const current = localDateStr(new Date(state.weekStart + 'T00:00:00'))
+    try {
+      await movePlannerMeal(state.user.id, mealId, targetDate)
+      // Compute the Sunday-week containing targetDate
+      const [ty, tm, td] = targetDate.split('-').map(Number)
+      const tDate = new Date(ty, tm - 1, td)
+      const sunDate = new Date(tDate)
+      sunDate.setDate(sunDate.getDate() - sunDate.getDay())
+      const pad = n => String(n).padStart(2, '0')
+      const targetWeek = `${sunDate.getFullYear()}-${pad(sunDate.getMonth()+1)}-${pad(sunDate.getDate())}`
+      if (targetWeek !== current) state.weekStart = targetWeek
+      // Reload planner for the week now being viewed
+      const planner = await getPlannerWeek(state.user.id, state.weekStart)
+      if (planner) state.planner = planner
+      state.groceryItems = null
+      renderPage()
+      const fmt = tDate.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+      showToast(`Moved to ${fmt}`, 'success')
+    } catch (err) {
+      showToast('Error moving meal: ' + err.message, 'error')
+    }
+  }
+
+  // — Drag and drop —
+  window.handlePlannerDragStart = (ev, mealId) => {
+    try {
+      ev.dataTransfer.effectAllowed = 'move'
+      ev.dataTransfer.setData('text/plain', String(mealId))
+      // Store on window as a fallback since some browsers don't expose dataTransfer
+      // during dragover for security, so drop targets can't read it to highlight
+      window._draggingMealId = mealId
+      if (ev.currentTarget?.style) ev.currentTarget.style.opacity = '0.5'
+    } catch {}
+  }
+
+  window.handlePlannerDragEnd = (ev) => {
+    window._draggingMealId = null
+    if (ev.currentTarget?.style) ev.currentTarget.style.opacity = '1'
+    // Clear any lingering drop-target highlights
+    document.querySelectorAll('[data-planner-day]').forEach(el => {
+      el.style.outline = ''
+      el.style.outlineOffset = ''
+    })
+  }
+
+  window.handlePlannerDragOver = (ev, el) => {
+    if (!window._draggingMealId) return
+    ev.preventDefault()
+    ev.dataTransfer.dropEffect = 'move'
+    el.style.outline = '2px solid var(--accent)'
+    el.style.outlineOffset = '-2px'
+  }
+
+  window.handlePlannerDragLeave = (ev, el) => {
+    // Only clear highlight if we're leaving the element itself (not entering a child)
+    if (el.contains(ev.relatedTarget)) return
+    el.style.outline = ''
+    el.style.outlineOffset = ''
+  }
+
+  window.handlePlannerDrop = async (ev, targetDate, el) => {
+    ev.preventDefault()
+    el.style.outline = ''
+    el.style.outlineOffset = ''
+    const mealId = ev.dataTransfer.getData('text/plain') || window._draggingMealId
+    window._draggingMealId = null
+    if (!mealId) return
+    // Don't move if dropped on the same day it came from
+    const meal = findPlannerMealById(mealId)
+    if (meal?.actual_date === targetDate) return
+    await performMovePlannerMeal(mealId, targetDate)
+  }
+
+  function findPlannerMealById(mealId) {
+    if (!state.planner?.meals) return null
+    for (const day of state.planner.meals) {
+      const found = (day || []).find(m => String(m.id) === String(mealId))
+      if (found) return found
+    }
+    return null
+  }
+
+  // — Tap-to-move menu (mobile-friendly) —
+  // Shows a small popup anchored to the button with a date picker and
+  // quick-select day buttons for the current week.
+  window.openMovePlannerMealMenu = (mealId, currentDate, anchor) => {
+    closeMovePlannerMealMenu() // close any existing
+
+    const menu = document.createElement('div')
+    menu.id = 'move-meal-menu'
+    menu.style.cssText = `
+      position:absolute;z-index:1000;background:var(--bg2);border:1px solid var(--border2);
+      border-radius:var(--r);box-shadow:0 8px 24px rgba(0,0,0,0.4);padding:10px;
+      min-width:220px;max-width:280px;font-family:inherit;font-size:13px
+    `
+
+    // Compute the current week's days (Sun..Sat) for quick-pick buttons
+    const ws = new Date(state.weekStart + 'T00:00:00')
+    const pad = n => String(n).padStart(2, '0')
+    const daysHtml = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(ws); d.setDate(d.getDate() + i)
+      const dateStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
+      const label = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+      const isCurrent = dateStr === currentDate
+      return `<button onclick="confirmMovePlannerMeal('${mealId}', '${dateStr}')"
+        ${isCurrent ? 'disabled' : ''}
+        style="display:block;width:100%;text-align:left;padding:7px 10px;margin-bottom:2px;
+               background:${isCurrent ? 'var(--bg3)' : 'transparent'};color:${isCurrent ? 'var(--text3)' : 'var(--text)'};
+               border:none;border-radius:6px;font-family:inherit;font-size:12px;
+               cursor:${isCurrent ? 'default' : 'pointer'};opacity:${isCurrent ? '0.5' : '1'}">
+        ${label}${isCurrent ? ' · current' : ''}
+      </button>`
+    }).join('')
+
+    menu.innerHTML = `
+      <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px;padding:0 4px">Move to</div>
+      ${daysHtml}
+      <div style="border-top:1px solid var(--border);margin:8px 0 6px"></div>
+      <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px;padding:0 4px">Pick any date</div>
+      <input type="date" id="move-meal-date-input" value="${currentDate}"
+        style="width:100%;padding:7px 8px;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-family:inherit;font-size:12px" />
+      <button onclick="confirmMovePlannerMealFromInput('${mealId}', '${currentDate}')"
+        style="width:100%;margin-top:6px;padding:8px;background:var(--accent);color:#1a1500;border:none;border-radius:6px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer">
+        Move
+      </button>
+    `
+
+    // Position below the anchor
+    const rect = anchor.getBoundingClientRect()
+    document.body.appendChild(menu)
+    // Adjust if it would go off-screen
+    const menuRect = menu.getBoundingClientRect()
+    let top = rect.bottom + window.scrollY + 4
+    let left = rect.right + window.scrollX - menuRect.width
+    if (left < 8) left = 8
+    if (left + menuRect.width > window.innerWidth - 8) left = window.innerWidth - menuRect.width - 8
+    // If it would overflow bottom, flip above
+    if (rect.bottom + menuRect.height > window.innerHeight) {
+      top = rect.top + window.scrollY - menuRect.height - 4
+    }
+    menu.style.top = `${top}px`
+    menu.style.left = `${left}px`
+
+    // Close on outside click / Escape
+    setTimeout(() => {
+      document.addEventListener('click', handleMoveMenuOutsideClick, { once: false })
+      document.addEventListener('keydown', handleMoveMenuEscape)
+    }, 0)
+  }
+
+  function handleMoveMenuOutsideClick(ev) {
+    const menu = document.getElementById('move-meal-menu')
+    if (!menu) { document.removeEventListener('click', handleMoveMenuOutsideClick); return }
+    if (!menu.contains(ev.target)) closeMovePlannerMealMenu()
+  }
+
+  function handleMoveMenuEscape(ev) {
+    if (ev.key === 'Escape') closeMovePlannerMealMenu()
+  }
+
+  function closeMovePlannerMealMenu() {
+    const menu = document.getElementById('move-meal-menu')
+    if (menu) menu.remove()
+    document.removeEventListener('click', handleMoveMenuOutsideClick)
+    document.removeEventListener('keydown', handleMoveMenuEscape)
+  }
+
+  window.confirmMovePlannerMeal = async (mealId, targetDate) => {
+    closeMovePlannerMealMenu()
+    await performMovePlannerMeal(mealId, targetDate)
+  }
+
+  window.confirmMovePlannerMealFromInput = async (mealId, currentDate) => {
+    const input = document.getElementById('move-meal-date-input')
+    const target = input?.value
+    if (!target) { showToast('Pick a date', 'error'); return }
+    if (target === currentDate) { closeMovePlannerMealMenu(); return }
+    closeMovePlannerMealMenu()
+    await performMovePlannerMeal(mealId, target)
   }
 
   // ── Recipe handlers ─────────────────────────────────────────────
