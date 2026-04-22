@@ -7301,7 +7301,17 @@ function wireGlobals() {
 
       // Save directly via targeted update — only touches instructions column
       try {
-        await saveRecipeInstructions(state.user.id, recipeId, result)
+        const saved = await saveRecipeInstructions(state.user.id, recipeId, result)
+        // Re-sync from the authoritative DB value so state.recipes reflects
+        // exactly what persisted. Belt-and-suspenders: if anything else
+        // mutates the object later (e.g. a stale getRecipes refresh), the
+        // instructions can't silently vanish.
+        if (saved?.instructions) {
+          recipe.instructions = saved.instructions
+          if (state.editingRecipe && state.editingRecipe.id === recipeId) {
+            state.editingRecipe.instructions = saved.instructions
+          }
+        }
         showToast('Instructions generated and saved!', 'success')
       } catch (saveErr) {
         console.error('Save failed:', saveErr)
@@ -7389,10 +7399,14 @@ function wireGlobals() {
   }
 
   window.openRecipeModal = (id, mode = 'view') => {
-    state.recipeTab = 'ingredients'
-    state.recipeServings = null
     const recipe = state.recipes.find(r => r.id === id)
     if (!recipe) return
+    // Default to the tab that makes sense: Instructions if they exist,
+    // Ingredients otherwise. Users were getting confused when they'd generate
+    // instructions, close the modal, and reopen to find themselves on the
+    // Ingredients tab with the instructions "invisible" until they switched.
+    state.recipeTab = recipe.instructions?.steps?.length ? 'instructions' : 'ingredients'
+    state.recipeServings = null
     state.editingRecipe = JSON.parse(JSON.stringify(recipe))
     document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, mode)
     document.getElementById('recipe-modal').classList.add('open')
