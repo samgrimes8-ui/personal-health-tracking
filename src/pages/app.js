@@ -2121,6 +2121,12 @@ function renderRecipeModalContent(recipe, mode = 'view') {
   const isNew = !recipe.id
   const ingredients = recipe.ingredients || []
   const isView = mode === 'view' && !isNew
+  // Read-only when the current user doesn't own the recipe — e.g. viewing
+  // another provider's recipe from a broadcast preview. They can see the
+  // details but can't edit, delete, plan, or generate instructions.
+  const currentUserId = window.state?.user?.id
+  const isReadOnly = !!(recipe.user_id && currentUserId && recipe.user_id !== currentUserId)
+  const isViewOwned = isView && !isReadOnly
 
   return `
     <div style="position:relative">
@@ -2160,15 +2166,22 @@ function renderRecipeModalContent(recipe, mode = 'view') {
               <span class="macro-pill pill-c" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.carbs)}g C</span>
               <span class="macro-pill pill-f" style="font-size:11px;padding:2px 7px;white-space:nowrap">${Math.round(recipe.fat)}g F</span>
             </div>
-            <button onclick="openPlanRecipeModal('${recipe.id}')"
-              style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:7px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
-              📅 Plan
-            </button>
-            <button onclick="shareRecipe('${recipe.id}')"
-              id="share-btn-${recipe.id}"
-              style="background:${recipe.is_shared ? 'rgba(76,175,130,0.15)' : 'var(--bg3)'};color:${recipe.is_shared ? 'var(--protein)' : 'var(--text3)'};border:1px solid ${recipe.is_shared ? 'var(--protein)' : 'var(--border2)'};border-radius:var(--r);padding:7px 10px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
-              ${recipe.is_shared ? '🔗 Shared' : '🔗 Share'}
-            </button>
+            ${!isReadOnly ? `
+              <button onclick="openPlanRecipeModal('${recipe.id}')"
+                style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:7px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
+                📅 Plan
+              </button>
+              <button onclick="shareRecipe('${recipe.id}')"
+                id="share-btn-${recipe.id}"
+                style="background:${recipe.is_shared ? 'rgba(76,175,130,0.15)' : 'var(--bg3)'};color:${recipe.is_shared ? 'var(--protein)' : 'var(--text3)'};border:1px solid ${recipe.is_shared ? 'var(--protein)' : 'var(--border2)'};border-radius:var(--r);padding:7px 10px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
+                ${recipe.is_shared ? '🔗 Shared' : '🔗 Share'}
+              </button>
+            ` : ''}
+          </div>
+        ` : ''}
+        ${isReadOnly ? `
+          <div style="margin-top:10px;padding:8px 10px;background:rgba(122,180,232,0.08);border:1px solid rgba(122,180,232,0.25);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.5">
+            👁 Preview — this recipe belongs to another provider. Copy their meal plan to your planner to save the recipe to your library, then you'll be able to edit servings, generate instructions, and plan meals with it.
           </div>
         ` : ''}
       </div>
@@ -2269,10 +2282,12 @@ function renderRecipeModalContent(recipe, mode = 'view') {
             </div>
             ${!recipe.instructions?.steps?.length ? `
               <div style="padding:20px;text-align:center;background:var(--bg3);border-radius:var(--r);border:1px dashed var(--border2)">
-                <div style="font-size:13px;color:var(--text2);margin-bottom:12px">No instructions yet</div>
-                <button onclick="generateInstructionsHandler('${recipe.id}')" id="gen-instr-btn" class="pm-analyze-btn" style="margin:0">
-                  ✨ Generate cooking instructions with AI
-                </button>
+                <div style="font-size:13px;color:var(--text2);margin-bottom:${isReadOnly ? '0' : '12px'}">No instructions yet</div>
+                ${!isReadOnly ? `
+                  <button onclick="generateInstructionsHandler('${recipe.id}')" id="gen-instr-btn" class="pm-analyze-btn" style="margin:0">
+                    ✨ Generate cooking instructions with AI
+                  </button>
+                ` : ''}
               </div>
             ` : `
               ${recipe.instructions.prep_time || recipe.instructions.cook_time ? `
@@ -2291,11 +2306,13 @@ function renderRecipeModalContent(recipe, mode = 'view') {
                   <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:8px">Tips</div>
                   ${recipe.instructions.tips.map(t => `<div style="font-size:13px;color:var(--text2);margin-bottom:4px">• ${esc(t)}</div>`).join('')}
                 </div>` : ''}
-              <button onclick="generateInstructionsHandler('${recipe.id}')" id="gen-instr-btn"
-                style="margin-top:14px;background:none;border:1px solid var(--border);border-radius:var(--r);padding:6px 12px;font-size:12px;color:var(--text3);cursor:pointer;font-family:inherit;width:100%"
-                onmouseover="this.style.color='var(--carbs)'" onmouseout="this.style.color='var(--text3)'">
-                ✨ Regenerate instructions
+              ${!isReadOnly ? `
+                <button onclick="generateInstructionsHandler('${recipe.id}')" id="gen-instr-btn"
+                  style="margin-top:14px;background:none;border:1px solid var(--border);border-radius:var(--r);padding:6px 12px;font-size:12px;color:var(--text3);cursor:pointer;font-family:inherit;width:100%"
+                  onmouseover="this.style.color='var(--carbs)'" onmouseout="this.style.color='var(--text3)'">
+                  ✨ Regenerate instructions
               </button>
+              ` : ''}
             `}
           ` : `
             <!-- Ingredients tab with scaler -->
@@ -2362,7 +2379,9 @@ function renderRecipeModalContent(recipe, mode = 'view') {
 
         <!-- Bottom actions — management only (Edit/Delete/Save) -->
         <div class="modal-actions">
-          ${isView ? `
+          ${isReadOnly ? `
+            <button class="btn-cancel" onclick="closeRecipeModal()" style="flex:1">Close preview</button>
+          ` : isView ? `
             <button class="btn-delete" onclick="deleteRecipeHandler('${recipe.id}')">Delete</button>
             <button class="btn-cancel" onclick="closeRecipeModal()">Close</button>
             <button class="btn-save" onclick="openRecipeModal('${recipe.id}', 'edit')">Edit</button>
@@ -5292,6 +5311,13 @@ function wireGlobals() {
         if (!state.recipes) state.recipes = []
         state.recipes.push({ ...recipe, _readonly: true })
       }
+
+      // Stack the recipe modal above the copy-broadcast modal (both default to
+      // z-index 200, so the recipe modal — declared earlier in the DOM — would
+      // otherwise render behind). We restore on close.
+      const recipeModal = document.getElementById('recipe-modal')
+      if (recipeModal) recipeModal.style.zIndex = '300'
+
       window.openRecipeModal(recipeId, 'view')
     } catch (err) { showToast('Error loading recipe: ' + err.message, 'error') }
   }
@@ -7387,7 +7413,8 @@ function wireGlobals() {
   }
 
   window.closeRecipeModal = () => {
-    document.getElementById('recipe-modal')?.classList.remove('open')
+    const el = document.getElementById('recipe-modal')
+    if (el) { el.classList.remove('open'); el.style.zIndex = '' }
     state.editingRecipe = null
   }
 
