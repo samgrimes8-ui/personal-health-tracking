@@ -1,8 +1,11 @@
 import { createClient } from '@supabase/supabase-js'
 
+// Use service-role key so we can read published broadcasts regardless of
+// RLS policies on provider_broadcasts. The is_published=true filter below
+// is the actual security check — only published plans are ever returned.
 const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.VITE_SUPABASE_ANON_KEY
+  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY
 )
 
 function esc(str) {
@@ -25,7 +28,18 @@ function macroBar(label, val, color) {
 export default async function handler(req, res) {
   const { token } = req.query
 
-  // Fetch broadcast by share token (anon key, public)
+  // Config sanity check — if env vars aren't set, we'd silently return "not found"
+  // forever. Return a 500 with a clear message so it's obvious what's wrong.
+  if (!process.env.SUPABASE_URL && !process.env.VITE_SUPABASE_URL) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.status(500).send(`<!DOCTYPE html><html><body style="background:#0f0e0d;color:#fff;font-family:sans-serif;padding:40px;text-align:center">
+      <div style="font-size:18px">Server config error</div>
+      <div style="font-size:12px;color:#888;margin-top:8px">Supabase URL not configured</div>
+    </body></html>`)
+    return
+  }
+
+  // Fetch broadcast by share token
   const { data: broadcast, error } = await supabase
     .from('provider_broadcasts')
     .select('*, user_profiles!provider_id(provider_name, provider_specialty, provider_bio, provider_slug, provider_avatar_url)')
@@ -33,9 +47,21 @@ export default async function handler(req, res) {
     .eq('is_published', true)
     .maybeSingle()
 
-  if (error || !broadcast) {
+  if (error) {
+    // Surface the actual DB error to server logs so you can see what's wrong in Vercel
+    console.error('[/api/plan/[token]] Supabase error:', { token, error })
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.status(500).send(`<!DOCTYPE html><html><body style="background:#0f0e0d;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh">
+      <div style="text-align:center"><div style="font-size:48px">⚠️</div><div style="font-size:18px;margin-top:16px">Something went wrong</div><div style="font-size:12px;color:#888;margin-top:8px">Please try again later</div></div>
+    </body></html>`)
+    return
+  }
+
+  if (!broadcast) {
+    console.warn('[/api/plan/[token]] no broadcast found — token may be wrong or unpublished:', token)
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
     res.status(404).send(`<!DOCTYPE html><html><body style="background:#0f0e0d;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh">
-      <div style="text-align:center"><div style="font-size:48px">🍽️</div><div style="font-size:18px;margin-top:16px">Meal plan not found</div></div>
+      <div style="text-align:center"><div style="font-size:48px">🍽️</div><div style="font-size:18px;margin-top:16px">Meal plan not found</div><div style="font-size:12px;color:#888;margin-top:8px">The link may have been removed or unpublished.</div></div>
     </body></html>`)
     return
   }
