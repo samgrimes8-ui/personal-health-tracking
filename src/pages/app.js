@@ -908,8 +908,11 @@ function renderDashboard(container) {
 
   updateStats()
   wireFileInput()
-  // Wire today log click delegation after render
-  setTimeout(() => wireTodayLogClicks(document.getElementById('today-log-body')), 0)
+  // Wire today log clicks — use setTimeout to ensure DOM is ready
+  setTimeout(() => {
+    const el = document.getElementById('today-log-body')
+    if (el) wireTodayLogClicks(el)
+  }, 0)
   // Show quick log empty state or recent items immediately
   setTimeout(() => filterQuickLog(), 0)
   // Set correct analyze button label for current mode
@@ -3702,9 +3705,11 @@ function showResult(r) {
 function refreshTodayLog() {
   const el = document.getElementById('today-log-body')
   if (!el) return
-  el.innerHTML = renderTodayMeals(getTodayLog())
-  el._todayWired = false
-  wireTodayLogClicks(el)
+  // Replace element entirely to kill any stacked event listeners
+  const newEl = el.cloneNode(false)
+  newEl.innerHTML = renderTodayMeals(getTodayLog())
+  el.parentNode.replaceChild(newEl, el)
+  wireTodayLogClicks(newEl)
 }
 
 function wireTodayLogClicks(container) {
