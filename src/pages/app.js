@@ -660,6 +660,14 @@ function renderUpgradePage(container, feature) {
 
 function renderPage() {
   const main = document.getElementById('main-content')
+  // Toggle wide layout for pages that benefit from horizontal space (planner
+  // week grid, recipe/food card grids). Dashboard/goals/account stay at the
+  // focused ~1040px reading width.
+  const widePages = new Set(['planner', 'recipes', 'foods', 'history'])
+  if (main) {
+    if (widePages.has(state.currentPage)) main.classList.add('main-wide')
+    else main.classList.remove('main-wide')
+  }
   // Paywall check for free users
   if (state.usage?.isFree && !userCanAccess(state.currentPage)) {
     renderUpgradePage(main, state.currentPage)
