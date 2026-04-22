@@ -1411,6 +1411,19 @@ async function renderGroceryList(allMeals, planner) {
     rangeMeals = planner.meals.flat()
   }
 
+  // Detect orphaned leftovers: leftovers whose source cook is outside the
+  // shopping window. We fetch a broader pool (current week + a couple around
+  // it) so we can tell the user WHERE the source is (helpful for context).
+  const broaderPool = planner?.meals?.flat() || []
+  const orphanLeftovers = rangeMeals
+    .filter(m => isLeftover(m))
+    .map(m => ({ leftover: m, ...findLeftoverSource(m, rangeMeals, broaderPool) }))
+    .filter(x => x.isOrphan)
+
+  // Stash orphan ids on state so collectAllIngredients can see which
+  // "leftovers" actually need to be shopped for as fresh cooks.
+  state._orphanLeftoverIds = new Set(orphanLeftovers.map(o => o.leftover.id))
+
   // Format date labels
   const fmtDate = d => new Date(d + 'T00:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' })
   const isAutoFrom = !state.groceryFromDate
@@ -1452,6 +1465,33 @@ async function renderGroceryList(allMeals, planner) {
       ${isAutoFrom ? `<span style="font-size:11px;color:var(--protein);white-space:nowrap">✓ Past days excluded</span>` : ''}
     </div>
 
+    ${orphanLeftovers.length > 0 ? `
+      <!-- Orphaned leftovers warning -->
+      <div style="padding:12px 16px;background:rgba(217,96,96,0.08);border-bottom:1px solid rgba(217,96,96,0.25)">
+        <div style="display:flex;align-items:start;gap:10px">
+          <div style="font-size:18px;line-height:1.2;flex-shrink:0">⚠️</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:4px">
+              ${orphanLeftovers.length} leftover${orphanLeftovers.length === 1 ? '' : 's'} without a cook in your shopping window
+            </div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-bottom:6px">
+              These meals are planned as leftovers, but their source cook ${orphanLeftovers.every(o => o.source) ? 'happens before this window' : `isn't in your planner`}. You'll need to cook them fresh — their ingredients are shown below as full shopping items.
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              ${orphanLeftovers.slice(0, 5).map(({ leftover, source }) => {
+                const ldate = leftover.actualDate ? fmtDate(leftover.actualDate) : (DAYS[leftover.day_of_week] || '')
+                const sdate = source?.actualDate ? ` · source was ${fmtDate(source.actualDate)}` : (source ? ` · source on ${DAYS[source.day_of_week] || '?'}` : '')
+                return `<div style="font-size:11px;color:var(--text3)">
+                  <span style="color:var(--text2)">${esc(originalMealName(leftover))}</span> on <span style="color:var(--text2)">${ldate}</span>${sdate}
+                </div>`
+              }).join('')}
+              ${orphanLeftovers.length > 5 ? `<div style="font-size:11px;color:var(--text3)">+ ${orphanLeftovers.length - 5} more</div>` : ''}
+            </div>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
     <!-- View tabs -->
     <div style="display:flex;gap:4px;padding:10px 16px;border-bottom:1px solid var(--border)">
       <button class="mode-tab ${view === 'full' ? 'active' : ''}" onclick="setGroceryView('full')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">Full list</button>
@@ -1471,6 +1511,45 @@ async function renderGroceryList(allMeals, planner) {
 function isLeftover(meal) {
   const name = (meal.meal_name || meal.name || '').toLowerCase()
   return name.endsWith('(leftovers)') || meal.is_leftover === true
+}
+
+// Detect "orphaned" leftovers: leftovers whose source cook (the fresh,
+// non-leftover instance of the same recipe) falls OUTSIDE the shopping
+// window. If you mark Saturday as leftovers of a Wednesday cook but
+// then set your grocery window to start Thursday, the Wednesday cook's
+// ingredients aren't on your list — so the Saturday leftover is
+// effectively a fresh cook you'll need to shop for.
+//
+// Returns { source: null, isOrphan: true } when no source is in-range,
+// { source: <meal>, isOrphan: false } when it is.
+function findLeftoverSource(leftover, rangeMeals, allMealsInWeeks) {
+  const name = originalMealName(leftover).toLowerCase()
+  const recipeId = leftover.recipe_id
+  const leftoverDate = leftover.actualDate || leftover.actual_date
+
+  // Prefer the in-range pool (ingredients the user will already be buying)
+  const inRangeSource = rangeMeals.find(m => {
+    if (m.id === leftover.id) return false
+    if (isLeftover(m)) return false
+    const matchById = recipeId && m.recipe_id === recipeId
+    const matchByName = !recipeId && (m.meal_name || m.name || '').toLowerCase() === name
+    if (!matchById && !matchByName) return false
+    // Source must be on or before the leftover's day so the cook happens first
+    const sourceDate = m.actualDate || m.actual_date
+    return !leftoverDate || !sourceDate || sourceDate <= leftoverDate
+  })
+  if (inRangeSource) return { source: inRangeSource, isOrphan: false }
+
+  // No in-range source — check the broader pool (state.planner) in case
+  // the source is in the same week but before fromDate
+  const broaderSource = (allMealsInWeeks || []).find(m => {
+    if (m.id === leftover.id) return false
+    if (isLeftover(m)) return false
+    const matchById = recipeId && m.recipe_id === recipeId
+    const matchByName = !recipeId && (m.meal_name || m.name || '').toLowerCase() === name
+    return matchById || matchByName
+  })
+  return { source: broaderSource || null, isOrphan: true }
 }
 
 function originalMealName(meal) {
@@ -1548,10 +1627,15 @@ function collectAllIngredients(planner, rangeMeals) {
   const meals = rangeMeals || planner?.meals?.flat() || []
 
   meals.forEach(m => {
-    if (isLeftover(m)) return
+    // Skip leftovers that have a source cook in the shopping window — their
+    // ingredients are covered. BUT include orphaned leftovers (source is
+    // outside the window) so the user actually gets the ingredients they
+    // need to cook them fresh.
+    const orphanIds = state._orphanLeftoverIds || new Set()
+    if (isLeftover(m) && !orphanIds.has(m.id)) return
 
     const mealName = m.meal_name || m.name
-    const recipe = state.recipes.find(r => r.name.toLowerCase() === mealName.toLowerCase())
+    const recipe = state.recipes.find(r => r.name.toLowerCase() === (originalMealName(m) || mealName).toLowerCase())
     const ingredients = recipe?.ingredients || []
     const baseServings = recipe?.servings || 1
     // Priority: 1) user override in this session, 2) planned_servings from DB, 3) base recipe servings
@@ -1683,10 +1767,13 @@ function renderGroceryByMeal(planner, rangeMeals) {
               const requestedServings = state.mealServings[m.id] ?? m.planned_servings ?? baseServings
               const multiplier = requestedServings / baseServings
 
+              const isOrphanLeftover = isLeftover(m) && (state._orphanLeftoverIds || new Set()).has(m.id)
+              const isCoveredLeftover = isLeftover(m) && !isOrphanLeftover
+
               return `
                 <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
-                  ${isLeftover(m) ? `
-                    <!-- Leftover meal — ingredients not duplicated -->
+                  ${isCoveredLeftover ? `
+                    <!-- Leftover meal with source in range — ingredients not duplicated -->
                     <div style="display:flex;align-items:center;gap:10px">
                       <div style="flex:1">
                         <div style="font-size:13px;font-weight:500;color:var(--text2)">${esc(mealName)}</div>
@@ -1697,12 +1784,19 @@ function renderGroceryByMeal(planner, rangeMeals) {
                       <span style="font-size:11px;padding:3px 8px;background:rgba(122,180,232,0.12);color:var(--carbs);border-radius:4px;border:1px solid rgba(122,180,232,0.25)">no shopping needed</span>
                     </div>
                   ` : `
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                      <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(mealName)}</div>
-                      ${!ingredients.length
-                        ? `<button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>`
-                        : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`}
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap">
+                      <div style="font-size:13px;font-weight:500;color:var(--text);flex:1;min-width:0">${esc(mealName)}</div>
+                      ${isOrphanLeftover
+                        ? `<span style="font-size:10px;padding:2px 7px;background:rgba(217,96,96,0.12);color:var(--red);border-radius:4px;border:1px solid rgba(217,96,96,0.3);white-space:nowrap">⚠ orphan — shopping needed</span>`
+                        : (!ingredients.length
+                          ? `<button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>`
+                          : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`)}
                     </div>
+                    ${isOrphanLeftover ? `
+                      <div style="font-size:11px;color:var(--text3);margin-bottom:8px;padding:6px 8px;background:rgba(217,96,96,0.05);border-radius:4px;line-height:1.4">
+                        Source cook is outside your shopping window. Ingredients added to your list as if cooking fresh.
+                      </div>
+                    ` : ''}
 
                     <!-- Serving size input -->
                     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:6px 0;border-bottom:1px solid var(--border)">
