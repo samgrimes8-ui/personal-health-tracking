@@ -5129,6 +5129,7 @@ function wireGlobals() {
 
       // Initialize selection state: by default, ALL meals are selected
       window._copySelection = new Set(broadcast.plan_data.map((_, i) => i))
+      console.log('[copyModal] opened, _copySelection initialized to:', Array.from(window._copySelection))
 
       // Default target = current week start (Sunday)
       const defaultWeek = getWeekStart()
@@ -5152,6 +5153,7 @@ function wireGlobals() {
   }
 
   window.toggleAllCopyMeals = (checked) => {
+    console.log('[copyModal] toggleAllCopyMeals(', checked, ')')
     if (!window._copySelection) window._copySelection = new Set()
     const checks = document.querySelectorAll('.copy-meal-check')
     window._copySelection.clear()
@@ -5159,6 +5161,7 @@ function wireGlobals() {
       cb.checked = !!checked
       if (checked) window._copySelection.add(Number(cb.dataset.idx))
     })
+    console.log('[copyModal] Set after toggleAll:', Array.from(window._copySelection))
     updateCopySummary()
   }
 
@@ -5166,10 +5169,16 @@ function wireGlobals() {
   // Uses a JS-side Set as source of truth, then syncs the visible checkbox.
   window.toggleCopyMeal = (idx, ev) => {
     if (ev) { ev.preventDefault(); ev.stopPropagation() }
-    if (!window._copySelection) window._copySelection = new Set()
+    if (!window._copySelection) {
+      console.warn('[copyModal] toggleCopyMeal: _copySelection was null, recreating')
+      window._copySelection = new Set()
+    }
     const n = Number(idx)
+    const before = Array.from(window._copySelection)
     if (window._copySelection.has(n)) window._copySelection.delete(n)
     else window._copySelection.add(n)
+    const after = Array.from(window._copySelection)
+    console.log('[copyModal] toggleCopyMeal idx=', n, 'before=', before, 'after=', after)
     const cb = document.getElementById(`copy-check-${n}`)
     if (cb) cb.checked = window._copySelection.has(n)
     updateCopySummary()
