@@ -28,7 +28,7 @@ export default async function handler(req, res) {
   // Fetch broadcast by share token (anon key, public)
   const { data: broadcast, error } = await supabase
     .from('provider_broadcasts')
-    .select('*, user_profiles!provider_id(provider_name, provider_specialty, provider_bio, provider_slug)')
+    .select('*, user_profiles!provider_id(provider_name, provider_specialty, provider_bio, provider_slug, provider_avatar_url)')
     .eq('share_token', token)
     .eq('is_published', true)
     .maybeSingle()
@@ -123,7 +123,11 @@ export default async function handler(req, res) {
       <div class="plan-title">${esc(broadcast.title)}</div>
       ${broadcast.description ? `<div class="plan-desc">${esc(broadcast.description)}</div>` : ''}
       <div class="provider-row">
-        <div class="provider-avatar">🩺</div>
+        <div class="provider-avatar">
+          ${provider.provider_avatar_url
+            ? `<img src="${esc(provider.provider_avatar_url)}" alt="${esc(provider.provider_name || '')}" style="width:36px;height:36px;border-radius:50%;object-fit:cover" onerror="this.style.display='none'" />`
+            : '🩺'}
+        </div>
         <div>
           <div class="provider-name">${esc(provider.provider_name || 'Provider')}</div>
           <div class="provider-spec">${esc(provider.provider_specialty || 'Dietitian')}</div>

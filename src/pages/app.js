@@ -15,7 +15,7 @@ import {
   saveRecipeOgCache, setUserRole,
   getProviders, getProviderBroadcasts, saveBroadcast, deleteBroadcast,
   followProvider, unfollowProvider, getFollowedProviders, isFollowingProvider,
-  getFollowerCount, copyBroadcastToPlanner
+  getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
@@ -2785,10 +2785,13 @@ function renderProvidersPage(container) {
 
 function renderProviderCard(p, isFollowing) {
   const roleLabel = p.role === 'dietitian' ? '🩺 Dietitian' : p.role === 'admin' ? '👑' : '🏋️ Coach'
+  const avatar = p.provider_avatar_url
+    ? `<img src="${esc(p.provider_avatar_url)}" alt="${esc(p.provider_name)}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div style="display:none;width:44px;height:44px;background:rgba(76,175,130,0.15);border-radius:50%;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>`
+    : `<div style="width:44px;height:44px;background:rgba(76,175,130,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>`
   return `
     <div class="upload-card" style="padding:0;overflow:hidden">
       <div style="padding:14px 16px;display:flex;align-items:start;gap:12px">
-        <div style="width:44px;height:44px;background:rgba(76,175,130,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>
+        ${avatar}
         <div style="flex:1;min-width:0">
           <div style="font-size:15px;font-weight:600;color:var(--text)">${esc(p.provider_name || p.email || 'Provider')}</div>
           <div style="font-size:11px;color:var(--protein);margin-bottom:2px">${roleLabel}${p.provider_specialty ? ' · ' + esc(p.provider_specialty) : ''}</div>
@@ -2799,7 +2802,6 @@ function renderProviderCard(p, isFollowing) {
           ${isFollowing ? 'Following' : '+ Follow'}
         </button>
       </div>
-      <!-- Their latest broadcast -->
       <div id="broadcasts-${p.user_id}" style="border-top:1px solid var(--border)">
         <div style="padding:10px 16px;font-size:12px;color:var(--text3)">Loading plans...</div>
       </div>
@@ -2809,7 +2811,52 @@ function renderProviderCard(p, isFollowing) {
 
 function renderMyProviderChannel() {
   const broadcasts = state.myBroadcasts || []
+  const u = state.usage || {}
+  const avatarUrl = u.providerAvatarUrl || null
   return `
+    <!-- Provider profile editor -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title" style="margin-bottom:14px">My profile</div>
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+        <!-- Avatar -->
+        <div style="position:relative;flex-shrink:0">
+          <div id="provider-avatar-preview" style="width:72px;height:72px;border-radius:50%;overflow:hidden;background:rgba(76,175,130,0.15);display:flex;align-items:center;justify-content:center;font-size:32px;cursor:pointer" onclick="document.getElementById('provider-avatar-input').click()">
+            ${avatarUrl
+              ? `<img src="${esc(avatarUrl)}" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='🩺'" />`
+              : '🩺'}
+          </div>
+          <div onclick="document.getElementById('provider-avatar-input').click()"
+            style="position:absolute;bottom:0;right:0;width:22px;height:22px;background:var(--accent);border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:11px">
+            📷
+          </div>
+          <input type="file" id="provider-avatar-input" accept="image/*" style="display:none" onchange="uploadProviderAvatarHandler(this.files[0])" />
+        </div>
+        <div style="flex:1;font-size:12px;color:var(--text3);line-height:1.5">
+          Tap your photo to update it.<br>This appears on your provider card and shared meal plan pages.
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="modal-field">
+          <label>Display name</label>
+          <input type="text" id="provider-name-input" value="${esc(u.providerName || '')}" placeholder="Your full name" />
+        </div>
+        <div class="modal-field">
+          <label>Specialty</label>
+          <input type="text" id="provider-specialty-input" value="${esc(u.providerSpecialty || '')}" placeholder="e.g. Registered Dietitian, Sports Nutritionist" />
+        </div>
+        <div class="modal-field">
+          <label>Bio</label>
+          <textarea id="provider-bio-input" rows="3" style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:inherit;resize:none;outline:none;width:100%"
+            placeholder="A short description shown on your provider card...">${esc(u.providerBio || '')}</textarea>
+        </div>
+        <button onclick="saveProviderProfileHandler()"
+          style="background:var(--protein);color:#fff;border:none;border-radius:var(--r);padding:11px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer">
+          Save profile
+        </button>
+      </div>
+    </div>
+
+    <!-- Broadcasts -->
     <div class="upload-card" style="margin-bottom:20px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
         <div class="section-title" style="margin:0">My broadcasts</div>
@@ -5086,6 +5133,63 @@ function wireGlobals() {
 
   window.closeBroadcastModal = () => {
     document.getElementById('broadcast-modal').classList.remove('open')
+  }
+
+  window.saveProviderProfileHandler = async () => {
+    const name = document.getElementById('provider-name-input')?.value.trim()
+    const specialty = document.getElementById('provider-specialty-input')?.value.trim()
+    const bio = document.getElementById('provider-bio-input')?.value.trim()
+    if (!name) { showToast('Display name is required', 'error'); return }
+    try {
+      await saveProviderProfile(state.user.id, {
+        provider_name: name,
+        provider_specialty: specialty,
+        provider_bio: bio,
+        provider_slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+      })
+      // Refresh usage so name/bio/specialty update everywhere
+      state.usage = await getUsageSummary(state.user.id)
+      // Also update providers list so cards refresh
+      state.providers = await getProviders()
+      showToast('Profile saved', 'success')
+      renderPage()
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.uploadProviderAvatarHandler = async (file) => {
+    if (!file) return
+    const preview = document.getElementById('provider-avatar-preview')
+    if (preview) preview.innerHTML = '⏳'
+    try {
+      // Resize to 400px before upload
+      const b64 = await new Promise(res => {
+        const img = new Image()
+        img.onload = () => {
+          const MAX = 400
+          let { width: w, height: h } = img
+          const scale = Math.min(1, MAX / Math.max(w, h))
+          w = Math.round(w * scale); h = Math.round(h * scale)
+          const canvas = document.createElement('canvas')
+          canvas.width = w; canvas.height = h
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+          res(canvas.toDataURL('image/jpeg', 0.9))
+        }
+        img.src = URL.createObjectURL(file)
+      })
+      // Convert base64 back to blob for upload
+      const blob = await fetch(b64).then(r => r.blob())
+      const resizedFile = new File([blob], file.name, { type: 'image/jpeg' })
+      const url = await uploadProviderAvatar(state.user.id, resizedFile)
+      await saveProviderProfile(state.user.id, { provider_avatar_url: url })
+      state.usage = await getUsageSummary(state.user.id)
+      state.providers = await getProviders()
+      showToast('Photo updated', 'success')
+      // Update preview immediately
+      if (preview) preview.innerHTML = `<img src="${url}" style="width:100%;height:100%;object-fit:cover" />`
+    } catch (err) {
+      showToast('Upload failed: ' + err.message, 'error')
+      if (preview) preview.innerHTML = '🩺'
+    }
   }
 
   window.shareBroadcastLink = (token, btn) => {

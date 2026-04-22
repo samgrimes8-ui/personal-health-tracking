@@ -278,7 +278,7 @@ export async function getUsageSummary(userId) {
   startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
 
   const [profileRes, usageRes] = await Promise.all([
-    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status, role, is_provider, provider_name, provider_slug').eq('user_id', userId).maybeSingle(),
+    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status, role, is_provider, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url').eq('user_id', userId).maybeSingle(),
     supabase.from('token_usage').select('cost_usd, tokens_used, feature').eq('user_id', userId).gte('created_at', startOfMonth.toISOString())
   ])
 
@@ -304,6 +304,9 @@ export async function getUsageSummary(userId) {
     isProvider: profile.is_provider || false,
     providerName: profile.provider_name || null,
     providerSlug: profile.provider_slug || null,
+    providerBio: profile.provider_bio || null,
+    providerSpecialty: profile.provider_specialty || null,
+    providerAvatarUrl: profile.provider_avatar_url || null,
     role,
     isUnlimited,
     accountStatus: profile.account_status ?? 'active',
@@ -875,11 +878,33 @@ export async function saveRecipeOgCache(userId, recipeId, ogData) {
 
 // ─── Provider / Broadcast ──────────────────────────────────────────────────────
 
+export async function saveProviderProfile(userId, { provider_name, provider_bio, provider_specialty, provider_slug, provider_avatar_url }) {
+  if (!supabase) return
+  const updates = {}
+  if (provider_name !== undefined) updates.provider_name = provider_name
+  if (provider_bio !== undefined) updates.provider_bio = provider_bio
+  if (provider_specialty !== undefined) updates.provider_specialty = provider_specialty
+  if (provider_slug !== undefined) updates.provider_slug = provider_slug
+  if (provider_avatar_url !== undefined) updates.provider_avatar_url = provider_avatar_url
+  const { error } = await supabase.from('user_profiles').update(updates).eq('user_id', userId)
+  if (error) throw error
+}
+
+export async function uploadProviderAvatar(userId, file) {
+  if (!supabase) return null
+  const ext = file.name.split('.').pop() || 'jpg'
+  const path = `${userId}/avatar.${ext}`
+  const { error } = await supabase.storage.from('provider-avatars').upload(path, file, { upsert: true })
+  if (error) throw error
+  const { data } = supabase.storage.from('provider-avatars').getPublicUrl(path)
+  return data.publicUrl + '?t=' + Date.now() // cache bust
+}
+
 export async function getProviders() {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, role, email')
+    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, provider_avatar_url, role, email')
     .eq('is_provider', true)
     .order('provider_name')
   if (error) throw error
