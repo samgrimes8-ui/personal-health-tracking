@@ -1037,29 +1037,20 @@ export async function copyBroadcastToPlanner(userId, broadcast, weekStart, selec
 
   if (!items.length) return 0
 
-  // Determine the broadcast's start date to compute day offsets.
-  // Prefer explicit start_date; fall back to week_start; finally to the earliest item date.
-  let sourceStart = broadcast.start_date || broadcast.week_start
-  if (!sourceStart) {
-    const dates = items.map(i => i.actual_date).filter(Boolean).sort()
-    sourceStart = dates[0] || weekStart
-  }
-  const [sy, sm, sd] = sourceStart.split('-').map(Number)
-  const sourceStartDate = new Date(sy, sm - 1, sd)
-
   const [wy, wmo, wd] = weekStart.split('-').map(Number)
   const targetStartDate = new Date(wy, wmo - 1, wd)
 
   const rows = items.map(item => {
-    // Compute day_of_week: prefer actual_date offset from sourceStart; fall back to stored day_of_week
+    // Determine which weekday (Sun=0..Sat=6) this meal belongs on.
+    // Priority: stored day_of_week (computed at save time) > derived from actual_date.
+    // We do NOT offset from broadcast.start_date because the target planner is
+    // Sunday-based, and day_of_week already captures the correct weekday.
     let dayIdx = 0
-    if (item.actual_date) {
-      const [iy, im, id] = item.actual_date.split('-').map(Number)
-      const itemDate = new Date(iy, im - 1, id)
-      const offset = Math.round((itemDate - sourceStartDate) / (1000 * 60 * 60 * 24))
-      dayIdx = Math.max(0, Math.min(6, offset))
-    } else if (Number.isInteger(item.day_of_week)) {
+    if (Number.isInteger(item.day_of_week)) {
       dayIdx = Math.max(0, Math.min(6, item.day_of_week))
+    } else if (item.actual_date) {
+      const [iy, im, id] = item.actual_date.split('-').map(Number)
+      dayIdx = new Date(iy, im - 1, id).getDay()
     }
 
     const actualDate = new Date(targetStartDate)
