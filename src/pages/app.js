@@ -1253,14 +1253,12 @@ function renderMealPlanView(planner) {
     { key: 'dinner',    label: 'Dinner',    icon: '🌙',  color: 'var(--fat)' },
   ]
 
-  // Detect leftovers: same recipe_id planned on a previous day this week
-  const allMeals = planner.meals.flat()
-  const recipeFirstDay = {}
-  allMeals.forEach(m => {
-    if (m.recipe_id && !recipeFirstDay[m.recipe_id]) {
-      recipeFirstDay[m.recipe_id] = m.actual_date
-    }
-  })
+  // NOTE: We rely solely on the meal's own is_leftover flag here — we do NOT
+  // infer "leftover" from "same recipe earlier in the week." A user may plan
+  // the same recipe fresh on two different days (separate cooks), and that's
+  // totally valid. If the user wants the second one marked as leftover, they
+  // do so explicitly at plan time via the leftover toggle / "Plan as leftover"
+  // prompt, which sets is_leftover=true in the DB.
 
   // Weekly calorie bar
   const weekCals = DAYS.map((_, di) =>
@@ -1344,7 +1342,10 @@ function renderMealPlanView(planner) {
                 </div>
                 <!-- Meals in this slot -->
                 ${slotMeals.length ? slotMeals.map(m => {
-                  const isLeftover = m.recipe_id && recipeFirstDay[m.recipe_id] && recipeFirstDay[m.recipe_id] !== m.actual_date
+                  // Use the explicit DB flag, not the "same recipe earlier this week"
+                  // heuristic — that heuristic was misleading users who wanted to
+                  // plan the same recipe fresh on two separate days.
+                  const isLeftover = !!(m.is_leftover || m.leftover)
                   return `<div style="display:flex;align-items:center;gap:6px;padding:7px 8px;background:var(--bg3);border-radius:var(--r);margin-bottom:3px;cursor:pointer"
                     data-meal-id="${m.id}"
                     onclick="openEditModal('${m.id}', 'planner', {d:${di}})">
@@ -6565,14 +6566,108 @@ function wireGlobals() {
     if (btn) { btn.disabled = false; btn.textContent = 'Analyze photo with AI' }
   }
 
+  // ── Leftover collision prompt ──────────────────────────────────────
+  // When the user tries to add a meal that's already planned fresh elsewhere
+  // this week, give them a choice between "another fresh cook" (counts for
+  // groceries) and "leftover from that cook" (skipped in grocery list).
+  // Returns a Promise that resolves to:
+  //   { leftover: false }  — user picked fresh cook (or no collision)
+  //   { leftover: true }   — user picked leftover
+  //   null                 — user cancelled
+  async function promptLeftoverOnCollision(recipeIdOrName, { dayIdx, weekStart }) {
+    if (!state.planner?.meals || !recipeIdOrName) return { leftover: false }
+    // Find other non-leftover occurrences of this recipe in the current week,
+    // excluding the day we're adding to.
+    const matches = []
+    state.planner.meals.forEach((dayMeals, di) => {
+      if (!dayMeals) return
+      dayMeals.forEach(m => {
+        if (di === dayIdx) return
+        if (m.is_leftover || m.leftover) return
+        const matchById = m.recipe_id && String(m.recipe_id) === String(recipeIdOrName)
+        const matchByName = !m.recipe_id && (m.meal_name || m.name || '').trim().toLowerCase() ===
+                             (typeof recipeIdOrName === 'string' ? recipeIdOrName : '').trim().toLowerCase()
+        if (matchById || matchByName) {
+          matches.push({ dayLabel: DAYS[di], dayIdx: di, meal: m })
+        }
+      })
+    })
+    if (!matches.length) return { leftover: false }
+
+    // Render a choice modal. Uses the existing modal-overlay pattern so we
+    // don't add a new DOM node.
+    return new Promise(resolve => {
+      const existingList = matches.map(m =>
+        `<span style="font-weight:500;color:var(--text)">${m.dayLabel}</span>`
+      ).join(', ')
+      const firstMatch = matches[0]
+      const targetDayLabel = DAYS[dayIdx]
+
+      // Create a transient overlay so we don't collide with whatever modals
+      // are currently open
+      const overlay = document.createElement('div')
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px'
+      overlay.innerHTML = `
+        <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:22px;width:100%;max-width:400px">
+          <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);margin-bottom:6px">Heads up — you've already planned this</div>
+          <div style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:16px">
+            <strong style="color:var(--text)">${esc(firstMatch.meal.meal_name || firstMatch.meal.name || 'This recipe')}</strong>
+            is already planned for ${existingList}. How should we handle <strong style="color:var(--text)">${targetDayLabel}</strong>?
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <button type="button" data-choice="fresh"
+              style="padding:12px 14px;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px;cursor:pointer;text-align:left;transition:border-color 0.15s">
+              <div style="font-weight:600;margin-bottom:2px">🍳 Fresh cook</div>
+              <div style="font-size:11px;color:var(--text3);line-height:1.4">Shop for full ingredients again — this is a separate cooking session.</div>
+            </button>
+            <button type="button" data-choice="leftover"
+              style="padding:12px 14px;background:rgba(122,180,232,0.08);color:var(--text);border:1px solid rgba(122,180,232,0.3);border-radius:var(--r);font-family:inherit;font-size:13px;cursor:pointer;text-align:left;transition:border-color 0.15s">
+              <div style="font-weight:600;margin-bottom:2px">🥡 Leftovers from ${firstMatch.dayLabel}</div>
+              <div style="font-size:11px;color:var(--text3);line-height:1.4">Ingredients already covered by the ${firstMatch.dayLabel} cook — won't appear on your grocery list.</div>
+            </button>
+            <button type="button" data-choice="cancel"
+              style="padding:10px;background:transparent;color:var(--text3);border:1px solid var(--border);border-radius:var(--r);font-family:inherit;font-size:12px;cursor:pointer;margin-top:4px">
+              Cancel
+            </button>
+          </div>
+        </div>
+      `
+      document.body.appendChild(overlay)
+      overlay.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-choice]')
+        if (btn) {
+          const choice = btn.dataset.choice
+          document.body.removeChild(overlay)
+          if (choice === 'cancel') resolve(null)
+          else resolve({ leftover: choice === 'leftover' })
+        } else if (e.target === overlay) {
+          // Clicking outside cancels
+          document.body.removeChild(overlay)
+          resolve(null)
+        }
+      })
+    })
+  }
+
   window.addPhotoMealToPlannerHandler = async () => {
     if (!state.plannerTarget || !state.aiPlannerResult) return
     const r = state.aiPlannerResult
     const addAsLeftover = document.getElementById('leftover-check').checked
     const dayIdx = state.plannerTarget.dayIdx
     const mealType = state.plannerTarget.mealType || document.getElementById('planner-meal-type')?.value || 'dinner'
+
+    // Only prompt if the user isn't already explicitly marking this as a leftover
+    let isLeftoverFromPrompt = false
+    if (!addAsLeftover) {
+      const choice = await promptLeftoverOnCollision(r.recipe_id || r.name, { dayIdx, weekStart: state.weekStart })
+      if (choice === null) return
+      isLeftoverFromPrompt = choice.leftover
+    }
+
     try {
-      const meal = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, { ...r, meal_type: mealType })
+      const meal = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, {
+        ...r, meal_type: mealType, leftover: isLeftoverFromPrompt
+      })
       state.planner.meals[dayIdx].push(meal)
       if (r.ingredients && r.ingredients.length) {
         getRecipeByName(state.user.id, r.name).then(existing => {
@@ -6592,7 +6687,8 @@ function wireGlobals() {
         state.planner.meals[nextDay].push(leftover)
         showToast(r.name + ' added to ' + DAYS[dayIdx] + ' + ' + DAYS[nextDay] + ' lunch!', 'success')
       } else {
-        showToast(r.name + ' added to ' + DAYS[dayIdx] + '!', 'success')
+        const suffix = isLeftoverFromPrompt ? ' as leftovers' : ''
+        showToast(r.name + ' added to ' + DAYS[dayIdx] + suffix + '!', 'success')
       }
       state.plannerImageBase64 = null
       state.groceryItems = null
@@ -6643,9 +6739,19 @@ function wireGlobals() {
     const r = state.aiPlannerResult
     const addAsLeftover = document.getElementById('leftover-check').checked
     const dayIdx = state.plannerTarget.dayIdx
+
+    let isLeftoverFromPrompt = false
+    if (!addAsLeftover) {
+      const choice = await promptLeftoverOnCollision(r.recipe_id || r.name, { dayIdx, weekStart: state.weekStart })
+      if (choice === null) return
+      isLeftoverFromPrompt = choice.leftover
+    }
+
     try {
       // Add to selected day
-      const meal = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, { ...r })
+      const meal = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, {
+        ...r, leftover: isLeftoverFromPrompt
+      })
       state.planner.meals[dayIdx].push(meal)
       // If leftovers checked, also add to next day as lunch
       if (addAsLeftover) {
@@ -6656,7 +6762,8 @@ function wireGlobals() {
         state.planner.meals[nextDay].push(leftoverMeal)
         showToast(`Added to ${DAYS[dayIdx]} + ${DAYS[nextDay]} lunch!`, 'success')
       } else {
-        showToast(`${r.name} added to ${DAYS[dayIdx]}!`, 'success')
+        const suffix = isLeftoverFromPrompt ? ' as leftovers' : ''
+        showToast(`${r.name} added to ${DAYS[dayIdx]}${suffix}!`, 'success')
       }
       // Reset grocery list so it picks up the new meal
       state.groceryItems = null
@@ -8857,9 +8964,18 @@ function filterPlannerList() {
     const addAsLeftover = document.getElementById('leftover-check').checked
     const dayIdx = state.plannerTarget.dayIdx
     const mealType = state.plannerTarget.mealType || document.getElementById('planner-meal-type')?.value || 'dinner'
+
+    let isLeftoverFromPrompt = false
+    if (!addAsLeftover) {
+      const lookupKey = (id.startsWith('recipe::') ? id.replace('recipe::', '') : meal.name)
+      const choice = await promptLeftoverOnCollision(lookupKey, { dayIdx, weekStart: state.weekStart })
+      if (choice === null) return
+      isLeftoverFromPrompt = choice.leftover
+    }
+
     try {
       const added = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, {
-        ...meal, meal_type: mealType
+        ...meal, meal_type: mealType, leftover: isLeftoverFromPrompt
       })
       state.planner.meals[dayIdx].push(added)
       if (addAsLeftover) {
@@ -8872,7 +8988,8 @@ function filterPlannerList() {
         state.planner.meals[nextDay].push(leftover)
         showToast(`Added to ${DAYS[dayIdx]} ${mealType} + ${DAYS[nextDay]} lunch (leftovers)!`, 'success')
       } else {
-        showToast(`${meal.name} added to ${DAYS[dayIdx]} ${mealType}!`, 'success')
+        const suffix = isLeftoverFromPrompt ? ' as leftovers' : ''
+        showToast(`${meal.name} added to ${DAYS[dayIdx]} ${mealType}${suffix}!`, 'success')
       }
       state.groceryItems = null
       closePlannerModal()
