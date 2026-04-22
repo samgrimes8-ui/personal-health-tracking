@@ -8797,36 +8797,52 @@ function filterQuickLog() {
           </div>
         </div>`
     } else {
-      // Has some history — show top recent items as suggestions
+      // Has some history — show the single most recent recipe and the
+      // single most recent log entry as starting points. Two items is
+      // enough to make quick-log feel useful without burying the search.
       const items = []
       const seen = new Set()
-      state.recipes.slice(0, 4).forEach(r => {
-        seen.add(r.name.toLowerCase())
-        items.push({ ...r, source: 'recipe' })
-      })
-      state.log.slice(0, 6).forEach(e => {
-        const key = e.name.toLowerCase()
-        if (seen.has(key)) return
-        seen.add(key)
-        items.push({ ...e, source: 'log' })
-      })
+      const mostRecentRecipe = state.recipes[0]
+      if (mostRecentRecipe) {
+        seen.add(mostRecentRecipe.name.toLowerCase())
+        items.push({ ...mostRecentRecipe, source: 'recipe' })
+      }
+      const mostRecentLog = state.log.find(e => !seen.has((e.name || '').toLowerCase()))
+      if (mostRecentLog) {
+        items.push({ ...mostRecentLog, source: 'log' })
+      }
+      if (!items.length) { list.innerHTML = ''; return }
       list.innerHTML = `
-        <div style="font-size:11px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">Recent</div>
-        ${items.slice(0, 5).map(item => `
-          <div class="history-pick-item" onclick="quickLogMeal('${esc(item.source === 'recipe' ? 'recipe::' + item.id : item.id)}')"
+        <div style="font-size:11px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">Recent · tap to log</div>
+        ${items.map(item => {
+          const mealRef = item.source === 'recipe' ? 'recipe::' + item.id : item.id
+          return `
+          <div class="history-pick-item" data-quicklog-ref="${esc(String(mealRef))}"
             style="border-radius:var(--r)">
             <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
               <span class="hpi-name">${esc(item.name)}</span>
               <span style="font-size:10px;color:${item.source === 'recipe' ? 'var(--protein)' : 'var(--text3)'}">
-                ${item.source === 'recipe' ? '⭐ Recipe' : '📋 Recent'}
+                ${item.source === 'recipe' ? '⭐ Most recent recipe' : '📋 Most recent log'}
               </span>
             </div>
             <div style="text-align:right;flex-shrink:0">
-              <div class="hpi-cal">${Math.round(item.calories)} kcal</div>
-              <div style="font-size:10px;color:var(--text3)">P${Math.round(item.protein)} C${Math.round(item.carbs)} F${Math.round(item.fat)}</div>
+              <div class="hpi-cal">${Math.round(item.calories || 0)} kcal</div>
+              <div style="font-size:10px;color:var(--text3)">P${Math.round(item.protein || 0)} C${Math.round(item.carbs || 0)} F${Math.round(item.fat || 0)}</div>
             </div>
-          </div>`).join('')}
+          </div>`
+        }).join('')}
       `
+      // Wire clicks with delegation — more reliable than inline onclick on mobile
+      // (some PWA/capacitor environments strip or delay inline handlers)
+      if (!list._quickLogWired) {
+        list._quickLogWired = true
+        list.addEventListener('click', e => {
+          const row = e.target.closest('[data-quicklog-ref]')
+          if (!row) return
+          const ref = row.getAttribute('data-quicklog-ref')
+          if (ref) window.quickLogMeal(ref)
+        })
+      }
     }
     return
   }
@@ -8853,8 +8869,10 @@ function filterQuickLog() {
     return
   }
 
-  list.innerHTML = filtered.map(item => `
-    <div class="history-pick-item" onclick="quickLogMeal('${esc(item.source === 'recipe' ? 'recipe::' + item.id : item.id)}')"
+  list.innerHTML = filtered.map(item => {
+    const mealRef = item.source === 'recipe' ? 'recipe::' + item.id : item.id
+    return `
+    <div class="history-pick-item" data-quicklog-ref="${esc(String(mealRef))}"
       style="border-radius:var(--r)">
       <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
         <span class="hpi-name">${esc(item.name)}</span>
@@ -8863,10 +8881,20 @@ function filterQuickLog() {
         </span>
       </div>
       <div style="text-align:right;flex-shrink:0">
-        <div class="hpi-cal">${Math.round(item.calories)} kcal</div>
-        <div style="font-size:10px;color:var(--text3)">P${Math.round(item.protein)} C${Math.round(item.carbs)} F${Math.round(item.fat)}</div>
+        <div class="hpi-cal">${Math.round(item.calories || 0)} kcal</div>
+        <div style="font-size:10px;color:var(--text3)">P${Math.round(item.protein || 0)} C${Math.round(item.carbs || 0)} F${Math.round(item.fat || 0)}</div>
       </div>
-    </div>`).join('')
+    </div>`
+  }).join('')
+  if (!list._quickLogWired) {
+    list._quickLogWired = true
+    list.addEventListener('click', e => {
+      const row = e.target.closest('[data-quicklog-ref]')
+      if (!row) return
+      const ref = row.getAttribute('data-quicklog-ref')
+      if (ref) window.quickLogMeal(ref)
+    })
+  }
 
   window.quickLogMeal = async (id) => {
     let meal
