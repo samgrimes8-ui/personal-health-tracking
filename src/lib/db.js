@@ -1108,17 +1108,51 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
   console.log('[copyBroadcast] unique recipe_ids to import:', uniqueRecipeIds)
   console.log('[copyBroadcast] broadcast.share_token:', broadcast?.share_token)
 
-  // Load the user's existing recipes once to dedupe by name.
-  // Freeze the set of initial ids so we can later count how many were newly added.
+  // Load user's existing recipes with source tracking so we can dedupe by origin
+  // (and fall back to name for recipes imported before the source_recipe_id
+  // column existed).
   let userRecipes = []
   {
-    const { data } = await supabase.from('recipes').select('id, name').eq('user_id', userId)
+    const { data } = await supabase
+      .from('recipes')
+      .select('id, name, source_recipe_id, source_updated_at, update_history, calories, protein, carbs, fat, fiber, sugar, servings, description, instructions, ingredients')
+      .eq('user_id', userId)
     userRecipes = data || []
   }
   const initialIds = new Set(userRecipes.map(r => r.id))
 
+  // Helper: compute a list of human-readable changes between two recipe snapshots.
+  // Ignores user-only fields (id, user_id, timestamps, notes) and returns e.g.
+  // [{field: 'calories', from: 485, to: 520}, {field: 'instructions', from: '3 steps', to: '4 steps'}]
+  const diffRecipe = (oldR, newR) => {
+    const changes = []
+    const macroFields = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'servings']
+    for (const f of macroFields) {
+      const a = Number(oldR[f] ?? 0)
+      const b = Number(newR[f] ?? 0)
+      if (Math.abs(a - b) > 0.5) changes.push({ field: f, from: a, to: b })
+    }
+    if ((oldR.name || '').trim() !== (newR.name || '').trim()) {
+      changes.push({ field: 'name', from: oldR.name, to: newR.name })
+    }
+    if ((oldR.description || '') !== (newR.description || '')) {
+      changes.push({ field: 'description', from: oldR.description?.slice(0,40), to: newR.description?.slice(0,40) })
+    }
+    const oldIngCount = (oldR.ingredients || []).length
+    const newIngCount = (newR.ingredients || []).length
+    if (oldIngCount !== newIngCount) {
+      changes.push({ field: 'ingredients', from: `${oldIngCount} items`, to: `${newIngCount} items` })
+    }
+    const oldStepCount = oldR.instructions?.steps?.length || 0
+    const newStepCount = newR.instructions?.steps?.length || 0
+    if (oldStepCount !== newStepCount) {
+      changes.push({ field: 'instructions', from: `${oldStepCount} steps`, to: `${newStepCount} steps` })
+    }
+    return changes
+  }
+
   for (const origId of uniqueRecipeIds) {
-    // If the user already owns this exact row (unlikely but possible), reuse it
+    // If the user already owns this exact row (user is importing their own plan), reuse it
     const alreadyOwnsById = userRecipes.find(r => r.id === origId)
     if (alreadyOwnsById) {
       recipeIdMap[origId] = origId
@@ -1165,29 +1199,128 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
       continue
     }
 
-    // Dedupe by name: if the user already has a recipe with this exact name,
-    // reuse it instead of making duplicates on repeat copies of the same plan
+    // Primary dedupe: do we already have a copy of THIS source recipe?
+    const existingBySource = userRecipes.find(r => r.source_recipe_id === origId)
+    if (existingBySource) {
+      // Check if the source has been updated since our last sync. If so,
+      // auto-update the mirrored fields and log the diff so the user can see
+      // what changed without being surprised by silent shifts.
+      const sourceUpdatedAt = source.updated_at
+      const lastSyncedAt = existingBySource.source_updated_at
+      const needsUpdate = sourceUpdatedAt && (!lastSyncedAt || new Date(sourceUpdatedAt) > new Date(lastSyncedAt))
+
+      if (needsUpdate) {
+        const changes = diffRecipe(existingBySource, source)
+        if (changes.length > 0) {
+          const history = Array.isArray(existingBySource.update_history) ? existingBySource.update_history : []
+          const newEntry = { ts: new Date().toISOString(), changes }
+          const updatedHistory = [newEntry, ...history].slice(0, 20) // keep last 20 entries
+          const updatePayload = {
+            name: source.name,
+            description: source.description || '',
+            servings: source.servings || 4,
+            serving_label: source.serving_label || 'serving',
+            calories: source.calories || 0,
+            protein: source.protein || 0,
+            carbs: source.carbs || 0,
+            fat: source.fat || 0,
+            fiber: source.fiber || 0,
+            sugar: source.sugar || 0,
+            ingredients: source.ingredients || [],
+            instructions: source.instructions || existingBySource.instructions || null,
+            source_updated_at: sourceUpdatedAt,
+            update_history: updatedHistory,
+            updated_at: new Date().toISOString(),
+          }
+          const { error: updErr } = await supabase
+            .from('recipes')
+            .update(updatePayload)
+            .eq('id', existingBySource.id)
+            .eq('user_id', userId)
+          if (updErr) {
+            diagnostics.push({ origId, name: source.name, status: 'update-failed', insertErr: updErr.message })
+          } else {
+            diagnostics.push({ origId, name: source.name, status: 'auto-updated', newId: existingBySource.id, changeCount: changes.length })
+          }
+        } else {
+          // Timestamp diverged but nothing meaningful changed — still bump the marker
+          await supabase
+            .from('recipes')
+            .update({ source_updated_at: sourceUpdatedAt })
+            .eq('id', existingBySource.id)
+            .eq('user_id', userId)
+          diagnostics.push({ origId, name: source.name, status: 'dedupe-by-source' })
+        }
+      } else {
+        diagnostics.push({ origId, name: source.name, status: 'dedupe-by-source' })
+      }
+      recipeIdMap[origId] = existingBySource.id
+      continue
+    }
+
+    // Legacy fallback: dedupe by name for recipes imported before we tracked
+    // source_recipe_id. Adopt the source linkage onto the existing row so
+    // future imports use the proper path.
     const existingByName = userRecipes.find(r =>
+      !r.source_recipe_id &&
       (r.name || '').trim().toLowerCase() === (source.name || '').trim().toLowerCase()
     )
     if (existingByName) {
+      // Quietly backfill source_recipe_id + source_updated_at so next import
+      // can detect updates. Don't overwrite any user edits.
+      await supabase
+        .from('recipes')
+        .update({
+          source_recipe_id: origId,
+          source_updated_at: source.updated_at || null,
+        })
+        .eq('id', existingByName.id)
+        .eq('user_id', userId)
       recipeIdMap[origId] = existingByName.id
-      diagnostics.push({ origId, name: source.name, status: 'dedupe-by-name' })
+      diagnostics.push({ origId, name: source.name, status: 'adopted-by-name' })
       continue
     }
 
     // Insert a fresh copy into the user's library
     try {
       const { share_token, is_shared, is_public, id, user_id, created_at, updated_at, ...fields } = source
-      const payload = { ...fields, user_id: userId, share_token: null, is_shared: false, is_public: false }
+      const payload = {
+        ...fields,
+        user_id: userId,
+        share_token: null,
+        is_shared: false,
+        is_public: false,
+        source_recipe_id: origId,
+        source_updated_at: source.updated_at || null,
+        update_history: [],
+      }
       const { data: inserted, error: insErr } = await supabase
         .from('recipes')
         .insert(payload)
         .select('id, name')
         .single()
       if (insErr || !inserted) {
-        diagnostics.push({ origId, name: source.name, status: 'insert-failed', insertErr: insErr?.message || 'no data returned' })
-        recipeIdMap[origId] = null
+        // If the source_recipe_id column doesn't exist yet (user hasn't run
+        // the migration), retry without the new fields
+        if (insErr?.message?.includes('source_recipe_id') || insErr?.message?.includes('update_history')) {
+          const { source_recipe_id, source_updated_at, update_history, ...legacy } = payload
+          const { data: inserted2, error: insErr2 } = await supabase
+            .from('recipes')
+            .insert(legacy)
+            .select('id, name')
+            .single()
+          if (inserted2) {
+            recipeIdMap[origId] = inserted2.id
+            userRecipes.push(inserted2)
+            diagnostics.push({ origId, name: inserted2.name, status: 'imported-legacy', newId: inserted2.id })
+            continue
+          }
+          diagnostics.push({ origId, name: source.name, status: 'insert-failed', insertErr: insErr2?.message || insErr.message })
+          recipeIdMap[origId] = null
+        } else {
+          diagnostics.push({ origId, name: source.name, status: 'insert-failed', insertErr: insErr?.message || 'no data returned' })
+          recipeIdMap[origId] = null
+        }
       } else {
         recipeIdMap[origId] = inserted.id
         userRecipes.push(inserted)
@@ -1248,5 +1381,6 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
 
   // Count only the recipe ids that weren't in the user's library before this copy
   const recipesAdded = Object.values(recipeIdMap).filter(id => id && !initialIds.has(id)).length
-  return { mealsCopied: rows.length, recipesAdded, diagnostics }
+  const recipesUpdated = diagnostics.filter(d => d.status === 'auto-updated').length
+  return { mealsCopied: rows.length, recipesAdded, recipesUpdated, diagnostics }
 }

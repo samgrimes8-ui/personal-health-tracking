@@ -2197,6 +2197,31 @@ function renderRecipeModalContent(recipe, mode = 'view') {
           </div>
         ` : recipe.description ? `<div style="font-size:13px;color:var(--text2);margin-bottom:16px">${esc(recipe.description)}</div>` : ''}
 
+        <!-- Auto-update history from provider (view mode only) -->
+        ${isView && Array.isArray(recipe.update_history) && recipe.update_history.length > 0 ? (() => {
+          const latest = recipe.update_history[0]
+          const latestDate = latest?.ts ? new Date(latest.ts).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''
+          const changeSummary = (latest?.changes || []).slice(0, 3).map(c => {
+            if (c.field === 'name') return `renamed`
+            if (c.field === 'description') return `description edited`
+            if (c.field === 'ingredients') return `ingredients: ${c.from} → ${c.to}`
+            if (c.field === 'instructions') return `instructions: ${c.from} → ${c.to}`
+            if (typeof c.from === 'number' && typeof c.to === 'number') {
+              const delta = c.to - c.from
+              return `${c.field} ${delta >= 0 ? '+' : ''}${delta.toFixed(0)}${c.field==='calories'?' kcal':'g'}`
+            }
+            return c.field
+          }).join(' · ')
+          const extraCount = Math.max(0, (latest?.changes || []).length - 3)
+          return `<div style="margin-bottom:16px;padding:10px 12px;background:rgba(122,180,232,0.08);border:1px solid rgba(122,180,232,0.25);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.5">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+              <span style="color:var(--carbs);font-weight:500">🔄 Provider update · ${latestDate}</span>
+            </div>
+            <div>${esc(changeSummary)}${extraCount > 0 ? ` · +${extraCount} more` : ''}</div>
+            ${recipe.update_history.length > 1 ? `<div style="font-size:10px;color:var(--text3);margin-top:4px">+ ${recipe.update_history.length - 1} older update${recipe.update_history.length === 2 ? '' : 's'}</div>` : ''}
+          </div>`
+        })() : ''}
+
         <!-- Source URL -->
         ${mode === 'edit' || isNew ? `
           <div class="modal-field">
@@ -5516,11 +5541,13 @@ function wireGlobals() {
 
       if (btn) { btn.disabled = true; btn.textContent = 'Copying...' }
       const result = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices, window._copyMealTypes || {})
-      // Back-compat: old callers expected a number, new version returns {mealsCopied, recipesAdded, diagnostics}
+      // Back-compat: old callers expected a number, new version returns {mealsCopied, recipesAdded, recipesUpdated, diagnostics}
       const mealsCopied = typeof result === 'number' ? result : (result?.mealsCopied || 0)
       const recipesAdded = typeof result === 'number' ? 0 : (result?.recipesAdded || 0)
+      const recipesUpdated = typeof result === 'number' ? 0 : (result?.recipesUpdated || 0)
       const diagnostics = typeof result === 'number' ? [] : (result?.diagnostics || [])
-      const recipesFailed = diagnostics.filter(d => d.status !== 'imported' && d.status !== 'already-owned' && d.status !== 'dedupe-by-name').length
+      const successStatuses = new Set(['imported', 'imported-legacy', 'already-owned', 'dedupe-by-name', 'dedupe-by-source', 'adopted-by-name', 'auto-updated'])
+      const recipesFailed = diagnostics.filter(d => !successStatuses.has(d.status)).length
 
       // Compute the Sunday-based week that contains the start date,
       // navigate the planner there, and reload it so the new meals are visible
@@ -5535,8 +5562,8 @@ function wireGlobals() {
       const planner = await getPlannerWeek(state.user.id, targetWeek)
       if (planner) state.planner = planner
 
-      // Refresh recipes list so the newly-imported ones show up in the recipe page
-      if (recipesAdded > 0) {
+      // Refresh recipes list so the newly-imported / freshly-updated ones show up
+      if (recipesAdded > 0 || recipesUpdated > 0) {
         try {
           const fresh = await getRecipes(state.user.id)
           if (fresh) state.recipes = fresh
@@ -5550,10 +5577,10 @@ function wireGlobals() {
       if (recipesFailed > 0) {
         showCopyDiagnostics(diagnostics, mealsCopied, recipesAdded)
       } else {
-        const msg = recipesAdded > 0
-          ? `Copied ${mealsCopied} meal${mealsCopied===1?'':'s'} and added ${recipesAdded} recipe${recipesAdded===1?'':'s'} to your library!`
-          : `Copied ${mealsCopied} meal${mealsCopied===1?'':'s'} to your planner!`
-        showToast(msg, 'success')
+        const parts = [`Copied ${mealsCopied} meal${mealsCopied===1?'':'s'}`]
+        if (recipesAdded > 0) parts.push(`added ${recipesAdded} recipe${recipesAdded===1?'':'s'} to your library`)
+        if (recipesUpdated > 0) parts.push(`refreshed ${recipesUpdated} recipe${recipesUpdated===1?'':'s'} from the provider`)
+        showToast(parts.join(', ') + '!', 'success')
       }
       // Route to planner page so user sees the result
       switchPage('planner')
@@ -5568,9 +5595,8 @@ function wireGlobals() {
   // recipes failed to import and why. Much easier to read on mobile than
   // hunting through the browser console.
   window.showCopyDiagnostics = (diagnostics, mealsCopied, recipesAdded) => {
-    const failed = diagnostics.filter(d =>
-      d.status !== 'imported' && d.status !== 'already-owned' && d.status !== 'dedupe-by-name'
-    )
+    const successStatuses = new Set(['imported', 'imported-legacy', 'already-owned', 'dedupe-by-name', 'dedupe-by-source', 'adopted-by-name', 'auto-updated'])
+    const failed = diagnostics.filter(d => !successStatuses.has(d.status))
     if (!failed.length) return
     const rows = failed.map(d => {
       let detail = ''
