@@ -2917,6 +2917,11 @@ function renderMyProviderChannel() {
               style="background:${b.is_published ? 'rgba(239,68,68,0.1)' : 'rgba(76,175,130,0.15)'};border:1px solid ${b.is_published ? 'var(--red)' : 'var(--protein)'};border-radius:6px;padding:5px 10px;font-size:11px;color:${b.is_published ? 'var(--red)' : 'var(--protein)'};cursor:pointer;font-family:inherit">
               ${b.is_published ? 'Unpublish' : 'Publish'}
             </button>
+            <button onclick="deleteBroadcastHandler('${b.id}')"
+              title="Delete plan"
+              style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit">
+              🗑
+            </button>
           </div>
         </div>
       `).join('')}
@@ -5425,6 +5430,22 @@ function wireGlobals() {
       } else {
         showToast('Unpublished', 'success')
       }
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  window.deleteBroadcastHandler = async (id) => {
+    const broadcast = state.myBroadcasts.find(b => b.id === id)
+    if (!broadcast) return
+    const label = broadcast.title ? `"${broadcast.title}"` : 'this meal plan'
+    const warning = broadcast.is_published
+      ? `Delete ${label}?\n\nThis plan is currently published — the share link will stop working and any followers who haven't copied it yet will lose access.\n\nThis can't be undone.`
+      : `Delete ${label}?\n\nThis can't be undone.`
+    if (!confirm(warning)) return
+    try {
+      await deleteBroadcast(id, state.user.id)
+      state.myBroadcasts = (state.myBroadcasts || []).filter(b => b.id !== id)
+      renderPage()
+      showToast('Meal plan deleted', 'success')
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 

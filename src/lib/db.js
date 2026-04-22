@@ -966,9 +966,11 @@ export async function getBroadcastByToken(token) {
   return data
 }
 
-export async function deleteBroadcast(id) {
+export async function deleteBroadcast(id, userId = null) {
   if (!supabase) return
-  const { error } = await supabase.from('provider_broadcasts').delete().eq('id', id)
+  let q = supabase.from('provider_broadcasts').delete().eq('id', id)
+  if (userId) q = q.eq('provider_id', userId)
+  const { error } = await q
   if (error) throw error
 }
 
