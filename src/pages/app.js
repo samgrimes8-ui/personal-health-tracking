@@ -2762,17 +2762,20 @@ function renderProvidersPage(container) {
       <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">
         ${myProviders.length ? 'All providers' : 'Discover providers'}
       </div>
-      ${allProviders.length ? `
-        <div style="display:flex;flex-direction:column;gap:10px">
-          ${allProviders.map(p => renderProviderCard(p, myProviders.some(f => f.user_id === p.user_id))).join('')}
-        </div>
-      ` : `
-        <div class="upload-card" style="text-align:center;padding:32px">
-          <div style="font-size:32px;margin-bottom:8px">🩺</div>
-          <div style="font-size:14px;color:var(--text2);font-weight:500">No providers yet</div>
-          <div style="font-size:12px;color:var(--text3);margin-top:4px">Providers will appear here when they join MacroLens</div>
-        </div>
-      `}
+      ${(() => {
+        const unfollowed = allProviders.filter(p => !myProviders.some(f => f.user_id === p.user_id))
+        return unfollowed.length ? `
+          <div style="display:flex;flex-direction:column;gap:10px">
+            ${unfollowed.map(p => renderProviderCard(p, false)).join('')}
+          </div>
+        ` : myProviders.length ? '' : `
+          <div class="upload-card" style="text-align:center;padding:32px">
+            <div style="font-size:32px;margin-bottom:8px">🩺</div>
+            <div style="font-size:14px;color:var(--text2);font-weight:500">No providers yet</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:4px">Providers will appear here when they join MacroLens</div>
+          </div>
+        `
+      })()}
     ` : ''}
   `
 
@@ -4997,7 +5000,7 @@ function wireGlobals() {
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
 
-  async function loadFollowedBroadcasts() {
+  window.loadFollowedBroadcasts = async function() {
     const providers = [...(state.followedProviders || []), ...(state.providers || [])]
     const seen = new Set()
     for (const p of providers) {
