@@ -5122,6 +5122,8 @@ function wireGlobals() {
       plan_data: [],
     })
     document.getElementById('broadcast-modal').classList.add('open')
+    // Auto-preview the current week's meals
+    setTimeout(() => previewBroadcastPlan(weekStart), 100)
   }
 
   window.editBroadcastHandler = async (id) => {
@@ -5129,6 +5131,10 @@ function wireGlobals() {
     if (!broadcast) return
     document.getElementById('broadcast-modal-content').innerHTML = renderBroadcastForm(broadcast)
     document.getElementById('broadcast-modal').classList.add('open')
+    // If it already has plan_data don't re-fetch, otherwise preview the week
+    if (!broadcast.plan_data?.length && broadcast.week_start) {
+      setTimeout(() => previewBroadcastPlan(broadcast.week_start), 100)
+    }
   }
 
   window.closeBroadcastModal = () => {
@@ -5278,7 +5284,23 @@ function wireGlobals() {
       const plannerData = await getPlannerWeek(state.user.id, weekStart)
       const items = plannerData || []
       if (!items.length) {
-        preview.innerHTML = `<div style="background:var(--bg3);border-radius:var(--r);padding:12px;font-size:12px;color:var(--text3);text-align:center">No meals planned for this week yet — add meals to your planner first</div>`
+        // Find weeks that do have meals to suggest
+        const weeksWithMeals = (state.weeksWithMeals || []).slice(0, 4)
+        preview.innerHTML = `
+          <div style="background:var(--bg3);border-radius:var(--r);padding:12px;font-size:12px;color:var(--text3);text-align:center">
+            No meals planned for this week
+            ${weeksWithMeals.length ? `
+              <div style="margin-top:10px;font-size:11px;color:var(--text3);margin-bottom:6px">Weeks with meals:</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center">
+                ${weeksWithMeals.map(w => `
+                  <button onclick="document.getElementById('bc-week').value='${w}';previewBroadcastPlan('${w}')"
+                    style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;font-size:11px;color:var(--accent);cursor:pointer;font-family:inherit">
+                    ${new Date(w + 'T12:00:00').toLocaleDateString([], {month:'short', day:'numeric'})}
+                  </button>
+                `).join('')}
+              </div>
+            ` : '<br>Add meals to your planner first'}
+          </div>`
         return
       }
       preview.innerHTML = `
