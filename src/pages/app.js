@@ -8797,32 +8797,69 @@ function filterQuickLog() {
           </div>
         </div>`
     } else {
-      // Has some history — show the single most recent recipe and the
-      // single most recent log entry as starting points. Two items is
-      // enough to make quick-log feel useful without burying the search.
+      // Show the most recent LOGGED recipe and the most recent LOGGED food item.
+      // Both come from state.log, which is ordered newest-first. Pick the first
+      // entry that links to a recipe, and the first that links to a food item.
       const items = []
-      const seen = new Set()
-      const mostRecentRecipe = state.recipes[0]
-      if (mostRecentRecipe) {
-        seen.add(mostRecentRecipe.name.toLowerCase())
-        items.push({ ...mostRecentRecipe, source: 'recipe' })
+
+      // Most recent recipe that was logged
+      const recentRecipeLog = state.log.find(e => e.recipe_id)
+      if (recentRecipeLog) {
+        const recipe = state.recipes.find(r => r.id === recentRecipeLog.recipe_id)
+        if (recipe) items.push({
+          ...recipe,
+          source: 'recipe',
+          _loggedAt: recentRecipeLog.logged_at,
+        })
       }
-      const mostRecentLog = state.log.find(e => !seen.has((e.name || '').toLowerCase()))
-      if (mostRecentLog) {
-        items.push({ ...mostRecentLog, source: 'log' })
+
+      // Most recent food item that was logged (separate from recipe)
+      const recentFoodLog = state.log.find(e => e.food_item_id && !e.recipe_id)
+      if (recentFoodLog) {
+        const food = state.foodItems.find(f => f.id === recentFoodLog.food_item_id)
+        if (food) items.push({
+          ...food,
+          source: 'food',
+          _loggedAt: recentFoodLog.logged_at,
+        })
       }
+
+      // Fallback: if nothing logged yet, show most recent log entry at all
+      if (!items.length && state.log.length > 0) {
+        const e = state.log[0]
+        items.push({ ...e, source: 'log', _loggedAt: e.logged_at })
+      }
+
       if (!items.length) { list.innerHTML = ''; return }
+
+      const fmtAgo = (iso) => {
+        if (!iso) return ''
+        const ms = Date.now() - new Date(iso).getTime()
+        const hrs = ms / 3600000
+        if (hrs < 1) return 'just now'
+        if (hrs < 24) return `${Math.round(hrs)}h ago`
+        return `${Math.round(hrs / 24)}d ago`
+      }
+
       list.innerHTML = `
-        <div style="font-size:11px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">Recent · tap to log</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">Log again · tap to add</div>
         ${items.map(item => {
-          const mealRef = item.source === 'recipe' ? 'recipe::' + item.id : item.id
+          const mealRef = item.source === 'recipe' ? 'recipe::' + item.id
+                        : item.source === 'food' ? 'food::' + item.id
+                        : item.id
+          const label = item.source === 'recipe' ? '⭐ Last recipe logged'
+                      : item.source === 'food' ? '🥫 Last food logged'
+                      : '📋 Last meal logged'
+          const labelColor = item.source === 'recipe' ? 'var(--protein)'
+                           : item.source === 'food' ? 'var(--carbs)'
+                           : 'var(--text3)'
           return `
           <div class="history-pick-item" data-quicklog-ref="${esc(String(mealRef))}"
             style="border-radius:var(--r)">
             <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
               <span class="hpi-name">${esc(item.name)}</span>
-              <span style="font-size:10px;color:${item.source === 'recipe' ? 'var(--protein)' : 'var(--text3)'}">
-                ${item.source === 'recipe' ? '⭐ Most recent recipe' : '📋 Most recent log'}
+              <span style="font-size:10px;color:${labelColor}">
+                ${label}${item._loggedAt ? ' · ' + fmtAgo(item._loggedAt) : ''}
               </span>
             </div>
             <div style="text-align:right;flex-shrink:0">
@@ -8897,13 +8934,33 @@ function filterQuickLog() {
   }
 
   window.quickLogMeal = async (id) => {
+    console.log('[quickLogMeal] called with id:', id)
     let meal
     if (id.startsWith('recipe::')) {
-      meal = state.recipes.find(r => r.id === id.replace('recipe::', ''))
+      const rid = id.replace('recipe::', '')
+      meal = state.recipes.find(r => r.id === rid)
+      if (!meal) console.warn('[quickLogMeal] recipe not found:', rid)
+    } else if (id.startsWith('food::')) {
+      const fid = id.replace('food::', '')
+      const food = state.foodItems.find(f => f.id === fid)
+      if (!food) console.warn('[quickLogMeal] food item not found:', fid)
+      // Shape the food item like a log entry so the rest of the handler works
+      if (food) meal = {
+        ...food,
+        food_item_id: food.id,
+        base_calories: food.calories, base_protein: food.protein,
+        base_carbs: food.carbs, base_fat: food.fat,
+        base_fiber: food.fiber, base_sugar: food.sugar,
+      }
     } else {
       meal = state.log.find(e => String(e.id) === String(id))
+      if (!meal) console.warn('[quickLogMeal] log entry not found:', id, 'log length:', state.log.length)
     }
-    if (!meal) return
+    if (!meal) {
+      showToast('Could not find that meal — try refreshing', 'error')
+      return
+    }
+    console.log('[quickLogMeal] found meal:', meal.name, 'source:', id.startsWith('recipe::') ? 'recipe' : id.startsWith('food::') ? 'food' : 'log')
 
     // Check if this meal is linked to a food item with components
     const linkedFood = meal.food_item_id
@@ -8980,17 +9037,30 @@ function filterQuickLog() {
     }
 
     try {
-      // Link recipe_id if logging from a recipe
       const isRecipe = id.startsWith('recipe::')
+      const isFood = id.startsWith('food::')
+
+      // Link recipe_id if logging from a recipe
       const recipe_id = isRecipe ? meal.id : (meal.recipe_id ?? null)
 
-      const food_item_id = isRecipe ? null
-        : (meal.food_item_id ?? await autoSaveFoodItem(state.user.id, meal, state.foodItems).then(fid => {
-            if (fid && !state.foodItems.find(f => f.id === fid)) {
+      // Determine food_item_id: direct link if logging a food item, preserved
+      // if the meal already has one, otherwise auto-save so the food shows up
+      // in Foods and links to this log entry.
+      let food_item_id = null
+      if (!isRecipe) {
+        if (meal.food_item_id) {
+          food_item_id = meal.food_item_id
+        } else {
+          try {
+            food_item_id = await autoSaveFoodItem(state.user.id, meal, state.foodItems)
+            if (food_item_id && !state.foodItems.find(f => f.id === food_item_id)) {
               getFoodItems(state.user.id).then(items => { state.foodItems = items }).catch(() => {})
             }
-            return fid
-          }).catch(() => null))
+          } catch (e) { console.warn('[quickLogMeal] autoSaveFoodItem failed:', e); food_item_id = null }
+        }
+      }
+
+      console.log('[quickLogMeal] inserting entry — isRecipe:', isRecipe, 'isFood:', isFood, 'recipe_id:', recipe_id, 'food_item_id:', food_item_id)
 
       const entry = await addMealEntry(state.user.id, {
         ...meal,
@@ -9011,7 +9081,10 @@ function filterQuickLog() {
       updateStats()
       refreshTodayLog()
       showToast(`${meal.name} logged!`, 'success')
-    } catch (err) { showToast('Failed to log: ' + err.message, 'error') }
+    } catch (err) {
+      console.error('[quickLogMeal] failed:', err)
+      showToast('Failed to log: ' + (err?.message || 'unknown error'), 'error')
+    }
   }
 }
 
