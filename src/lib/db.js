@@ -418,6 +418,7 @@ export async function upsertRecipe(userId, recipe) {
     source_url: recipe.source_url || '',
     notes: recipe.notes || '',
     instructions: recipe.instructions || null,
+    tags: Array.isArray(recipe.tags) ? recipe.tags : [],
   }
   if (recipe.id) payload.id = recipe.id
 
@@ -434,6 +435,7 @@ export async function upsertRecipe(userId, recipe) {
       const stripped = { ...payload }
       if (err.message?.includes('source_url')) delete stripped.source_url
       if (err.message?.includes('notes') && !err.message?.includes('ai_notes')) delete stripped.notes
+      if (err.message?.includes('tags')) delete stripped.tags
       // Never strip instructions — it's the most important field to persist
       return await tryUpsert(stripped)
     }

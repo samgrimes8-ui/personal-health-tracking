@@ -26,6 +26,17 @@ import {
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
+// Preset recipe tags shown as suggestions in the editor + always visible
+// in the filter pills on the recipes page. Users can also create custom
+// tags on top of these.
+const RECIPE_TAG_PRESETS = [
+  'Breakfast', 'Lunch', 'Dinner', 'Snack',
+  'Crockpot', 'Instant Pot', 'Air Fryer', 'Grill',
+  'Winter', 'Summer', 'Fall', 'Spring',
+  'Quick', 'Meal Prep', 'High-Protein', 'Low-Carb',
+  'Vegetarian', 'Vegan', 'Gluten-Free',
+]
+
 // ─── State ───────────────────────────────────────────────────────────────────
 let state = {
   user: null,
@@ -47,6 +58,7 @@ let state = {
   pendingComponent: null,
   foodSearch: '',
   recipeSearch: '',
+  recipeActiveTag: '', // '' = all recipes; otherwise filter to that tag
   providerSearch: '',
   planner: { meals: Array(7).fill(null).map(() => []) },
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false, isProvider: false },
@@ -2172,9 +2184,50 @@ function renderFoodItemModal(item, editingComponents) {
 function renderRecipesPage(container) {
   const allRecipes = state.recipes
   const q = (state.recipeSearch || '').trim().toLowerCase()
-  const recipes = searchRecipes(allRecipes, q)
+  const activeTag = state.recipeActiveTag || ''
+
+  // Build unified tag list: presets always shown; plus any custom tags
+  // the user has actually used. Tags are case-insensitive for matching
+  // but we preserve the original casing for display.
+  const tagCounts = {}
+  for (const r of allRecipes) {
+    const tags = Array.isArray(r.tags) ? r.tags : []
+    for (const t of tags) {
+      if (!t) continue
+      const key = t.trim()
+      if (!key) continue
+      if (!tagCounts[key]) tagCounts[key] = 0
+      tagCounts[key]++
+    }
+  }
+  // Merge presets (always shown, even if 0) with custom used tags
+  const presetSet = new Set(RECIPE_TAG_PRESETS.map(t => t.toLowerCase()))
+  const customTags = Object.keys(tagCounts)
+    .filter(t => !presetSet.has(t.toLowerCase()))
+    .sort((a, b) => a.localeCompare(b))
+  const displayTags = [...RECIPE_TAG_PRESETS, ...customTags]
+
+  // Apply tag filter BEFORE the search rank so search results are scoped to tag
+  const tagFiltered = activeTag
+    ? (activeTag === '__untagged__'
+        ? allRecipes.filter(r => !(Array.isArray(r.tags) && r.tags.length))
+        : allRecipes.filter(r => Array.isArray(r.tags) && r.tags.some(t => t && t.toLowerCase() === activeTag.toLowerCase())))
+    : allRecipes
+  const recipes = searchRecipes(tagFiltered, q)
+
+  const untaggedCount = allRecipes.filter(r => !(Array.isArray(r.tags) && r.tags.length)).length
+
   const unreadShares = (state.incomingShares || []).filter(s => !s.is_read)
   const allShares = state.incomingShares || []
+
+  const pill = (label, tagValue, count, isActive) => `
+    <button onclick="setRecipeTag('${tagValue.replace(/'/g,"\\'")}')"
+      style="flex-shrink:0;padding:6px 14px;border-radius:999px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border2)'};background:${isActive ? 'rgba(234,203,87,0.15)' : 'var(--bg3)'};color:${isActive ? 'var(--accent)' : 'var(--text2)'};transition:all 0.15s;white-space:nowrap"
+      onmouseover="if (!${isActive}) { this.style.borderColor='var(--border2)'; this.style.color='var(--text)' }"
+      onmouseout="if (!${isActive}) { this.style.borderColor='var(--border2)'; this.style.color='var(--text2)' }">
+      ${esc(label)}${count != null ? ` <span style="opacity:0.6;margin-left:2px">${count}</span>` : ''}
+    </button>
+  `
 
   container.innerHTML = `
     <div class="greeting">Recipes</div>
@@ -2203,7 +2256,7 @@ function renderRecipesPage(container) {
       </div>
     </div>` : ''}
 
-    <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;align-items:center">
+    <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
       ${allRecipes.length ? `
         <input class="planner-search" id="recipe-search" placeholder="Search recipes by name or ingredient..."
           value="${esc(q)}"
@@ -2213,12 +2266,24 @@ function renderRecipesPage(container) {
       <button class="analyze-btn" style="width:auto;padding:10px 20px;flex-shrink:0" onclick="openNewRecipeModal()">+ New recipe</button>
     </div>
 
+    ${allRecipes.length ? `
+      <!-- Tag pill bar — horizontally scrollable on overflow -->
+      <div style="display:flex;gap:6px;margin-bottom:20px;overflow-x:auto;padding:4px 0 8px;scrollbar-width:thin">
+        ${pill('All', '', allRecipes.length, !activeTag)}
+        ${untaggedCount > 0 ? pill('Untagged', '__untagged__', untaggedCount, activeTag === '__untagged__') : ''}
+        ${displayTags.map(tag => pill(tag, tag, tagCounts[tag] || 0, activeTag.toLowerCase() === tag.toLowerCase())).join('')}
+      </div>
+    ` : ''}
+
     ${!recipes.length ? `
       <div class="log-card">
         <div class="log-empty" style="padding:60px">
-          ${q ? `No recipes match "${esc(q)}".` : 'No recipes saved yet.'}<br>
+          ${q && activeTag ? `No recipes in <strong style="color:var(--text)">${esc(activeTag)}</strong> match "${esc(q)}".`
+            : q ? `No recipes match "${esc(q)}".`
+            : activeTag ? `No recipes tagged <strong style="color:var(--text)">${esc(activeTag === '__untagged__' ? 'Untagged' : activeTag)}</strong> yet.`
+            : 'No recipes saved yet.'}<br>
           <span style="font-size:12px;color:var(--text3);margin-top:6px;display:block">
-            ${q ? 'Try a different search.' : 'Analyze a meal and save it as a recipe, or create one manually.'}
+            ${q || activeTag ? 'Try clearing the filter or searching for something else.' : 'Analyze a meal and save it as a recipe, or create one manually.'}
           </span>
         </div>
       </div>
@@ -2248,6 +2313,7 @@ function renderRecipesPage(container) {
 }
 
 function renderRecipeCard(r) {
+  const tags = Array.isArray(r.tags) ? r.tags.filter(Boolean) : []
   return `
     <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openRecipeModal('${r.id}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
@@ -2268,9 +2334,83 @@ function renderRecipeCard(r) {
         <span class="macro-pill pill-c">${Math.round(r.carbs)}g C</span>
         <span class="macro-pill pill-f">${Math.round(r.fat)}g F</span>
       </div>
+      ${tags.length ? `
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">
+          ${tags.slice(0, 4).map(t => `<span style="font-size:10px;padding:2px 7px;border-radius:999px;background:rgba(122,180,232,0.1);color:var(--carbs);border:1px solid rgba(122,180,232,0.2)">${esc(t)}</span>`).join('')}
+          ${tags.length > 4 ? `<span style="font-size:10px;color:var(--text3);padding:2px 4px">+${tags.length - 4}</span>` : ''}
+        </div>
+      ` : ''}
       ${r.ingredients?.length ? `
         <div style="font-size:11px;color:var(--text3)">${r.ingredients.length} ingredients · <span style="color:var(--text2)">per 1 of ${r.servings} servings</span></div>
       ` : ''}
+    </div>
+  `
+}
+
+// Tag editor/display block for the recipe modal. Shows as read-only chips
+// in view mode (and for read-only recipes belonging to other providers),
+// and as an add/remove widget with preset suggestions in edit/new mode.
+function renderRecipeTagEditor(recipe, mode, isNew, isReadOnly) {
+  const tags = Array.isArray(recipe.tags) ? recipe.tags.filter(Boolean) : []
+  const editable = (mode === 'edit' || isNew) && !isReadOnly
+
+  if (!editable) {
+    if (!tags.length) return ''
+    return `
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px">Tags</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${tags.map(t => `<span style="font-size:12px;padding:4px 10px;border-radius:999px;background:rgba(122,180,232,0.1);color:var(--carbs);border:1px solid rgba(122,180,232,0.25)">${esc(t)}</span>`).join('')}
+        </div>
+      </div>
+    `
+  }
+
+  // Editable: chips + input + preset suggestions. Selected state lives on
+  // window._editingTags, seeded from recipe.tags on open.
+  if (!window._editingTags) window._editingTags = new Set(tags.map(t => t.toLowerCase()))
+  // Make sure the seed is correct when switching recipes
+  window._editingTags = new Set(tags.map(t => t.toLowerCase()))
+  window._editingTagsDisplay = {}
+  tags.forEach(t => { window._editingTagsDisplay[t.toLowerCase()] = t })
+
+  const chip = (t, isOn) => `<button type="button" data-tag="${esc(t)}" onclick="toggleRecipeTag('${t.replace(/'/g,"\\'")}')"
+      style="font-size:12px;padding:4px 12px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'rgba(122,180,232,0.18)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
+
+  // Collect all known tags for suggestions: presets ∪ other recipes' tags
+  const knownTags = new Set(RECIPE_TAG_PRESETS.map(t => t.toLowerCase()))
+  const displayMap = {}
+  RECIPE_TAG_PRESETS.forEach(t => { displayMap[t.toLowerCase()] = t })
+  for (const r of (state.recipes || [])) {
+    if (!Array.isArray(r.tags)) continue
+    for (const t of r.tags) {
+      if (!t) continue
+      const key = t.toLowerCase()
+      if (!displayMap[key]) displayMap[key] = t
+      knownTags.add(key)
+    }
+  }
+  // Also include currently-selected custom tags so they render as "on"
+  for (const key of window._editingTags) {
+    if (!displayMap[key]) displayMap[key] = window._editingTagsDisplay[key] || key
+  }
+  const suggestions = Array.from(knownTags).map(k => displayMap[k])
+
+  return `
+    <div style="margin-bottom:20px" id="recipe-tag-editor">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px">Tags <span style="text-transform:none;letter-spacing:0;color:var(--text3);font-size:10px">· tap to toggle, or type a new one below</span></div>
+      <div id="recipe-tag-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        ${suggestions.map(t => chip(t, window._editingTags.has(t.toLowerCase()))).join('')}
+      </div>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="recipe-tag-input" placeholder="Create a new tag..."
+          onkeydown="if (event.key === 'Enter') { event.preventDefault(); addCustomRecipeTag() }"
+          style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:7px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+        <button type="button" onclick="addCustomRecipeTag()"
+          style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:7px 14px;font-size:12px;color:var(--text2);cursor:pointer;font-family:inherit;white-space:nowrap">
+          + Add
+        </button>
+      </div>
     </div>
   `
 }
@@ -2496,6 +2636,8 @@ function renderRecipeModalContent(recipe, mode = 'view') {
             </div>
           </div>
         ` : ''}
+
+        ${renderRecipeTagEditor(recipe, mode, isNew, isReadOnly)}
 
         <!-- Ingredients / Instructions toggle (view mode only) -->
         <div style="margin-bottom:16px">
@@ -5184,12 +5326,90 @@ function wireGlobals() {
     const q = (value || '').trim().toLowerCase()
     const grid = document.getElementById('recipe-grid')
     if (!grid) return
-    const recipes = searchRecipes(state.recipes, q)
+    const activeTag = state.recipeActiveTag || ''
+    const scoped = activeTag
+      ? (activeTag === '__untagged__'
+          ? state.recipes.filter(r => !(Array.isArray(r.tags) && r.tags.length))
+          : state.recipes.filter(r => Array.isArray(r.tags) && r.tags.some(t => t && t.toLowerCase() === activeTag.toLowerCase())))
+      : state.recipes
+    const recipes = searchRecipes(scoped, q)
     if (!recipes.length) {
-      grid.innerHTML = `<div class="log-card" style="grid-column:1/-1"><div class="log-empty" style="padding:40px">No recipes match "${esc(q)}".</div></div>`
+      grid.innerHTML = `<div class="log-card" style="grid-column:1/-1"><div class="log-empty" style="padding:40px">No recipes match "${esc(q)}"${activeTag ? ` in <strong style="color:var(--text)">${esc(activeTag === '__untagged__' ? 'Untagged' : activeTag)}</strong>` : ''}.</div></div>`
     } else {
       grid.innerHTML = recipes.map(r => renderRecipeCard(r)).join('')
     }
+  }
+
+  // Change the active tag filter. Re-renders the page so the pill bar
+  // reflects the new selection and the grid updates at the same time.
+  window.setRecipeTag = (tag) => {
+    state.recipeActiveTag = tag === state.recipeActiveTag ? '' : tag
+    renderPage()
+  }
+
+  // Inside the recipe editor: toggle a tag on or off. Operates on
+  // window._editingTags (a Set of lowercase keys) and re-renders just
+  // the chip row to reflect the change.
+  window.toggleRecipeTag = (tag) => {
+    if (!window._editingTags) window._editingTags = new Set()
+    if (!window._editingTagsDisplay) window._editingTagsDisplay = {}
+    const key = tag.toLowerCase()
+    if (window._editingTags.has(key)) {
+      window._editingTags.delete(key)
+    } else {
+      window._editingTags.add(key)
+      window._editingTagsDisplay[key] = tag
+    }
+    rerenderRecipeTagChips()
+  }
+
+  // Add a custom tag from the text input. Dedupes case-insensitively
+  // and also appends the chip so it appears as toggleable.
+  window.addCustomRecipeTag = () => {
+    const input = document.getElementById('recipe-tag-input')
+    if (!input) return
+    const raw = input.value.trim()
+    if (!raw) return
+    // Strip a leading # if the user habit-typed one
+    const clean = raw.replace(/^#+/, '').trim()
+    if (!clean) return
+    if (!window._editingTags) window._editingTags = new Set()
+    if (!window._editingTagsDisplay) window._editingTagsDisplay = {}
+    const key = clean.toLowerCase()
+    window._editingTags.add(key)
+    window._editingTagsDisplay[key] = clean
+    input.value = ''
+    rerenderRecipeTagChips()
+  }
+
+  // Helper for the above — rebuild the chips row only, not the whole
+  // modal, so the input focus is preserved.
+  function rerenderRecipeTagChips() {
+    const row = document.getElementById('recipe-tag-chips')
+    if (!row) return
+    // Gather presets + all existing tags + currently selected custom tags
+    const knownTags = new Set(RECIPE_TAG_PRESETS.map(t => t.toLowerCase()))
+    const displayMap = {}
+    RECIPE_TAG_PRESETS.forEach(t => { displayMap[t.toLowerCase()] = t })
+    for (const r of (state.recipes || [])) {
+      if (!Array.isArray(r.tags)) continue
+      for (const t of r.tags) {
+        if (!t) continue
+        const key = t.toLowerCase()
+        if (!displayMap[key]) displayMap[key] = t
+        knownTags.add(key)
+      }
+    }
+    for (const key of (window._editingTags || [])) {
+      if (!displayMap[key]) displayMap[key] = (window._editingTagsDisplay?.[key]) || key
+      knownTags.add(key)
+    }
+    const suggestions = Array.from(knownTags).map(k => displayMap[k])
+    row.innerHTML = suggestions.map(t => {
+      const isOn = window._editingTags.has(t.toLowerCase())
+      return `<button type="button" data-tag="${esc(t)}" onclick="toggleRecipeTag('${t.replace(/'/g,"\\'")}')"
+        style="font-size:12px;padding:4px 12px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'rgba(122,180,232,0.18)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
+    }).join('')
   }
 
   // Foods search — same pattern. Preserves focus while typing.
@@ -7420,7 +7640,10 @@ function wireGlobals() {
   }
 
   window.openNewRecipeModal = () => {
-    state.editingRecipe = { name: '', description: '', servings: 4, serving_label: 'serving', calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, ingredients: [] }
+    state.editingRecipe = { name: '', description: '', servings: 4, serving_label: 'serving', calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, ingredients: [], tags: [] }
+    // Reset tag editor state so a previous recipe's selection doesn't leak
+    window._editingTags = new Set()
+    window._editingTagsDisplay = {}
     // Show method picker instead of jumping straight to form
     document.getElementById('recipe-modal-content').innerHTML = `
       <div style="position:relative">
@@ -7861,6 +8084,11 @@ function wireGlobals() {
     state.recipeTab = recipe.instructions?.steps?.length ? 'instructions' : 'ingredients'
     state.recipeServings = null
     state.editingRecipe = JSON.parse(JSON.stringify(recipe))
+    // Seed the tag editor state from this recipe's tags
+    const seedTags = Array.isArray(recipe.tags) ? recipe.tags.filter(Boolean) : []
+    window._editingTags = new Set(seedTags.map(t => t.toLowerCase()))
+    window._editingTagsDisplay = {}
+    seedTags.forEach(t => { window._editingTagsDisplay[t.toLowerCase()] = t })
     document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, mode)
     document.getElementById('recipe-modal').classList.add('open')
 
@@ -8674,6 +8902,11 @@ function wireGlobals() {
       fat: parseFloat(document.getElementById('r-fat')?.value) || 0,
       fiber: parseFloat(document.getElementById('r-fiber')?.value) || 0,
       sugar: parseFloat(document.getElementById('r-sugar')?.value) || 0,
+      // Tags from the chip editor (window._editingTags is a Set of
+      // lowercase keys; we map back to display casing before saving)
+      tags: window._editingTags
+        ? Array.from(window._editingTags).map(k => window._editingTagsDisplay?.[k] || k)
+        : (Array.isArray(state.editingRecipe.tags) ? state.editingRecipe.tags : []),
     }
     if (!recipe.name) { showToast('Recipe needs a name', 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Save recipe' }; return }
     try {
