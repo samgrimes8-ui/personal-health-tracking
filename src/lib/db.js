@@ -1037,31 +1037,56 @@ export async function copyBroadcastToPlanner(userId, broadcast, weekStart, selec
 
   if (!items.length) return 0
 
+  // The broadcast may span across a week boundary (e.g. Tue → following Sun).
+  // We preserve each meal's position *relative to the broadcast's start day*
+  // and land it on the target week so the weekdays line up naturally.
+  //
+  // Example: broadcast Tue Apr 21 → Sun Apr 27, target week Apr 19 (Sun):
+  //   - Tue Apr 22 (offset 1) → Apr 19 + source_weekday(2) + 1 = Apr 22 (Tue) ✓
+  //   - Sun Apr 26 (offset 5) → Apr 19 + source_weekday(2) + 5 = Apr 26 (Sun) ✓
+  const sourceStart = broadcast.start_date || broadcast.week_start || null
+  let sourceStartDate = null
+  let sourceStartWeekday = 0
+  if (sourceStart) {
+    const [sy, sm, sd] = sourceStart.split('-').map(Number)
+    sourceStartDate = new Date(sy, sm - 1, sd)
+    sourceStartWeekday = sourceStartDate.getDay() // 0=Sun..6=Sat
+  }
+
   const [wy, wmo, wd] = weekStart.split('-').map(Number)
   const targetStartDate = new Date(wy, wmo - 1, wd)
 
+  const pad = n => String(n).padStart(2, '0')
+  const ds = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
+
   const rows = items.map(item => {
-    // Determine which weekday (Sun=0..Sat=6) this meal belongs on.
-    // Priority: stored day_of_week (computed at save time) > derived from actual_date.
-    // We do NOT offset from broadcast.start_date because the target planner is
-    // Sunday-based, and day_of_week already captures the correct weekday.
-    let dayIdx = 0
-    if (Number.isInteger(item.day_of_week)) {
-      dayIdx = Math.max(0, Math.min(6, item.day_of_week))
-    } else if (item.actual_date) {
+    // Days-from-broadcast-start for this meal
+    let offset = 0
+    if (item.actual_date && sourceStartDate) {
       const [iy, im, id] = item.actual_date.split('-').map(Number)
-      dayIdx = new Date(iy, im - 1, id).getDay()
+      const itemDate = new Date(iy, im - 1, id)
+      offset = Math.max(0, Math.round((itemDate - sourceStartDate) / (1000 * 60 * 60 * 24)))
+    } else if (Number.isInteger(item.day_of_week)) {
+      offset = Math.max(0, Math.min(6, item.day_of_week - sourceStartWeekday))
     }
 
+    // Land at: target_week_start + source_weekday + offset
+    // This keeps weekdays aligned: Tue → Tue, Sun → Sun, etc.
     const actualDate = new Date(targetStartDate)
-    actualDate.setDate(actualDate.getDate() + dayIdx)
-    const actualDateStr = `${actualDate.getFullYear()}-${String(actualDate.getMonth()+1).padStart(2,'0')}-${String(actualDate.getDate()).padStart(2,'0')}`
+    actualDate.setDate(actualDate.getDate() + sourceStartWeekday + offset)
+    const actualDateStr = ds(actualDate)
+
+    // Compute the Sunday-based week that contains this date
+    const dayIdx = actualDate.getDay()
+    const weekStartForRow = new Date(actualDate)
+    weekStartForRow.setDate(weekStartForRow.getDate() - dayIdx)
+    const weekStartStr = ds(weekStartForRow)
 
     const name = item.meal_name || item._name || item.recipe_name || 'Meal'
 
     return {
       user_id: userId,
-      week_start_date: weekStart,
+      week_start_date: weekStartStr,
       day_of_week: dayIdx,
       actual_date: actualDateStr,
       meal_name: name,

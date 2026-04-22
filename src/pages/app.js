@@ -5306,6 +5306,12 @@ function wireGlobals() {
 
       <!-- Meals grouped by day -->
       <div style="padding:4px 0">
+        ${meals.some(m => m.is_leftover) ? `
+          <div style="margin:4px 20px 8px;padding:10px 12px;background:rgba(122,180,232,0.08);border:1px solid rgba(122,180,232,0.2);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.45">
+            <span style="color:var(--carbs);font-weight:500">ℹ️ About leftovers:</span>
+            Some meals are marked <span style="color:var(--text)">♻️ Leftover</span> — they'll keep that flag when copied, so your planner knows they don't need a fresh prep. Uncheck any leftover days you'd rather skip or cook fresh instead.
+          </div>
+        ` : ''}
         ${sortedKeys.map(key => `
           <div style="padding:14px 20px 4px">
             <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">${dayFmt(key)}</div>
@@ -5318,6 +5324,12 @@ function wireGlobals() {
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <div style="font-size:13px;color:var(--text);font-weight:500">${esc(item._name || item.meal_name || item.recipe_name || 'Meal')}</div>
                     ${mealTypeBadge(item.meal_type)}
+                    ${item.is_leftover ? `
+                      <span title="This meal was planned as a leftover from a previous cook. It'll be copied with the leftover flag so your planner knows it doesn't need a fresh prep."
+                        style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(158,155,148,0.15);color:var(--text2);display:inline-flex;align-items:center;gap:4px;cursor:help;pointer-events:auto">
+                        ♻️ Leftover
+                      </span>
+                    ` : ''}
                   </div>
                   <div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
                     <span>${Math.round(item.calories ?? item._calories ?? 0)} cal</span>
