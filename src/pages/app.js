@@ -9,7 +9,7 @@ import {
   getFoodItems, upsertFoodItem, deleteFoodItem,
   saveRecipeInstructions, autoSaveFoodItem,
   logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs,
-  getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, uploadScanFile, getScanUrl,
+  getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, deleteCheckin, uploadScanFile, getScanUrl,
   generateShareToken, shareRecipeWithUser, getIncomingShares, markShareRead, getUnreadShareCount,
   enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary, getRecipeByIdPublic,
   saveRecipeOgCache, setUserRole,
@@ -46,6 +46,8 @@ let state = {
   editingComponents: null,
   pendingComponent: null,
   foodSearch: '',
+  recipeSearch: '',
+  providerSearch: '',
   planner: { meals: Array(7).fill(null).map(() => []) },
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false, isProvider: false },
   currentPage: 'log',
@@ -2109,7 +2111,17 @@ function renderFoodItemModal(item, editingComponents) {
 
 // ─── Recipes Page ─────────────────────────────────────────────────────────────
 function renderRecipesPage(container) {
-  const recipes = state.recipes
+  const allRecipes = state.recipes
+  const q = (state.recipeSearch || '').trim().toLowerCase()
+  const recipes = q
+    ? allRecipes.filter(r => {
+        if ((r.name || '').toLowerCase().includes(q)) return true
+        if ((r.description || '').toLowerCase().includes(q)) return true
+        // Search ingredient names too so "chicken" finds all recipes with chicken
+        const ings = r.ingredients || []
+        return ings.some(ing => (ing.name || '').toLowerCase().includes(q))
+      })
+    : allRecipes
   const unreadShares = (state.incomingShares || []).filter(s => !s.is_read)
   const allShares = state.incomingShares || []
 
@@ -2140,51 +2152,76 @@ function renderRecipesPage(container) {
       </div>
     </div>` : ''}
 
-    <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">
-      <button class="analyze-btn" style="width:auto;padding:10px 20px" onclick="openNewRecipeModal()">+ New recipe</button>
+    <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;align-items:center">
+      ${allRecipes.length ? `
+        <input class="planner-search" id="recipe-search" placeholder="Search recipes by name or ingredient..."
+          value="${esc(q)}"
+          oninput="filterRecipesList(this.value)"
+          style="flex:1;min-width:180px" />
+      ` : ''}
+      <button class="analyze-btn" style="width:auto;padding:10px 20px;flex-shrink:0" onclick="openNewRecipeModal()">+ New recipe</button>
     </div>
 
     ${!recipes.length ? `
       <div class="log-card">
         <div class="log-empty" style="padding:60px">
-          No recipes saved yet.<br>
-          <span style="font-size:12px;color:var(--text3);margin-top:6px;display:block">Analyze a meal and save it as a recipe, or create one manually.</span>
+          ${q ? `No recipes match "${esc(q)}".` : 'No recipes saved yet.'}<br>
+          <span style="font-size:12px;color:var(--text3);margin-top:6px;display:block">
+            ${q ? 'Try a different search.' : 'Analyze a meal and save it as a recipe, or create one manually.'}
+          </span>
         </div>
       </div>
     ` : `
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
-        ${recipes.map(r => `
-          <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openRecipeModal('${r.id}')">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-              <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);flex:1;margin-right:12px">${esc(r.name)}</div>
-              <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
-                <button onclick="openShareModal('${r.id}');event.stopPropagation()"
-                  title="Share recipe"
-                  style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
-                  onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
-                  onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text3)'">↗ Share</button>
-                <span style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:4px;padding:2px 7px;white-space:nowrap">${r.servings} serving${r.servings !== 1 ? 's' : ''}</span>
-              </div>
-            </div>
-            ${r.description ? `<div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.5">${esc(r.description)}</div>` : ''}
-            <div class="macro-pills" style="margin-bottom:10px">
-              <span class="macro-pill pill-cal">${Math.round(r.calories)} kcal</span>
-              <span class="macro-pill pill-p">${Math.round(r.protein)}g P</span>
-              <span class="macro-pill pill-c">${Math.round(r.carbs)}g C</span>
-              <span class="macro-pill pill-f">${Math.round(r.fat)}g F</span>
-            </div>
-            ${r.ingredients?.length ? `
-              <div style="font-size:11px;color:var(--text3)">${r.ingredients.length} ingredients · <span style="color:var(--text2)">per 1 of ${r.servings} servings</span></div>
-            ` : ''}
-          </div>
-        `).join('')}
+      <div id="recipe-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+        ${recipes.map(r => renderRecipeCard(r)).join('')}
       </div>
     `}
   `
 
+  // Restore focus on search input if the user was typing
+  if (q) {
+    setTimeout(() => {
+      const input = document.getElementById('recipe-search')
+      if (input && document.activeElement !== input) {
+        input.focus()
+        // Move caret to end
+        const len = input.value.length
+        input.setSelectionRange(len, len)
+      }
+    }, 0)
+  }
+
   document.getElementById('recipe-modal')?.addEventListener('click', e => {
     if (e.target.id === 'recipe-modal') closeRecipeModal()
   })
+}
+
+function renderRecipeCard(r) {
+  return `
+    <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openRecipeModal('${r.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+        <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);flex:1;margin-right:12px">${esc(r.name)}</div>
+        <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+          <button onclick="openShareModal('${r.id}');event.stopPropagation()"
+            title="Share recipe"
+            style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
+            onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
+            onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text3)'">↗ Share</button>
+          <span style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:4px;padding:2px 7px;white-space:nowrap">${r.servings} serving${r.servings !== 1 ? 's' : ''}</span>
+        </div>
+      </div>
+      ${r.description ? `<div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.5">${esc(r.description)}</div>` : ''}
+      <div class="macro-pills" style="margin-bottom:10px">
+        <span class="macro-pill pill-cal">${Math.round(r.calories)} kcal</span>
+        <span class="macro-pill pill-p">${Math.round(r.protein)}g P</span>
+        <span class="macro-pill pill-c">${Math.round(r.carbs)}g C</span>
+        <span class="macro-pill pill-f">${Math.round(r.fat)}g F</span>
+      </div>
+      ${r.ingredients?.length ? `
+        <div style="font-size:11px;color:var(--text3)">${r.ingredients.length} ingredients · <span style="color:var(--text2)">per 1 of ${r.servings} servings</span></div>
+      ` : ''}
+    </div>
+  `
 }
 
 function buildOgCard(url, og) {
@@ -2729,7 +2766,12 @@ function buildCheckinRow(c, isImperial) {
         ${c.scan_type ? `<span style="font-size:10px;color:var(--text3);margin-left:6px;text-transform:uppercase;background:var(--bg4);padding:2px 5px;border-radius:3px">${c.scan_type}</span>` : ''}
         ${c.notes ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${c.notes}</div>` : ''}
       </div>
-      ${c.scan_file_path ? '<span style="font-size:20px" title="Scan attached">📄</span>' : ''}
+      <div style="display:flex;align-items:center;gap:10px">
+        ${c.scan_file_path ? '<span style="font-size:20px" title="Scan attached">📄</span>' : ''}
+        <button onclick="deleteCheckinHandler('${c.id}')" title="Delete check-in"
+          style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:4px;line-height:1;font-family:inherit"
+          onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'">×</button>
+      </div>
     </div>
 
     ${coreMetrics.length ? `
@@ -2921,8 +2963,19 @@ function renderBroadcastForm(b) {
 
 function renderProvidersPage(container) {
   const isProvider = state.usage?.isProvider
-  const myProviders = state.followedProviders || []
-  const allProviders = state.providers || []
+  const myProvidersAll = state.followedProviders || []
+  const allProvidersAll = state.providers || []
+
+  // Apply search filter (client-side name/specialty/bio match)
+  const q = (state.providerSearch || '').trim().toLowerCase()
+  const matchProvider = (p) => {
+    if (!q) return true
+    return (p.provider_name || '').toLowerCase().includes(q)
+      || (p.provider_specialty || '').toLowerCase().includes(q)
+      || (p.provider_bio || '').toLowerCase().includes(q)
+  }
+  const myProviders = myProvidersAll.filter(matchProvider)
+  const allProviders = allProvidersAll.filter(matchProvider)
 
   container.innerHTML = `
     <div class="greeting">${isProvider ? 'My Channel' : 'Providers'}</div>
@@ -2931,9 +2984,18 @@ function renderProvidersPage(container) {
     ${isProvider ? renderMyProviderChannel() : ''}
 
     ${!isProvider ? `
+      ${allProvidersAll.length ? `
+        <div style="margin-bottom:16px">
+          <input class="planner-search" id="provider-search" placeholder="Search providers by name or specialty..."
+            value="${esc(q)}"
+            oninput="filterProvidersList(this.value)"
+            style="width:100%" />
+        </div>
+      ` : ''}
+
       <!-- Followed providers -->
       ${myProviders.length ? `
-        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Following (${myProviders.length})</div>
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Following (${myProviders.length}${q ? ` · filtered` : ''})</div>
         <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:24px">
           ${myProviders.map(p => renderProviderCard(p, true)).join('')}
         </div>
@@ -2944,16 +3006,20 @@ function renderProvidersPage(container) {
         ${myProviders.length ? 'All providers' : 'Discover providers'}
       </div>
       ${(() => {
-        const unfollowed = allProviders.filter(p => !myProviders.some(f => f.user_id === p.user_id))
+        const unfollowed = allProviders.filter(p => !myProvidersAll.some(f => f.user_id === p.user_id))
         return unfollowed.length ? `
           <div style="display:flex;flex-direction:column;gap:10px">
             ${unfollowed.map(p => renderProviderCard(p, false)).join('')}
           </div>
-        ` : myProviders.length ? '' : `
+        ` : myProviders.length ? (q && !unfollowed.length ? `
+          <div class="upload-card" style="text-align:center;padding:24px;color:var(--text3);font-size:13px">
+            No other providers match "${esc(q)}"
+          </div>
+        ` : '') : `
           <div class="upload-card" style="text-align:center;padding:32px">
             <div style="font-size:32px;margin-bottom:8px">🩺</div>
-            <div style="font-size:14px;color:var(--text2);font-weight:500">No providers yet</div>
-            <div style="font-size:12px;color:var(--text3);margin-top:4px">Providers will appear here when they join MacroLens</div>
+            <div style="font-size:14px;color:var(--text2);font-weight:500">${q ? `No providers match "${esc(q)}"` : 'No providers yet'}</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:4px">${q ? 'Try a different search' : 'Providers will appear here when they join MacroLens'}</div>
           </div>
         `
       })()}
@@ -5001,6 +5067,60 @@ function wireGlobals() {
       showToast('Error: ' + err.message, 'error')
       if (btn) { btn.disabled = false; btn.textContent = 'Save check-in' }
     }
+  }
+
+  window.deleteCheckinHandler = async (id) => {
+    const c = (state.checkins || []).find(x => String(x.id) === String(id))
+    const dateLabel = c?.scan_date || c?.checked_in_at
+    const label = dateLabel
+      ? new Date(dateLabel + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'this check-in'
+    if (!confirm(`Delete check-in from ${label}? This can't be undone.`)) return
+    try {
+      await deleteCheckin(state.user.id, id)
+      state.checkins = (state.checkins || []).filter(x => String(x.id) !== String(id))
+      renderPage()
+      showToast('Check-in deleted', 'success')
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+    }
+  }
+
+  // Filter recipes live without full re-render — keeps focus in the search
+  // input so the user can keep typing without tapping back into it.
+  window.filterRecipesList = (value) => {
+    state.recipeSearch = value
+    const q = (value || '').trim().toLowerCase()
+    const grid = document.getElementById('recipe-grid')
+    if (!grid) return
+    const recipes = q
+      ? state.recipes.filter(r => {
+          if ((r.name || '').toLowerCase().includes(q)) return true
+          if ((r.description || '').toLowerCase().includes(q)) return true
+          const ings = r.ingredients || []
+          return ings.some(ing => (ing.name || '').toLowerCase().includes(q))
+        })
+      : state.recipes
+    if (!recipes.length) {
+      grid.innerHTML = `<div class="log-card" style="grid-column:1/-1"><div class="log-empty" style="padding:40px">No recipes match "${esc(q)}".</div></div>`
+    } else {
+      grid.innerHTML = recipes.map(r => renderRecipeCard(r)).join('')
+    }
+  }
+
+  // Same pattern for providers page
+  window.filterProvidersList = (value) => {
+    state.providerSearch = value
+    renderProvidersPage(document.getElementById('main-content'))
+    // Restore focus
+    setTimeout(() => {
+      const input = document.getElementById('provider-search')
+      if (input && document.activeElement !== input) {
+        input.focus()
+        const len = input.value.length
+        input.setSelectionRange(len, len)
+      }
+    }, 0)
   }
 
   document.getElementById('broadcast-modal')?.addEventListener('click', e => {

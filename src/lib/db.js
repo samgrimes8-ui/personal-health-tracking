@@ -752,6 +752,17 @@ export async function saveCheckin(userId, checkin) {
   return data
 }
 
+export async function deleteCheckin(userId, checkinId) {
+  if (!supabase) return true
+  const { error } = await supabase
+    .from('checkins')
+    .delete()
+    .eq('id', checkinId)
+    .eq('user_id', userId) // defense-in-depth: only delete your own rows
+  if (error) throw error
+  return true
+}
+
 export async function uploadScanFile(userId, file) {
   if (!supabase) return null
   const ext = file.name.split('.').pop()
