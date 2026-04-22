@@ -1860,59 +1860,118 @@ function formatWeekLabel(weekStart) {
 // ─── Foods Page ───────────────────────────────────────────────────────────────
 function renderFoodsPage(container) {
   const items = state.foodItems
-  const q = state.foodSearch || ''
-  const filtered = q ? items.filter(f => f.name.toLowerCase().includes(q.toLowerCase()) || (f.brand||'').toLowerCase().includes(q.toLowerCase())) : items
+  const q = (state.foodSearch || '').trim().toLowerCase()
+  const filtered = searchFoods(items, q)
 
   container.innerHTML = `
     <div class="greeting">My Foods</div>
     <div class="greeting-sub">Saved food items — single foods, combos, protein shakes.</div>
 
     <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
-      <input class="planner-search" placeholder="Search foods..." value="${esc(q)}"
-        oninput="state.foodSearch=this.value;renderPage()" style="flex:1;min-width:180px" />
+      <input class="planner-search" id="food-search" placeholder="Search foods by name, brand, or component..."
+        value="${esc(q)}"
+        oninput="filterFoodsList(this.value)"
+        style="flex:1;min-width:180px" />
       <button class="analyze-btn" style="width:auto;padding:10px 20px;flex-shrink:0" onclick="openFoodItemModal()">+ New food</button>
     </div>
 
     ${!filtered.length ? `
       <div class="log-card">
         <div class="log-empty" style="padding:60px">
-          ${items.length ? 'No matches.' : 'No saved foods yet.'}<br>
+          ${items.length ? `No foods match "${esc(q)}".` : 'No saved foods yet.'}<br>
           <span style="font-size:12px;color:var(--text3);margin-top:6px;display:block">
-            Save packaged foods from barcode scan, or build combos like protein shakes.
+            ${items.length ? 'Try a different search.' : 'Save packaged foods from barcode scan, or build combos like protein shakes.'}
           </span>
         </div>
       </div>
     ` : `
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
-        ${filtered.map(f => `
-          <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s"
-            onmouseover="this.style.borderColor='var(--border2)'"
-            onmouseout="this.style.borderColor='var(--border)'"
-            onclick="openFoodItemModal('${f.id}')">
-            <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
-              <div style="flex:1;min-width:0">
-                <div style="font-weight:600;font-size:15px;color:var(--text);margin-bottom:2px">${esc(f.name)}</div>
-                ${f.brand ? `<div style="font-size:12px;color:var(--text3)">${esc(f.brand)}</div>` : ''}
-              </div>
-              <div style="font-size:11px;color:var(--text3);flex-shrink:0;margin-left:8px;text-align:right">
-                ${f.serving_size || '1 serving'}<br>
-                ${f.components?.length ? `<span style="color:var(--carbs)">${f.components.length} components</span>` : ''}
-              </div>
-            </div>
-            <div class="macro-pills" style="margin-bottom:10px">
-              <span class="macro-pill pill-cal" style="font-size:11px;padding:2px 8px">${Math.round(f.calories)} kcal</span>
-              <span class="macro-pill pill-p" style="font-size:11px;padding:2px 8px">${Math.round(f.protein)}g P</span>
-              <span class="macro-pill pill-c" style="font-size:11px;padding:2px 8px">${Math.round(f.carbs)}g C</span>
-              <span class="macro-pill pill-f" style="font-size:11px;padding:2px 8px">${Math.round(f.fat)}g F</span>
-            </div>
-            <button onclick="quickLogFoodItem('${f.id}');event.stopPropagation()"
-              style="width:100%;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.25);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
-              + Log this
-            </button>
-          </div>`).join('')}
+      <div id="foods-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
+        ${filtered.map(f => renderFoodCard(f)).join('')}
       </div>
     `}
   `
+
+  // Restore focus on search input if the user was typing
+  if (q) {
+    setTimeout(() => {
+      const input = document.getElementById('food-search')
+      if (input && document.activeElement !== input) {
+        input.focus()
+        const len = input.value.length
+        input.setSelectionRange(len, len)
+      }
+    }, 0)
+  }
+}
+
+function renderFoodCard(f) {
+  return `
+    <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s"
+      onmouseover="this.style.borderColor='var(--border2)'"
+      onmouseout="this.style.borderColor='var(--border)'"
+      onclick="openFoodItemModal('${f.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:15px;color:var(--text);margin-bottom:2px">${esc(f.name)}</div>
+          ${f.brand ? `<div style="font-size:12px;color:var(--text3)">${esc(f.brand)}</div>` : ''}
+        </div>
+        <div style="font-size:11px;color:var(--text3);flex-shrink:0;margin-left:8px;text-align:right">
+          ${f.serving_size || '1 serving'}<br>
+          ${f.components?.length ? `<span style="color:var(--carbs)">${f.components.length} components</span>` : ''}
+        </div>
+      </div>
+      <div class="macro-pills" style="margin-bottom:10px">
+        <span class="macro-pill pill-cal" style="font-size:11px;padding:2px 8px">${Math.round(f.calories)} kcal</span>
+        <span class="macro-pill pill-p" style="font-size:11px;padding:2px 8px">${Math.round(f.protein)}g P</span>
+        <span class="macro-pill pill-c" style="font-size:11px;padding:2px 8px">${Math.round(f.carbs)}g C</span>
+        <span class="macro-pill pill-f" style="font-size:11px;padding:2px 8px">${Math.round(f.fat)}g F</span>
+      </div>
+      <button onclick="quickLogFoodItem('${f.id}');event.stopPropagation()"
+        style="width:100%;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.25);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+        + Log this
+      </button>
+    </div>
+  `
+}
+
+// Rank a food item against a search term. Higher score = better match.
+// 0 means no match (filter out).
+// Buckets:
+//   100 — name starts with query ('ban' → 'Banana')
+//    80 — name contains query as a whole word
+//    70 — name contains query anywhere
+//    50 — brand contains query ('fage' → every Fage item)
+//    25 — a component name contains query
+//         (so 'banana' surfaces 'Peanut Butter Banana Shake' because
+//          banana is one of its components, below exact name matches)
+function rankFoodMatch(food, q) {
+  if (!q) return 1
+  const name = (food.name || '').toLowerCase()
+  const brand = (food.brand || '').toLowerCase()
+  if (name.startsWith(q)) return 100
+  const wordRe = new RegExp(`(^|[^a-z0-9])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
+  if (wordRe.test(name)) return 80
+  if (name.includes(q)) return 70
+  if (brand.includes(q)) return 50
+  const comps = food.components || []
+  if (comps.some(c => (c.name || '').toLowerCase().includes(q))) return 25
+  return 0
+}
+
+function searchFoods(list, queryRaw) {
+  const q = (queryRaw || '').trim().toLowerCase()
+  if (!q) return list
+  return list
+    .map(f => ({ f, score: rankFoodMatch(f, q) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      const an = (a.f.name || '').toLowerCase()
+      const bn = (b.f.name || '').toLowerCase()
+      if (an.length !== bn.length) return an.length - bn.length
+      return an.localeCompare(bn)
+    })
+    .map(x => x.f)
 }
 
 function renderFoodItemModal(item, editingComponents) {
@@ -5130,6 +5189,20 @@ function wireGlobals() {
       grid.innerHTML = `<div class="log-card" style="grid-column:1/-1"><div class="log-empty" style="padding:40px">No recipes match "${esc(q)}".</div></div>`
     } else {
       grid.innerHTML = recipes.map(r => renderRecipeCard(r)).join('')
+    }
+  }
+
+  // Foods search — same pattern. Preserves focus while typing.
+  window.filterFoodsList = (value) => {
+    state.foodSearch = value
+    const q = (value || '').trim().toLowerCase()
+    const grid = document.getElementById('foods-grid')
+    if (!grid) return
+    const foods = searchFoods(state.foodItems, q)
+    if (!foods.length) {
+      grid.innerHTML = `<div class="log-card" style="grid-column:1/-1"><div class="log-empty" style="padding:40px">No foods match "${esc(q)}".</div></div>`
+    } else {
+      grid.innerHTML = foods.map(f => renderFoodCard(f)).join('')
     }
   }
 
