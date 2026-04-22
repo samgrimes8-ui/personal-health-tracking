@@ -66,15 +66,15 @@ export default async function handler(req, res) {
     return
   }
 
-  // Fetch provider profile separately. Do column-by-column selects with
-  // progressive fallback so missing columns (older user_profiles schemas)
-  // don't blow up the whole request. Only the provider header needs this.
+  // Fetch provider profile separately. user_profiles is keyed by user_id,
+  // not id. Column-by-column selects with progressive fallback so missing
+  // columns (older user_profiles schemas) don't blow up the whole request.
   let providerProfile = {}
   try {
     const { data: p } = await supabase
       .from('user_profiles')
       .select('provider_name, provider_specialty, provider_bio, provider_slug, provider_avatar_url')
-      .eq('id', broadcast.provider_id)
+      .eq('user_id', broadcast.provider_id)
       .maybeSingle()
     if (p) providerProfile = p
   } catch (e) {
@@ -83,7 +83,7 @@ export default async function handler(req, res) {
       const { data: p } = await supabase
         .from('user_profiles')
         .select('provider_name, provider_specialty')
-        .eq('id', broadcast.provider_id)
+        .eq('user_id', broadcast.provider_id)
         .maybeSingle()
       if (p) providerProfile = p
     } catch (e2) {
@@ -118,13 +118,14 @@ export default async function handler(req, res) {
       byDay[key].push(meal)
     })
 
-    // Calculate weekly totals
+    // Calculate weekly totals. Macros in meal rows are already the total
+    // for planned_servings — do NOT multiply again. This matches how the
+    // main planner/log display works.
     const totals = plan.reduce((acc, m) => {
-      const cal = (m.calories || 0) * (m.planned_servings || 1)
-      acc.calories += cal
-      acc.protein += (m.protein || 0) * (m.planned_servings || 1)
-      acc.carbs += (m.carbs || 0) * (m.planned_servings || 1)
-      acc.fat += (m.fat || 0) * (m.planned_servings || 1)
+      acc.calories += (m.calories || 0)
+      acc.protein += (m.protein || 0)
+      acc.carbs += (m.carbs || 0)
+      acc.fat += (m.fat || 0)
       return acc
     }, { calories: 0, protein: 0, carbs: 0, fat: 0 })
 
@@ -132,6 +133,9 @@ export default async function handler(req, res) {
     const shareUrl = `${appUrl}/api/plan/${token}`
 
     const dayKeys = Object.keys(byDay).sort()
+    // Average per planned day, not always per 7. A 3-day plan shouldn't
+    // show kcal/day divided by 7 (makes it look way lower than reality).
+    const daysInPlan = Math.max(dayKeys.length, 1)
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -204,10 +208,10 @@ export default async function handler(req, res) {
 
     <!-- Weekly totals -->
     <div class="stats-row">
-      <div class="stat"><div class="stat-val" style="color:#E8C547">${Math.round(totals.calories / 7)}</div><div class="stat-label">kcal/day</div></div>
-      <div class="stat"><div class="stat-val" style="color:#4CAF82">${Math.round(totals.protein / 7)}g</div><div class="stat-label">Protein</div></div>
-      <div class="stat"><div class="stat-val" style="color:#5B9CF6">${Math.round(totals.carbs / 7)}g</div><div class="stat-label">Carbs</div></div>
-      <div class="stat"><div class="stat-val" style="color:#F5924E">${Math.round(totals.fat / 7)}g</div><div class="stat-label">Fat</div></div>
+      <div class="stat"><div class="stat-val" style="color:#E8C547">${Math.round(totals.calories / daysInPlan)}</div><div class="stat-label">kcal/day</div></div>
+      <div class="stat"><div class="stat-val" style="color:#4CAF82">${Math.round(totals.protein / daysInPlan)}g</div><div class="stat-label">Protein</div></div>
+      <div class="stat"><div class="stat-val" style="color:#5B9CF6">${Math.round(totals.carbs / daysInPlan)}g</div><div class="stat-label">Carbs</div></div>
+      <div class="stat"><div class="stat-val" style="color:#F5924E">${Math.round(totals.fat / daysInPlan)}g</div><div class="stat-label">Fat</div></div>
     </div>
 
     <!-- Meals by day -->
@@ -226,15 +230,18 @@ export default async function handler(req, res) {
         <div class="day-header">${esc(dayLabel)}</div>
         ${meals.map(m => {
           const srv = m.planned_servings || 1
-          const cal = Math.round((m.calories || 0) * srv)
-          const pro = Math.round((m.protein || 0) * srv)
-          const car = Math.round((m.carbs || 0) * srv)
-          const fat = Math.round((m.fat || 0) * srv)
+          // Macros are already totals for the planned servings — don't multiply
+          const cal = Math.round(m.calories || 0)
+          const pro = Math.round(m.protein || 0)
+          const car = Math.round(m.carbs || 0)
+          const fat = Math.round(m.fat || 0)
           const mealTypeLabels = { breakfast: '🌅 Breakfast', lunch: '☀️ Lunch', snack: '🍎 Snack', dinner: '🌙 Dinner' }
           const typeLabel = mealTypeLabels[m.meal_type] || ''
+          // Pull meal name from the common shapes used by broadcasts
+          const mealName = m.meal_name || m.recipe_name || m.name || 'Meal'
           return `<div class="meal-card">
             ${typeLabel ? `<div class="meal-type">${typeLabel}</div>` : ''}
-            <div class="meal-name">${esc(m.recipe_name || m.name || 'Meal')}</div>
+            <div class="meal-name">${esc(mealName)}</div>
             <div class="meal-macros">
               <span class="pill pill-cal">${cal} kcal</span>
               <span class="pill pill-p">${pro}g P</span>
