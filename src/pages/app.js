@@ -11,7 +11,7 @@ import {
   logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs,
   getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, uploadScanFile, getScanUrl,
   generateShareToken, shareRecipeWithUser, getIncomingShares, markShareRead, getUnreadShareCount,
-  enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary,
+  enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary, getRecipeByIdPublic,
   saveRecipeOgCache, setUserRole,
   getProviders, getProviderBroadcasts, saveBroadcast, deleteBroadcast,
   followProvider, unfollowProvider, getFollowedProviders, isFollowingProvider,
@@ -5144,6 +5144,10 @@ function wireGlobals() {
       // Initialize selection state: by default, ALL meals are selected
       window._copySelection = new Set(broadcast.plan_data.map((_, i) => i))
 
+      // Per-meal meal-type overrides. Starts empty; we fall back to
+      // each item's original meal_type when not overridden.
+      window._copyMealTypes = {}
+
       // Default target = current week start (Sunday)
       const defaultWeek = getWeekStart()
       document.getElementById('copy-broadcast-content').innerHTML = renderCopyBroadcastPreview(broadcast, defaultWeek)
@@ -5164,6 +5168,7 @@ function wireGlobals() {
     document.getElementById('copy-broadcast-modal').classList.remove('open')
     window._pendingCopyBroadcast = null
     window._copySelection = null
+    window._copyMealTypes = null
   }
 
   window.toggleAllCopyMeals = (checked) => {
@@ -5227,6 +5232,49 @@ function wireGlobals() {
     updateCopySummary()
   }
 
+  // Set (or override) the meal type for a single meal in the preview.
+  window.setCopyMealType = (idx, type, ev) => {
+    if (ev) { ev.preventDefault(); ev.stopPropagation() }
+    if (!window._copyMealTypes) window._copyMealTypes = {}
+    window._copyMealTypes[Number(idx)] = type
+    // Re-render just this meal's pill row in place
+    const container = document.getElementById(`copy-meal-type-${idx}`)
+    if (!container) return
+    const typeColors = {
+      breakfast: { bg: 'rgba(232,197,71,0.15)', fg: 'var(--accent)' },
+      lunch:     { bg: 'rgba(122,180,232,0.15)', fg: 'var(--carbs)' },
+      dinner:    { bg: 'rgba(232,154,122,0.15)', fg: 'var(--fat)' },
+      snack:     { bg: 'rgba(126,200,160,0.15)', fg: 'var(--protein)' },
+    }
+    container.innerHTML = ['breakfast','lunch','dinner','snack'].map(t => {
+      const sel = t === type
+      const c = typeColors[t]
+      return `<button type="button" data-mt="${t}" onclick="setCopyMealType(${idx}, '${t}', event)"
+        style="padding:3px 8px;border-radius:999px;font-size:10px;text-transform:capitalize;font-family:inherit;cursor:pointer;border:1px solid ${sel?c.fg:'var(--border)'};background:${sel?c.bg:'transparent'};color:${sel?c.fg:'var(--text3)'};transition:all 0.12s">${t}</button>`
+    }).join('')
+  }
+
+  // Open the recipe modal for a meal in the preview. Checks the user's
+  // own library first; if the recipe isn't there (i.e. it's someone else's
+  // shared recipe), fetches it via the public helper and injects a
+  // read-only version into state.recipes for the modal to render.
+  window.viewCopyRecipe = async (recipeId, ev) => {
+    if (ev) { ev.preventDefault(); ev.stopPropagation() }
+    if (!recipeId) return
+    try {
+      // Already in our library?
+      let recipe = (state.recipes || []).find(r => r.id === recipeId)
+      if (!recipe) {
+        recipe = await getRecipeByIdPublic(recipeId)
+        if (!recipe) { showToast('Recipe is not shared publicly', 'error'); return }
+        // Inject temporarily so openRecipeModal can find it
+        if (!state.recipes) state.recipes = []
+        state.recipes.push({ ...recipe, _readonly: true })
+      }
+      window.openRecipeModal(recipeId, 'view')
+    } catch (err) { showToast('Error loading recipe: ' + err.message, 'error') }
+  }
+
   window.updateCopySummary = updateCopySummary
   function updateCopySummary() {
     if (!window._copySelection) window._copySelection = new Set()
@@ -5285,7 +5333,7 @@ function wireGlobals() {
       const startDate = document.getElementById('copy-start-date')?.value || localDateStr(new Date())
 
       if (btn) { btn.disabled = true; btn.textContent = 'Copying...' }
-      const count = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices)
+      const count = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices, window._copyMealTypes || {})
 
       // Compute the Sunday-based week that contains the start date,
       // navigate the planner there, and reload it so the new meals are visible
@@ -5408,31 +5456,52 @@ function wireGlobals() {
         ${sortedKeys.map(key => `
           <div style="padding:14px 20px 4px">
             <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">${dayFmt(key)}</div>
-            ${groups[key].map(({ origIdx, item }) => `
-              <div onclick="toggleCopyMeal(${origIdx}, event)" style="display:flex;align-items:start;gap:12px;padding:10px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;transition:border-color 0.15s;user-select:none">
-                <input type="checkbox" id="copy-check-${origIdx}" class="copy-meal-check" data-idx="${origIdx}" checked
-                  tabindex="-1"
-                  style="width:16px;height:16px;accent-color:var(--accent);margin-top:2px;flex-shrink:0;pointer-events:none" />
-                <div style="flex:1;min-width:0;pointer-events:none">
-                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    <div style="font-size:13px;color:var(--text);font-weight:500">${esc(item._name || item.meal_name || item.recipe_name || 'Meal')}</div>
-                    ${mealTypeBadge(item.meal_type)}
-                    ${item.is_leftover ? `
-                      <span title="This meal was planned as a leftover from a previous cook. It'll be copied with the leftover flag so your planner knows it doesn't need a fresh prep."
-                        style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(158,155,148,0.15);color:var(--text2);display:inline-flex;align-items:center;gap:4px;cursor:help;pointer-events:auto">
-                        ♻️ Leftover
-                      </span>
-                    ` : ''}
-                  </div>
-                  <div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
-                    <span>${Math.round(item.calories ?? item._calories ?? 0)} cal</span>
-                    <span style="color:var(--protein)">P ${Math.round(item.protein ?? 0)}g</span>
-                    <span style="color:var(--carbs)">C ${Math.round(item.carbs ?? 0)}g</span>
-                    <span style="color:var(--fat)">F ${Math.round(item.fat ?? 0)}g</span>
+            ${groups[key].map(({ origIdx, item }) => {
+              const currentType = (window._copyMealTypes && window._copyMealTypes[origIdx]) || item.meal_type || 'dinner'
+              const typeColors = {
+                breakfast: { bg: 'rgba(232,197,71,0.15)', fg: 'var(--accent)' },
+                lunch:     { bg: 'rgba(122,180,232,0.15)', fg: 'var(--carbs)' },
+                dinner:    { bg: 'rgba(232,154,122,0.15)', fg: 'var(--fat)' },
+                snack:     { bg: 'rgba(126,200,160,0.15)', fg: 'var(--protein)' },
+              }
+              const typeOptions = ['breakfast','lunch','dinner','snack'].map(t => {
+                const sel = t === currentType
+                const c = typeColors[t]
+                return `<button type="button" data-mt="${t}" onclick="setCopyMealType(${origIdx}, '${t}', event)"
+                  style="padding:3px 8px;border-radius:999px;font-size:10px;text-transform:capitalize;font-family:inherit;cursor:pointer;border:1px solid ${sel?c.fg:'var(--border)'};background:${sel?c.bg:'transparent'};color:${sel?c.fg:'var(--text3)'};transition:all 0.12s">${t}</button>`
+              }).join('')
+              return `
+              <div id="copy-card-${origIdx}" style="padding:10px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);user-select:none">
+                <div onclick="toggleCopyMeal(${origIdx}, event)" style="display:flex;align-items:start;gap:12px;cursor:pointer">
+                  <input type="checkbox" id="copy-check-${origIdx}" class="copy-meal-check" data-idx="${origIdx}" checked
+                    tabindex="-1"
+                    style="width:16px;height:16px;accent-color:var(--accent);margin-top:2px;flex-shrink:0;pointer-events:none" />
+                  <div style="flex:1;min-width:0;pointer-events:none">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                      <div style="font-size:13px;color:var(--text);font-weight:500">${esc(item._name || item.meal_name || item.recipe_name || 'Meal')}</div>
+                      ${item.is_leftover ? `
+                        <span style="font-size:10px;padding:2px 6px;border-radius:4px;background:rgba(158,155,148,0.15);color:var(--text2)">♻️ Leftover</span>
+                      ` : ''}
+                    </div>
+                    <div style="font-size:11px;color:var(--text3);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
+                      <span>${Math.round(item.calories ?? item._calories ?? 0)} cal</span>
+                      <span style="color:var(--protein)">P ${Math.round(item.protein ?? 0)}g</span>
+                      <span style="color:var(--carbs)">C ${Math.round(item.carbs ?? 0)}g</span>
+                      <span style="color:var(--fat)">F ${Math.round(item.fat ?? 0)}g</span>
+                    </div>
                   </div>
                 </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);padding-left:28px">
+                  <div id="copy-meal-type-${origIdx}" style="display:flex;gap:4px;flex-wrap:wrap">${typeOptions}</div>
+                  ${item.recipe_id ? `
+                    <button type="button" onclick="viewCopyRecipe('${item.recipe_id}', event)"
+                      style="margin-left:auto;padding:4px 10px;background:transparent;border:1px solid var(--border2);border-radius:var(--r);font-size:10px;color:var(--text2);font-family:inherit;cursor:pointer;white-space:nowrap">
+                      View recipe →
+                    </button>
+                  ` : ''}
+                </div>
               </div>
-            `).join('')}
+            `}).join('')}
           </div>
         `).join('')}
       </div>

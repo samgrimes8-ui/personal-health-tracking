@@ -883,6 +883,21 @@ export async function getSharedRecipe(shareToken) {
   return data
 }
 
+// Fetch any recipe the current user can read: either their own,
+// or someone else's flagged is_shared=true. Used by the broadcast
+// preview modal so users can peek at any provider's recipe.
+export async function getRecipeByIdPublic(recipeId) {
+  if (!supabase || !recipeId) return null
+  // Try own-library first (covers case where user already copied it)
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('*')
+    .eq('id', recipeId)
+    .maybeSingle()
+  if (error) return null
+  return data
+}
+
 export async function saveSharedRecipeToLibrary(userId, recipe) {
   if (!supabase) return null
   // Copy recipe to user's library, stripping ownership fields
@@ -1055,13 +1070,19 @@ export async function getFollowerCount(providerId) {
   return count ?? 0
 }
 
-export async function copyBroadcastToPlanner(userId, broadcast, startDate, selectedIndices = null) {
+export async function copyBroadcastToPlanner(userId, broadcast, startDate, selectedIndices = null, mealTypeOverrides = null) {
   if (!supabase || !broadcast?.plan_data?.length) return 0
+
+  // Apply per-meal type overrides (keyed by original index) before filtering
+  const overrides = mealTypeOverrides || {}
+  const overriddenData = broadcast.plan_data.map((item, i) =>
+    overrides[i] ? { ...item, meal_type: overrides[i] } : item
+  )
 
   // Filter to selected items (or all if none specified)
   let items = selectedIndices
-    ? broadcast.plan_data.filter((_, i) => selectedIndices.includes(i))
-    : broadcast.plan_data
+    ? overriddenData.filter((_, i) => selectedIndices.includes(i))
+    : overriddenData
 
   if (!items.length) return 0
 
