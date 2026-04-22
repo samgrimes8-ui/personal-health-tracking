@@ -5489,7 +5489,10 @@ function wireGlobals() {
       const startDate = document.getElementById('copy-start-date')?.value || localDateStr(new Date())
 
       if (btn) { btn.disabled = true; btn.textContent = 'Copying...' }
-      const count = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices, window._copyMealTypes || {})
+      const result = await copyBroadcastToPlanner(state.user.id, broadcast, startDate, selectedIndices, window._copyMealTypes || {})
+      // Back-compat: old callers expected a number, new version returns {mealsCopied, recipesAdded}
+      const mealsCopied = typeof result === 'number' ? result : (result?.mealsCopied || 0)
+      const recipesAdded = typeof result === 'number' ? 0 : (result?.recipesAdded || 0)
 
       // Compute the Sunday-based week that contains the start date,
       // navigate the planner there, and reload it so the new meals are visible
@@ -5504,8 +5507,19 @@ function wireGlobals() {
       const planner = await getPlannerWeek(state.user.id, targetWeek)
       if (planner) state.planner = planner
 
+      // Refresh recipes list so the newly-imported ones show up in the recipe page
+      if (recipesAdded > 0) {
+        try {
+          const fresh = await getRecipes(state.user.id)
+          if (fresh) state.recipes = fresh
+        } catch {}
+      }
+
       closeCopyBroadcastModal()
-      showToast(`Copied ${count} meal${count===1?'':'s'} to your planner!`, 'success')
+      const msg = recipesAdded > 0
+        ? `Copied ${mealsCopied} meal${mealsCopied===1?'':'s'} and added ${recipesAdded} recipe${recipesAdded===1?'':'s'} to your library!`
+        : `Copied ${mealsCopied} meal${mealsCopied===1?'':'s'} to your planner!`
+      showToast(msg, 'success')
       // Route to planner page so user sees the result
       switchPage('planner')
     } catch (err) {
@@ -5581,7 +5595,7 @@ function wireGlobals() {
         </button>
         <div id="copy-calendar-popup" style="display:none;position:absolute;top:100%;left:20px;right:20px;margin-top:4px;z-index:20;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);box-shadow:0 10px 30px rgba(0,0,0,0.4);padding:14px"></div>
         <div id="copy-end-preview" style="font-size:11px;color:var(--text3);margin-top:6px"></div>
-        <div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4">Meals will fill one per day. You can move them around later from the planner.</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4">Meals fill one per day — recipes are saved to your library so you can edit them. You can move or swap meals later on the planner.</div>
       </div>
 
       <!-- Select-all row + exclude leftovers toggle -->

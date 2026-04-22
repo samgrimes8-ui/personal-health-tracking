@@ -1093,6 +1093,75 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
     return ad.localeCompare(bd)
   })
 
+  // ── Auto-save each unique recipe into the user's library ────────────
+  // For each distinct recipe_id referenced in the selected meals, fetch
+  // the recipe (library → direct → broadcast-recipe API) and save a copy
+  // to the user's library. Map the original recipe_id to the new library id
+  // so every planner row ends up pointing to the user's own recipe.
+  const uniqueRecipeIds = [...new Set(items.map(i => i.recipe_id).filter(Boolean))]
+  const recipeIdMap = {} // original_id -> new_library_id
+
+  // Load the user's existing recipes once to dedupe by name.
+  // Freeze the set of initial ids so we can later count how many were newly added.
+  let userRecipes = []
+  {
+    const { data } = await supabase.from('recipes').select('id, name').eq('user_id', userId)
+    userRecipes = data || []
+  }
+  const initialIds = new Set(userRecipes.map(r => r.id))
+
+  for (const origId of uniqueRecipeIds) {
+    // If the user already owns this exact row (unlikely but possible), reuse it
+    const alreadyOwnsById = userRecipes.find(r => r.id === origId)
+    if (alreadyOwnsById) { recipeIdMap[origId] = origId; continue }
+
+    // Fetch the source recipe (direct read first; may succeed if RLS permits)
+    let source = null
+    {
+      const { data } = await supabase.from('recipes').select('*').eq('id', origId).maybeSingle()
+      if (data) source = data
+    }
+
+    // Fall back to the service-role API using the broadcast share_token
+    if (!source && broadcast?.share_token) {
+      try {
+        const resp = await fetch(`/api/broadcast-recipe?broadcast_token=${encodeURIComponent(broadcast.share_token)}&recipe_id=${encodeURIComponent(origId)}`)
+        if (resp.ok) source = await resp.json()
+      } catch {}
+    }
+
+    if (!source) {
+      // Couldn't fetch — leave the recipe_id null so the planner row still saves
+      recipeIdMap[origId] = null
+      continue
+    }
+
+    // Dedupe by name: if the user already has a recipe with this exact name,
+    // reuse it instead of making duplicates on repeat copies of the same plan
+    const existingByName = userRecipes.find(r =>
+      (r.name || '').trim().toLowerCase() === (source.name || '').trim().toLowerCase()
+    )
+    if (existingByName) { recipeIdMap[origId] = existingByName.id; continue }
+
+    // Insert a fresh copy into the user's library
+    try {
+      const { share_token, is_shared, is_public, id, user_id, created_at, updated_at, ...fields } = source
+      const { data: inserted, error: insErr } = await supabase
+        .from('recipes')
+        .insert({ ...fields, user_id: userId, share_token: null, is_shared: false, is_public: false })
+        .select('id, name')
+        .single()
+      if (insErr || !inserted) {
+        recipeIdMap[origId] = null
+      } else {
+        recipeIdMap[origId] = inserted.id
+        userRecipes.push(inserted) // so subsequent iterations dedupe against it
+      }
+    } catch {
+      recipeIdMap[origId] = null
+    }
+  }
+
   // One meal per day, sequential from the start date.
   // Users can reorder meals on the planner after the copy.
   const [stY, stM, stD] = startDate.split('-').map(Number)
@@ -1114,6 +1183,9 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
 
     const name = item.meal_name || item._name || item.recipe_name || 'Meal'
 
+    // Use the user's own recipe id if we managed to copy it, otherwise null
+    const linkedRecipeId = item.recipe_id ? (recipeIdMap[item.recipe_id] ?? null) : null
+
     return {
       user_id: userId,
       week_start_date: weekStartStr,
@@ -1127,12 +1199,15 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
       fiber: Number(item.fiber ?? 0),
       is_leftover: !!item.is_leftover,
       planned_servings: item.planned_servings ?? 1,
-      recipe_id: item.recipe_id || null,
+      recipe_id: linkedRecipeId,
       meal_type: item.meal_type || null,
     }
   })
 
   const { data, error } = await supabase.from('meal_planner').insert(rows).select()
   if (error) throw error
-  return rows.length
+
+  // Count only the recipe ids that weren't in the user's library before this copy
+  const recipesAdded = Object.values(recipeIdMap).filter(id => id && !initialIds.has(id)).length
+  return { mealsCopied: rows.length, recipesAdded }
 }
