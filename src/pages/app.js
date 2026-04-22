@@ -329,6 +329,18 @@ function renderShell(container) {
       <div class="planner-modal">
         <button class="modal-close" onclick="closePlannerModal()">×</button>
         <h3 id="planner-modal-title">Add meal</h3>
+
+        <!-- Meal type selector -->
+        <div style="display:flex;gap:6px;margin-bottom:12px">
+          ${[['breakfast','🌅','Breakfast'],['lunch','☀️','Lunch'],['snack','🍎','Snack'],['dinner','🌙','Dinner']].map(([val,icon,label]) =>
+            `<button onclick="setPlannerMealType('${val}')" data-meal-type-btn="${val}"
+              style="flex:1;padding:7px 4px;border-radius:var(--r);font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;border:1px solid var(--border2);background:var(--bg3);color:var(--text3);display:flex;flex-direction:column;align-items:center;gap:2px">
+              <span style="font-size:14px">${icon}</span>${label}
+            </button>`
+          ).join('')}
+        </div>
+        <input type="hidden" id="planner-meal-type" value="dinner" />
+
         <div class="pm-tabs">
           <button class="pm-tab active" id="pm-tab-history" onclick="switchPlannerTab('history')">📋 History</button>
           <button class="pm-tab" id="pm-tab-ai" onclick="switchPlannerTab('ai')">✨ Describe</button>
@@ -1224,46 +1236,126 @@ function renderCalendarPicker() {
 }
 
 function renderMealPlanView(planner) {
+  const MEAL_SLOTS = [
+    { key: 'breakfast', label: 'Breakfast', icon: '🌅', color: 'var(--cal)' },
+    { key: 'lunch',     label: 'Lunch',     icon: '☀️',  color: 'var(--carbs)' },
+    { key: 'snack',     label: 'Snack',     icon: '🍎',  color: 'var(--protein)' },
+    { key: 'dinner',    label: 'Dinner',    icon: '🌙',  color: 'var(--fat)' },
+  ]
+
+  // Detect leftovers: same recipe_id planned on a previous day this week
+  const allMeals = planner.meals.flat()
+  const recipeFirstDay = {}
+  allMeals.forEach(m => {
+    if (m.recipe_id && !recipeFirstDay[m.recipe_id]) {
+      recipeFirstDay[m.recipe_id] = m.actual_date
+    }
+  })
+
+  // Weekly calorie bar
+  const weekCals = DAYS.map((_, di) =>
+    (planner.meals[di] || []).reduce((a, m) => a + (m.calories || 0), 0)
+  )
+  const maxCal = Math.max(...weekCals, 1)
+  const goalCal = window.state?.goals?.calories || 2000
+
   return `
-    <div class="planner-summary">
-      <div class="planner-summary-title">Weekly calorie overview</div>
-      <div class="planner-summary-grid">
+    <!-- Weekly overview bar -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px 16px;margin-bottom:16px">
+      <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Weekly overview</div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">
         ${DAYS.map((day, di) => {
+          const cal = weekCals[di]
+          const pct = Math.min(100, Math.round((cal / goalCal) * 100))
+          const barColor = pct > 110 ? 'var(--red)' : pct > 90 ? 'var(--protein)' : 'var(--accent)'
           const meals = planner.meals[di] || []
-          const cal = meals.reduce((a, m) => a + (m.calories || 0), 0)
-          const p = meals.reduce((a, m) => a + (m.protein || 0), 0)
-          const c = meals.reduce((a, m) => a + (m.carbs || 0), 0)
-          const f = meals.reduce((a, m) => a + (m.fat || 0), 0)
-          return `<div class="planner-day-summary">
-            <div class="pds-name">${day}</div>
-            <div class="pds-cal">${Math.round(cal)}</div>
-            <div class="pds-macros">P${Math.round(p)} C${Math.round(c)} F${Math.round(f)}</div>
+          const isToday = localDateStr(new Date()) === (() => {
+            const ws = new Date(state.weekStart + 'T00:00:00')
+            ws.setDate(ws.getDate() + di)
+            return localDateStr(ws)
+          })()
+          return `<div style="text-align:center">
+            <div style="font-size:9px;color:${isToday ? 'var(--accent)' : 'var(--text3)'};font-weight:${isToday ? '700' : '400'};margin-bottom:4px;text-transform:uppercase">${day.slice(0,3)}</div>
+            <div style="height:40px;background:var(--bg3);border-radius:4px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;margin-bottom:4px">
+              ${cal > 0 ? `<div style="height:${pct}%;background:${barColor};border-radius:4px;transition:height 0.3s;min-height:3px"></div>` : ''}
+            </div>
+            <div style="font-size:9px;color:${cal > 0 ? 'var(--text2)' : 'var(--text3)'}">${cal > 0 ? Math.round(cal) : '—'}</div>
           </div>`
         }).join('')}
       </div>
     </div>
-    <div class="planner-grid">
+
+    <!-- Day columns grouped by meal type -->
+    <div style="display:flex;flex-direction:column;gap:8px">
       ${DAYS.map((day, di) => {
-        const meals = planner.meals[di] || []
-        const cal = meals.reduce((a, m) => a + (m.calories || 0), 0)
-        const mealItems = meals.map((m, mi) => `
-          <div class="planner-meal" onclick="openEditModal('${m.id}', 'planner', {d:${di},m:${mi}})">
-            <div class="planner-meal-name">${esc(m.meal_name || m.name)}</div>
-            <div class="planner-meal-cals">${Math.round(m.calories)} kcal</div>
-            <button class="planner-meal-del" onclick="deletePlannerMealHandler('${m.id}',${di},${mi});event.stopPropagation()">×</button>
-          </div>`).join('')
-        return `<div class="planner-day">
-          <div class="planner-day-header">
-            <span class="planner-day-name">${day}</span>
-            <span class="planner-day-cals">${Math.round(cal)} kcal</span>
+        const dayMeals = planner.meals[di] || []
+        const dayCal = dayMeals.reduce((a, m) => a + (m.calories || 0), 0)
+        const ws = new Date(state.weekStart + 'T00:00:00')
+        ws.setDate(ws.getDate() + di)
+        const dateStr = localDateStr(ws)
+        const isToday = dateStr === localDateStr(new Date())
+        const isPast = dateStr < localDateStr(new Date()) && !isToday
+
+        return `<div style="background:var(--bg2);border:1px solid ${isToday ? 'rgba(232,197,71,0.4)' : 'var(--border)'};border-radius:var(--r2);overflow:hidden;opacity:${isPast ? '0.7' : '1'}">
+          <!-- Day header -->
+          <div style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;background:${isToday ? 'rgba(232,197,71,0.06)' : 'var(--bg3)'}">
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="font-size:14px;font-weight:600;color:${isToday ? 'var(--accent)' : 'var(--text)'}">
+                ${day}
+                ${isToday ? '<span style="font-size:10px;background:var(--accent);color:#1a1500;border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:700">TODAY</span>' : ''}
+              </div>
+              <div style="font-size:11px;color:var(--text3)">${new Date(dateStr + 'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'})}</div>
+            </div>
+            <div style="font-size:12px;color:${dayCal > 0 ? 'var(--text2)' : 'var(--text3)'}">
+              ${dayCal > 0 ? Math.round(dayCal) + ' kcal' : 'Empty'}
+            </div>
           </div>
-          <div class="planner-meals">${mealItems}</div>
-          <button class="planner-add-btn" onclick="openPlannerModal(${di})">+ Add meal</button>
+
+          <!-- Meal slots -->
+          <div style="padding:8px">
+            ${MEAL_SLOTS.map(slot => {
+              const slotMeals = dayMeals.filter(m =>
+                (m.meal_type || 'dinner').toLowerCase() === slot.key
+              )
+              return `<div style="margin-bottom:6px">
+                <!-- Slot header + add button -->
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                  <div style="display:flex;align-items:center;gap:5px">
+                    <span style="font-size:11px">${slot.icon}</span>
+                    <span style="font-size:10px;font-weight:600;color:${slot.color};text-transform:uppercase;letter-spacing:0.5px">${slot.label}</span>
+                  </div>
+                  <button onclick="openPlannerModal(${di}, '${slot.key}')"
+                    style="background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;font-family:inherit"
+                    title="Add ${slot.label}">+</button>
+                </div>
+                <!-- Meals in this slot -->
+                ${slotMeals.length ? slotMeals.map(m => {
+                  const isLeftover = m.recipe_id && recipeFirstDay[m.recipe_id] && recipeFirstDay[m.recipe_id] !== m.actual_date
+                  return `<div style="display:flex;align-items:center;gap:8px;padding:7px 8px;background:var(--bg3);border-radius:var(--r);margin-bottom:3px;cursor:pointer"
+                    onclick="openEditModal('${m.id}', 'planner', {d:${di}})">
+                    <div style="flex:1;min-width:0">
+                      <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                        ${isLeftover ? '<span style="font-size:10px;background:rgba(91,156,246,0.15);color:var(--carbs);border-radius:3px;padding:1px 4px;margin-right:4px">🥡 Leftover</span>' : ''}
+                        ${esc(m.meal_name || m.name || '')}
+                      </div>
+                      <div style="font-size:10px;color:var(--text3);margin-top:1px">${Math.round(m.calories || 0)} kcal · P${Math.round(m.protein||0)}g C${Math.round(m.carbs||0)}g F${Math.round(m.fat||0)}g</div>
+                    </div>
+                    <button onclick="deletePlannerMealHandler('${m.id}',${di},0);event.stopPropagation()"
+                      style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1">×</button>
+                  </div>`
+                }).join('') : `<div style="padding:5px 8px;font-size:11px;color:var(--text3);border:1px dashed var(--border);border-radius:var(--r);cursor:pointer;text-align:center"
+                  onclick="openPlannerModal(${di}, '${slot.key}')">
+                  + Add ${slot.label.toLowerCase()}
+                </div>`}
+              </div>`
+            }).join('')}
+          </div>
         </div>`
       }).join('')}
     </div>
   `
 }
+
 
 async function renderGroceryList(allMeals, planner) {
   const view = state.groceryView || 'full'
@@ -2342,6 +2434,20 @@ function renderPlanRecipeModal(recipe) {
           oninput="state.planningRecipe && (state.planningRecipe.plannedServings = parseFloat(this.value) || ${recipe.servings || 4})"
           style="width:65px;background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;color:var(--text);font-size:15px;font-weight:600;font-family:inherit;outline:none;text-align:center" />
         <span style="font-size:12px;color:var(--text3)">(base recipe: ${recipe.servings || 4})</span>
+      </div>
+
+      <!-- Meal type selector -->
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Which meal?</div>
+        <div style="display:flex;gap:6px">
+          ${[['breakfast','🌅','Breakfast'],['lunch','☀️','Lunch'],['snack','🍎','Snack'],['dinner','🌙','Dinner']].map(([val,icon,label]) =>
+            `<button onclick="selectPlanRecipeMealType('${val}', this)"
+              style="flex:1;padding:8px 4px;border-radius:var(--r);font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;border:1px solid ${val === 'dinner' ? 'var(--accent)' : 'var(--border2)'};background:${val === 'dinner' ? 'rgba(232,197,71,0.15)' : 'var(--bg3)'};color:${val === 'dinner' ? 'var(--accent)' : 'var(--text3)'};display:flex;flex-direction:column;align-items:center;gap:2px">
+              <span style="font-size:14px">${icon}</span>${label}
+            </button>`
+          ).join('')}
+        </div>
+        <input type="hidden" id="plan-recipe-meal-type" value="dinner" />
       </div>
 
       <!-- Add button -->
@@ -5433,8 +5539,21 @@ function wireGlobals() {
   }
 
   // ── Planner modal ───────────────────────────────────────────────
-  window.openPlannerModal = (dayIdx) => {
-    state.plannerTarget = { dayIdx }
+  window.setPlannerMealType = (type) => {
+    state.plannerTarget = { ...state.plannerTarget, mealType: type }
+    const input = document.getElementById('planner-meal-type')
+    if (input) input.value = type
+    // Update button styles
+    document.querySelectorAll('[data-meal-type-btn]').forEach(btn => {
+      const isActive = btn.dataset.mealTypeBtn === type
+      btn.style.background = isActive ? 'rgba(232,197,71,0.15)' : 'var(--bg3)'
+      btn.style.borderColor = isActive ? 'var(--accent)' : 'var(--border2)'
+      btn.style.color = isActive ? 'var(--accent)' : 'var(--text3)'
+    })
+  }
+
+  window.openPlannerModal = (dayIdx, mealType) => {
+    state.plannerTarget = { dayIdx, mealType: mealType || 'dinner' }
     state.aiPlannerResult = null
     state.plannerImageBase64 = null
     const nextDay = (dayIdx + 1) % 7
@@ -5447,6 +5566,11 @@ function wireGlobals() {
     document.getElementById('pm-result').style.display = 'none'
     document.getElementById('pm-analyze-btn').disabled = false
     document.getElementById('pm-analyze-btn').textContent = 'Analyze with AI'
+    // Set meal type selector if it exists
+    const mtSel = document.getElementById('planner-meal-type')
+    if (mtSel) mtSel.value = mealType || 'dinner'
+    // Activate correct meal type button
+    setTimeout(() => window.setPlannerMealType(mealType || 'dinner'), 0)
     // Reset photo panel
     const inner = document.getElementById('pm-upload-inner')
     if (inner) inner.innerHTML = '<div style="font-size:28px;margin-bottom:6px">📸</div><div style="font-size:13px;color:var(--text2)">Tap to upload a photo or screenshot</div><div style="font-size:11px;color:var(--text3);margin-top:3px">recipe card, screenshot, food photo</div>'
@@ -5516,8 +5640,9 @@ function wireGlobals() {
     const r = state.aiPlannerResult
     const addAsLeftover = document.getElementById('leftover-check').checked
     const dayIdx = state.plannerTarget.dayIdx
+    const mealType = state.plannerTarget.mealType || document.getElementById('planner-meal-type')?.value || 'dinner'
     try {
-      const meal = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, { ...r })
+      const meal = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, { ...r, meal_type: mealType })
       state.planner.meals[dayIdx].push(meal)
       if (r.ingredients && r.ingredients.length) {
         getRecipeByName(state.user.id, r.name).then(existing => {
@@ -6732,10 +6857,22 @@ function wireGlobals() {
     }
   }
 
+  window.selectPlanRecipeMealType = (type, btn) => {
+    document.getElementById('plan-recipe-meal-type').value = type
+    // Update button styles
+    btn.closest('[style*="display:flex"]').querySelectorAll('button').forEach(b => {
+      const isActive = b === btn
+      b.style.background = isActive ? 'rgba(232,197,71,0.15)' : 'var(--bg3)'
+      b.style.borderColor = isActive ? 'var(--accent)' : 'var(--border2)'
+      b.style.color = isActive ? 'var(--accent)' : 'var(--text3)'
+    })
+  }
+
   window.confirmPlanRecipe = async (recipeId) => {
     if (!state.planningRecipe?.selectedDays?.length) return
     const { recipe, selectedDays } = state.planningRecipe
     const plannedServings = parseFloat(document.getElementById('plan-servings-input')?.value) || state.planningRecipe.plannedServings || recipe.servings || 4
+    const mealType = document.getElementById('plan-recipe-meal-type')?.value || 'dinner'
     const btn = document.getElementById('plan-recipe-add-btn')
     if (btn) { btn.textContent = 'Adding...'; btn.style.opacity = '0.7' }
     try {
@@ -6746,12 +6883,11 @@ function wireGlobals() {
         const dayOfWeek = d.getDay()
         const ws = new Date(yr, mo - 1, dy - dayOfWeek)
         const weekStart = `${ws.getFullYear()}-${String(ws.getMonth()+1).padStart(2,'0')}-${String(ws.getDate()).padStart(2,'0')}`
-        console.log(`[plan] day ${i}: dateStr=${dateStr} dayOfWeek=${dayOfWeek} (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]}) weekStart=${weekStart}`)
-        const mealName = i === 0 || selectedDays.length === 1
-          ? recipe.name
-          : `${recipe.name} (leftovers)`
+        const isLeftover = i > 0 && selectedDays.length > 1
+        const entryMealType = isLeftover ? 'lunch' : mealType
         const added = await addPlannerMeal(state.user.id, weekStart, dayOfWeek, {
-          ...recipe, name: mealName, planned_servings: plannedServings
+          ...recipe, planned_servings: plannedServings,
+          meal_type: entryMealType, leftover: isLeftover
         })
         if (weekStart === state.weekStart) {
           if (!state.planner) state.planner = { meals: Array(7).fill(null).map(() => []) }
@@ -6761,7 +6897,6 @@ function wireGlobals() {
           state.weeksWithMeals = [weekStart, ...state.weeksWithMeals].sort().reverse()
         }
       }
-      const dayWord = selectedDays.length === 1 ? 'day' : `${selectedDays.length} days`
       showToast(`${recipe.name} added to your meal plan!`, 'success')
       closePlanRecipeModal()
     } catch (err) {
@@ -7519,18 +7654,23 @@ function filterPlannerList() {
     if (!meal) return
     const addAsLeftover = document.getElementById('leftover-check').checked
     const dayIdx = state.plannerTarget.dayIdx
+    const mealType = state.plannerTarget.mealType || document.getElementById('planner-meal-type')?.value || 'dinner'
     try {
-      const added = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, { ...meal })
+      const added = await addPlannerMeal(state.user.id, state.weekStart, dayIdx, {
+        ...meal, meal_type: mealType
+      })
       state.planner.meals[dayIdx].push(added)
       if (addAsLeftover) {
         const nextDay = (dayIdx + 1) % 7
+        const leftoverType = 'lunch' // leftovers default to next day lunch
         const leftover = await addPlannerMeal(state.user.id, state.weekStart, nextDay, {
-          ...meal, name: meal.name + ' (leftovers)'
+          ...meal, meal_type: leftoverType, leftover: true,
+          name: meal.name // keep original name, is_leftover flag marks it
         })
         state.planner.meals[nextDay].push(leftover)
-        showToast(`Added to ${DAYS[dayIdx]} + ${DAYS[nextDay]} lunch!`, 'success')
+        showToast(`Added to ${DAYS[dayIdx]} ${mealType} + ${DAYS[nextDay]} lunch (leftovers)!`, 'success')
       } else {
-        showToast(`${meal.name} added to ${DAYS[dayIdx]}!`, 'success')
+        showToast(`${meal.name} added to ${DAYS[dayIdx]} ${mealType}!`, 'success')
       }
       state.groceryItems = null
       closePlannerModal()
