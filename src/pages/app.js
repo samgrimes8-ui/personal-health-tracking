@@ -5129,7 +5129,6 @@ function wireGlobals() {
 
       // Initialize selection state: by default, ALL meals are selected
       window._copySelection = new Set(broadcast.plan_data.map((_, i) => i))
-      console.log('[copyModal] opened, _copySelection initialized to:', Array.from(window._copySelection))
 
       // Default target = current week start (Sunday)
       const defaultWeek = getWeekStart()
@@ -5153,7 +5152,6 @@ function wireGlobals() {
   }
 
   window.toggleAllCopyMeals = (checked) => {
-    console.log('[copyModal] toggleAllCopyMeals(', checked, ')')
     if (!window._copySelection) window._copySelection = new Set()
     const checks = document.querySelectorAll('.copy-meal-check')
     window._copySelection.clear()
@@ -5161,7 +5159,6 @@ function wireGlobals() {
       cb.checked = !!checked
       if (checked) window._copySelection.add(Number(cb.dataset.idx))
     })
-    console.log('[copyModal] Set after toggleAll:', Array.from(window._copySelection))
     updateCopySummary()
   }
 
@@ -5169,16 +5166,10 @@ function wireGlobals() {
   // Uses a JS-side Set as source of truth, then syncs the visible checkbox.
   window.toggleCopyMeal = (idx, ev) => {
     if (ev) { ev.preventDefault(); ev.stopPropagation() }
-    if (!window._copySelection) {
-      console.warn('[copyModal] toggleCopyMeal: _copySelection was null, recreating')
-      window._copySelection = new Set()
-    }
+    if (!window._copySelection) window._copySelection = new Set()
     const n = Number(idx)
-    const before = Array.from(window._copySelection)
     if (window._copySelection.has(n)) window._copySelection.delete(n)
     else window._copySelection.add(n)
-    const after = Array.from(window._copySelection)
-    console.log('[copyModal] toggleCopyMeal idx=', n, 'before=', before, 'after=', after)
     const cb = document.getElementById(`copy-check-${n}`)
     if (cb) cb.checked = window._copySelection.has(n)
     updateCopySummary()
@@ -5211,10 +5202,6 @@ function wireGlobals() {
       // Read selection from our JS-side Set (source of truth), not the DOM
       const sel = window._copySelection || new Set()
       const selectedIndices = Array.from(sel).sort((a, b) => a - b)
-      const totalDom = document.querySelectorAll('.copy-meal-check').length
-      console.log('[copyBroadcast] total checkboxes in DOM:', totalDom,
-                  'checked (from Set):', selectedIndices.length,
-                  'indices:', selectedIndices)
       if (!selectedIndices.length) { showToast('Select at least one meal', 'error'); return }
 
       const weekStart = document.getElementById('copy-target-week')?.value || getWeekStart()
@@ -5325,8 +5312,8 @@ function wireGlobals() {
             ${groups[key].map(({ origIdx, item }) => `
               <div onclick="toggleCopyMeal(${origIdx}, event)" style="display:flex;align-items:start;gap:12px;padding:10px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;transition:border-color 0.15s;user-select:none">
                 <input type="checkbox" id="copy-check-${origIdx}" class="copy-meal-check" data-idx="${origIdx}" checked
-                  onclick="toggleCopyMeal(${origIdx}, event)"
-                  style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin-top:2px;flex-shrink:0;pointer-events:none" />
+                  tabindex="-1"
+                  style="width:16px;height:16px;accent-color:var(--accent);margin-top:2px;flex-shrink:0;pointer-events:none" />
                 <div style="flex:1;min-width:0;pointer-events:none">
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <div style="font-size:13px;color:var(--text);font-weight:500">${esc(item._name || item.meal_name || item.recipe_name || 'Meal')}</div>
