@@ -1217,6 +1217,13 @@ function renderShell(container) {
       </div>
     </div>
 
+    <!-- Manage tags modal -->
+    <div class="modal-overlay" id="manage-tags-modal">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:0;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;position:relative">
+        <div id="manage-tags-content"></div>
+      </div>
+    </div>
+
     <div class="toast" id="toast"></div>
   `
   updateSidebar()
@@ -2892,6 +2899,13 @@ function renderRecipesPage(container) {
           style="flex:1;min-width:180px" />
       ` : ''}
       <button class="analyze-btn" style="width:auto;padding:10px 20px;flex-shrink:0" onclick="openNewRecipeModal()">+ New recipe</button>
+      ${allRecipes.length ? `
+        <button onclick="openManageTagsModal()"
+          style="width:auto;padding:10px 14px;flex-shrink:0;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;font-family:inherit;cursor:pointer"
+          title="Rename or delete tags">
+          ⚙️ Tags
+        </button>
+      ` : ''}
     </div>
 
     ${allRecipes.length ? `
@@ -9101,6 +9115,219 @@ function wireGlobals() {
     const el = document.getElementById('recipe-modal')
     if (el) { el.classList.remove('open'); el.style.zIndex = '' }
     state.editingRecipe = null
+  }
+
+  // ── Manage tags (rename / delete across all recipes) ────────────
+  // Keys are lowercased for matching. Casing is preserved in the rendered
+  // label by picking the first non-null display casing we encounter.
+  window.openManageTagsModal = () => {
+    renderManageTagsModal()
+    document.getElementById('manage-tags-modal').classList.add('open')
+  }
+
+  window.closeManageTagsModal = () => {
+    const el = document.getElementById('manage-tags-modal')
+    if (el) el.classList.remove('open')
+  }
+
+  function renderManageTagsModal() {
+    // Collect every tag in use across the user's recipes, with count +
+    // display casing. Presets are always shown even with count 0, so users
+    // can rename/delete them if they don't like our defaults.
+    const tagMap = new Map() // lowercase key → { display, count }
+
+    // Seed with presets (count=0 until we find uses below)
+    for (const p of RECIPE_TAG_PRESETS) {
+      tagMap.set(p.toLowerCase(), { display: p, count: 0, isPreset: true })
+    }
+
+    // Scan recipes for actual usage counts + custom tags
+    for (const r of (state.recipes || [])) {
+      const tags = Array.isArray(r.tags) ? r.tags : []
+      for (const raw of tags) {
+        if (!raw) continue
+        const trimmed = String(raw).trim()
+        if (!trimmed) continue
+        const key = trimmed.toLowerCase()
+        if (tagMap.has(key)) {
+          tagMap.get(key).count++
+        } else {
+          tagMap.set(key, { display: trimmed, count: 1, isPreset: false })
+        }
+      }
+    }
+
+    // Sort: custom tags first (by usage desc), then presets (alphabetical)
+    const entries = Array.from(tagMap.entries())
+      .map(([key, v]) => ({ key, ...v }))
+      .sort((a, b) => {
+        if (a.isPreset !== b.isPreset) return a.isPreset ? 1 : -1
+        if (!a.isPreset) return b.count - a.count
+        return a.display.localeCompare(b.display)
+      })
+
+    const totalCustom = entries.filter(e => !e.isPreset).length
+
+    const content = document.getElementById('manage-tags-content')
+    if (!content) return
+    content.innerHTML = `
+      <div style="position:sticky;top:0;background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;z-index:2">
+        <div>
+          <div style="font-size:16px;font-weight:600;color:var(--text)">Manage tags</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">${totalCustom} custom tag${totalCustom === 1 ? '' : 's'} · ${RECIPE_TAG_PRESETS.length} presets</div>
+        </div>
+        <button onclick="closeManageTagsModal()" aria-label="Close"
+          style="background:transparent;border:none;color:var(--text3);font-size:22px;line-height:1;cursor:pointer;padding:4px 8px">×</button>
+      </div>
+
+      <div style="padding:14px 18px 18px">
+        <div style="font-size:12px;color:var(--text3);margin-bottom:12px;line-height:1.4">
+          Rename a tag to update every recipe using it. Delete removes it everywhere.
+          Renaming to an existing tag merges them.
+        </div>
+
+        ${entries.map(entry => `
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+            <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px">
+              <span style="font-size:13px;padding:3px 10px;border-radius:999px;background:${entry.isPreset ? 'var(--bg3)' : 'rgba(122,180,232,0.12)'};color:${entry.isPreset ? 'var(--text2)' : 'var(--carbs)'};border:1px solid ${entry.isPreset ? 'var(--border2)' : 'rgba(122,180,232,0.3)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px">${esc(entry.display)}</span>
+              <span style="font-size:11px;color:var(--text3);white-space:nowrap">
+                ${entry.count === 0 ? 'unused' : `${entry.count} recipe${entry.count === 1 ? '' : 's'}`}
+                ${entry.isPreset ? ' · preset' : ''}
+              </span>
+            </div>
+            <button onclick="renameRecipeTag('${entry.key.replace(/'/g,"\\'")}')"
+              style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:11px;color:var(--text2);cursor:pointer;font-family:inherit;flex-shrink:0">
+              Rename
+            </button>
+            <button onclick="deleteRecipeTag('${entry.key.replace(/'/g,"\\'")}')"
+              ${entry.count === 0 ? 'disabled title="Not in use on any recipe"' : ''}
+              style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:11px;color:${entry.count === 0 ? 'var(--text3)' : 'var(--red)'};cursor:${entry.count === 0 ? 'not-allowed' : 'pointer'};font-family:inherit;flex-shrink:0;opacity:${entry.count === 0 ? '0.5' : '1'}">
+              Delete
+            </button>
+          </div>
+        `).join('')}
+
+        ${entries.length === 0 ? `
+          <div style="padding:24px 0;text-align:center;color:var(--text3);font-size:13px">
+            No tags yet. Tag a recipe by opening it, tapping Edit, and adding tags in the Tags section.
+          </div>
+        ` : ''}
+      </div>
+    `
+  }
+
+  // Rename every occurrence of a tag across the user's recipes. Matching is
+  // case-insensitive. If the new name already exists on a recipe, we dedupe
+  // (effectively merging two tags into one).
+  window.renameRecipeTag = async (oldKey) => {
+    const lower = String(oldKey).toLowerCase()
+    // Find current display casing — from the first recipe that uses it,
+    // or fall back to the preset casing.
+    let currentDisplay = oldKey
+    for (const r of (state.recipes || [])) {
+      const tags = Array.isArray(r.tags) ? r.tags : []
+      for (const t of tags) {
+        if (t && t.toLowerCase() === lower) { currentDisplay = t; break }
+      }
+    }
+    const preset = RECIPE_TAG_PRESETS.find(p => p.toLowerCase() === lower)
+    if (preset) currentDisplay = preset
+
+    const raw = window.prompt(`Rename "${currentDisplay}" to:`, currentDisplay)
+    if (raw == null) return
+    const newName = raw.trim()
+    if (!newName) { showToast('Tag name can\'t be empty', 'error'); return }
+    if (newName.toLowerCase() === lower && newName === currentDisplay) return // no change
+
+    const newKey = newName.toLowerCase()
+    const affected = (state.recipes || []).filter(r =>
+      Array.isArray(r.tags) && r.tags.some(t => t && t.toLowerCase() === lower)
+    )
+
+    if (affected.length === 0) {
+      // It's just a preset with no uses — nothing to rewrite in the DB.
+      // We can't really "rename" a preset (it's a client-side constant),
+      // but we can quietly skip and show feedback.
+      showToast('Tag isn\'t on any recipe yet — add it to a recipe first', '')
+      return
+    }
+
+    showToast(`Renaming tag on ${affected.length} recipe${affected.length === 1 ? '' : 's'}...`, '')
+    let failed = 0
+    for (const r of affected) {
+      // Replace old tag with new one; dedupe with case-insensitive match
+      const seenKeys = new Set()
+      const updatedTags = []
+      for (const t of r.tags) {
+        if (!t) continue
+        const key = t.toLowerCase() === lower ? newKey : t.toLowerCase()
+        if (seenKeys.has(key)) continue
+        seenKeys.add(key)
+        updatedTags.push(t.toLowerCase() === lower ? newName : t)
+      }
+      try {
+        const saved = await upsertRecipe(state.user.id, { ...r, tags: updatedTags })
+        const idx = state.recipes.findIndex(x => x.id === saved.id)
+        if (idx !== -1) state.recipes[idx] = saved
+      } catch (err) {
+        console.error('[tags] rename failed for recipe', r.id, err)
+        failed++
+      }
+    }
+    // If the currently active tag filter matched the old name, update it
+    if (state.recipeActiveTag && state.recipeActiveTag.toLowerCase() === lower) {
+      state.recipeActiveTag = newName
+    }
+    if (failed > 0) {
+      showToast(`Renamed with ${failed} error${failed === 1 ? '' : 's'}`, 'error')
+    } else {
+      showToast(`Renamed on ${affected.length} recipe${affected.length === 1 ? '' : 's'}`, 'success')
+    }
+    // Re-render modal contents AND the recipes page behind it
+    renderManageTagsModal()
+    renderPage()
+  }
+
+  window.deleteRecipeTag = async (oldKey) => {
+    const lower = String(oldKey).toLowerCase()
+    const affected = (state.recipes || []).filter(r =>
+      Array.isArray(r.tags) && r.tags.some(t => t && t.toLowerCase() === lower)
+    )
+    if (affected.length === 0) return
+    const currentDisplay = (() => {
+      for (const r of affected) {
+        for (const t of (r.tags || [])) {
+          if (t && t.toLowerCase() === lower) return t
+        }
+      }
+      return oldKey
+    })()
+    if (!confirm(`Remove tag "${currentDisplay}" from ${affected.length} recipe${affected.length === 1 ? '' : 's'}?`)) return
+
+    showToast(`Removing tag from ${affected.length} recipe${affected.length === 1 ? '' : 's'}...`, '')
+    let failed = 0
+    for (const r of affected) {
+      const updatedTags = r.tags.filter(t => t && t.toLowerCase() !== lower)
+      try {
+        const saved = await upsertRecipe(state.user.id, { ...r, tags: updatedTags })
+        const idx = state.recipes.findIndex(x => x.id === saved.id)
+        if (idx !== -1) state.recipes[idx] = saved
+      } catch (err) {
+        console.error('[tags] delete failed for recipe', r.id, err)
+        failed++
+      }
+    }
+    // Clear the active filter if it matched the deleted tag
+    if (state.recipeActiveTag && state.recipeActiveTag.toLowerCase() === lower) {
+      state.recipeActiveTag = ''
+    }
+    if (failed > 0) {
+      showToast(`Deleted with ${failed} error${failed === 1 ? '' : 's'}`, 'error')
+    } else {
+      showToast(`Tag removed from ${affected.length} recipe${affected.length === 1 ? '' : 's'}`, 'success')
+    }
+    renderManageTagsModal()
+    renderPage()
   }
 
   // ── Foods page ─────────────────────────────────────────────────
