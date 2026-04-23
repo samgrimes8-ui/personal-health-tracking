@@ -1224,6 +1224,13 @@ function renderShell(container) {
       </div>
     </div>
 
+    <!-- Quick-tag modal — add/remove tags on a single recipe without entering edit mode -->
+    <div class="modal-overlay" id="quick-tag-modal">
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r3);padding:0;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;position:relative">
+        <div id="quick-tag-content"></div>
+      </div>
+    </div>
+
     <div class="toast" id="toast"></div>
   `
   updateSidebar()
@@ -2961,6 +2968,11 @@ function renderRecipeCard(r) {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);flex:1;margin-right:12px">${esc(r.name)}</div>
         <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+          <button onclick="openQuickTagModal('${r.id}');event.stopPropagation()"
+            title="Add or remove tags"
+            style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
+            onmouseover="this.style.borderColor='var(--carbs)';this.style.color='var(--carbs)'"
+            onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text3)'">🏷️ Tag</button>
           <button onclick="openShareModal('${r.id}');event.stopPropagation()"
             title="Share recipe"
             style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
@@ -9117,6 +9129,169 @@ function wireGlobals() {
     state.editingRecipe = null
   }
 
+  // ── Quick-tag modal ─────────────────────────────────────────────
+  // Opens a minimal modal with just the tag chip editor for a single
+  // recipe. Every toggle saves immediately — no Edit → change → Save
+  // flow. Designed to tag lots of recipes quickly from the grid view.
+  window.openQuickTagModal = (recipeId) => {
+    const recipe = (state.recipes || []).find(r => r.id === recipeId)
+    if (!recipe) { showToast('Recipe not found', 'error'); return }
+    state._quickTagRecipeId = recipeId
+    // _quickTagSaving is a per-tag-key lock so rapid-tapping the same
+    // chip doesn't fire overlapping upserts
+    state._quickTagSaving = new Set()
+    renderQuickTagModal()
+    document.getElementById('quick-tag-modal').classList.add('open')
+  }
+
+  window.closeQuickTagModal = () => {
+    const el = document.getElementById('quick-tag-modal')
+    if (el) el.classList.remove('open')
+    state._quickTagRecipeId = null
+    state._quickTagSaving = null
+  }
+
+  function renderQuickTagModal() {
+    const recipeId = state._quickTagRecipeId
+    if (!recipeId) return
+    const recipe = (state.recipes || []).find(r => r.id === recipeId)
+    if (!recipe) return
+
+    const currentTags = Array.isArray(recipe.tags) ? recipe.tags.filter(Boolean) : []
+    const currentKeys = new Set(currentTags.map(t => t.toLowerCase()))
+
+    // Build suggestion pool: presets + all other tags used across the user's
+    // library, so recently-invented custom tags show up as tappable chips.
+    const displayMap = {}
+    const knownKeys = new Set()
+    for (const p of RECIPE_TAG_PRESETS) {
+      displayMap[p.toLowerCase()] = p
+      knownKeys.add(p.toLowerCase())
+    }
+    for (const r of (state.recipes || [])) {
+      if (!Array.isArray(r.tags)) continue
+      for (const t of r.tags) {
+        if (!t) continue
+        const key = t.toLowerCase()
+        if (!displayMap[key]) displayMap[key] = t
+        knownKeys.add(key)
+      }
+    }
+    const suggestions = Array.from(knownKeys).map(k => displayMap[k])
+
+    const content = document.getElementById('quick-tag-content')
+    if (!content) return
+    content.innerHTML = `
+      <div style="position:sticky;top:0;background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;z-index:2">
+        <div style="min-width:0;flex:1;margin-right:10px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:3px">Tag recipe</div>
+          <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(recipe.name)}</div>
+        </div>
+        <button onclick="closeQuickTagModal()" aria-label="Close"
+          style="background:transparent;border:none;color:var(--text3);font-size:22px;line-height:1;cursor:pointer;padding:4px 8px;flex-shrink:0">×</button>
+      </div>
+
+      <div style="padding:14px 18px 18px">
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.4">
+          Tap any tag to toggle. Saves instantly.
+        </div>
+
+        <div id="quick-tag-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          ${suggestions.map(t => {
+            const isOn = currentKeys.has(t.toLowerCase())
+            return `<button type="button" onclick="quickTagToggle('${t.replace(/'/g,"\\'")}')"
+              style="font-size:13px;padding:5px 13px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'rgba(122,180,232,0.18)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
+          }).join('')}
+        </div>
+
+        <div style="display:flex;gap:6px">
+          <input type="text" id="quick-tag-input" placeholder="Or create a new tag..."
+            onkeydown="if (event.key === 'Enter') { event.preventDefault(); quickTagAddCustom() }"
+            style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:8px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+          <button type="button" onclick="quickTagAddCustom()"
+            style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:8px 14px;font-size:12px;color:var(--text2);cursor:pointer;font-family:inherit;white-space:nowrap">
+            + Add
+          </button>
+        </div>
+
+        <div id="quick-tag-status" style="font-size:11px;color:var(--text3);margin-top:10px;min-height:14px;text-align:center"></div>
+      </div>
+    `
+  }
+
+  // Toggle a tag on/off for the currently-opened recipe. Saves immediately.
+  window.quickTagToggle = async (tagDisplay) => {
+    const recipeId = state._quickTagRecipeId
+    if (!recipeId) return
+    const recipe = (state.recipes || []).find(r => r.id === recipeId)
+    if (!recipe) return
+
+    const key = tagDisplay.toLowerCase()
+    // Prevent overlapping writes to the same tag if user rapid-taps
+    if (state._quickTagSaving?.has(key)) return
+    state._quickTagSaving?.add(key)
+
+    const currentTags = Array.isArray(recipe.tags) ? recipe.tags.filter(Boolean) : []
+    const currentKeys = new Set(currentTags.map(t => t.toLowerCase()))
+    let newTags
+    if (currentKeys.has(key)) {
+      newTags = currentTags.filter(t => t.toLowerCase() !== key)
+    } else {
+      newTags = [...currentTags, tagDisplay]
+    }
+
+    await quickTagPersist(recipe, newTags)
+    state._quickTagSaving?.delete(key)
+  }
+
+  window.quickTagAddCustom = async () => {
+    const input = document.getElementById('quick-tag-input')
+    if (!input) return
+    const raw = input.value.trim().replace(/^#+/, '').trim()
+    if (!raw) return
+    input.value = ''
+
+    const recipeId = state._quickTagRecipeId
+    if (!recipeId) return
+    const recipe = (state.recipes || []).find(r => r.id === recipeId)
+    if (!recipe) return
+
+    const key = raw.toLowerCase()
+    if (state._quickTagSaving?.has(key)) return
+    state._quickTagSaving?.add(key)
+
+    const currentTags = Array.isArray(recipe.tags) ? recipe.tags.filter(Boolean) : []
+    if (currentTags.some(t => t.toLowerCase() === key)) {
+      // Already has it — nothing to do
+      state._quickTagSaving?.delete(key)
+      return
+    }
+    const newTags = [...currentTags, raw]
+    await quickTagPersist(recipe, newTags)
+    state._quickTagSaving?.delete(key)
+  }
+
+  // Shared save path — updates DB, state.recipes, re-renders the modal
+  // chips AND the recipes page behind it (so the tag pill bar + card
+  // chip list reflect the change immediately).
+  async function quickTagPersist(recipe, newTags) {
+    const status = document.getElementById('quick-tag-status')
+    if (status) { status.textContent = 'Saving...'; status.style.color = 'var(--text3)' }
+    try {
+      const saved = await upsertRecipe(state.user.id, { ...recipe, tags: newTags })
+      const idx = state.recipes.findIndex(x => x.id === saved.id)
+      if (idx !== -1) state.recipes[idx] = saved; else state.recipes.unshift(saved)
+      if (status) { status.textContent = '✓ Saved'; status.style.color = 'var(--protein)' }
+      // Re-render chips to reflect new state, and page behind so the
+      // card's tag row updates without closing the modal
+      renderQuickTagModal()
+      renderPage()
+    } catch (err) {
+      console.error('[quickTag] save failed:', err)
+      if (status) { status.textContent = 'Error: ' + (err?.message || 'failed to save'); status.style.color = 'var(--red)' }
+    }
+  }
+
   // ── Manage tags (rename / delete across all recipes) ────────────
   // Keys are lowercased for matching. Casing is preserved in the rendered
   // label by picking the first non-null display casing we encounter.
@@ -10127,7 +10302,6 @@ function wireGlobals() {
       sugar: parseFloat(document.getElementById('r-sugar')?.value) || 0,
       tags: tagsFromEditor,
     }
-    console.log('[saveRecipeHandler] Saving recipe', recipe.name, 'with tags:', tagsFromEditor)
     if (!recipe.name) { showToast('Recipe needs a name', 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Save recipe' }; return }
     try {
       const saved = await upsertRecipe(state.user.id, recipe)
