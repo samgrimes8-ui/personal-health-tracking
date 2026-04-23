@@ -1553,7 +1553,6 @@ function renderDashboard(container) {
     <div class="log-card">
       <div class="log-header">
         <span class="log-header-title">Today's meals</span>
-        <button class="clear-btn" onclick="clearTodayLog()">Clear today</button>
       </div>
       <div id="today-log-body">${renderTodayMeals(todayLog)}</div>
     </div>
