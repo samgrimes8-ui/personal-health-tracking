@@ -545,6 +545,40 @@ Respond ONLY with a JSON object, no markdown:
   return parseJSON(data)
 }
 
+// Classify a food-related photo into one of: 'barcode', 'label', or 'food'.
+// Used to route the unified photo-upload UI: user snaps something, we first
+// try local barcode decoders (free), and if that fails we call this to pick
+// the right analysis path (label OCR vs meal analysis).
+//
+// Returns one of 'barcode' | 'label' | 'food'. Defaults to 'food' if the
+// model returns something unexpected — meal analysis is the safest default
+// because it gives the user SOMETHING (even if wrong) rather than failing.
+export async function classifyFoodPhoto(imageBase64) {
+  const data = await callProxy('food', [{
+    role: 'user',
+    content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
+      { type: 'text', text: `Look at this photo and classify what's being shown. Pick ONE:
+
+- "barcode" — a product barcode (stripes + digits), typically on packaging
+- "label" — a nutrition facts panel (white rectangle, bold "Nutrition Facts" header, table of values)
+- "food" — a meal, plate of food, dish, or any food item that isn't a label or barcode
+
+Respond with ONLY one word: barcode, label, or food.` }
+    ]
+  }], { max_tokens: 20 })
+
+  const raw = (data?.content || [])
+    .map(b => b.text || '')
+    .join('')
+    .trim()
+    .toLowerCase()
+
+  if (raw.includes('barcode')) return 'barcode'
+  if (raw.includes('label')) return 'label'
+  return 'food'
+}
+
 export async function readBarcodeFromImage(imageBase64) {
   // Last resort — use Claude to visually read the barcode number from the
   // photo. Anthropic returns a structured response with content blocks,

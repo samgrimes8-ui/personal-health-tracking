@@ -19,6 +19,7 @@ import {
 } from '../lib/db.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeRecipePhoto, analyzeDishBySearch, analyzePlannerDescription,
+  classifyFoodPhoto,
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
   generateRecipeInstructions, extractBodyScan, fetchOgMetadata, readBarcodeFromImage,
   extractRecipeFromPhoto, generateRecipeFromMood
@@ -49,7 +50,7 @@ let state = {
   providers: [],
   followedProviders: [],
   myBroadcasts: [],
-  recipeMode: 'write',    // 'write' | 'snap' | 'link'
+  recipeMode: 'write',    // 'write' | 'snap'  (link input merged into 'write')
   incomingShares: [],
   units: null, // set on init from locale
   newUsersCount: 0,
@@ -65,7 +66,7 @@ let state = {
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false, isProvider: false },
   currentPage: 'log',
   currentMode: 'food',
-  foodMode: 'search',     // 'search' | 'barcode' | 'label' | 'snap'  (default: describe)
+  foodMode: 'search',     // 'search' | 'photo'  (photo auto-detects barcode/label/meal)
   imageBase64: null,
   labelImageBase64: null,
   recipeImageBase64: null, // photo of recipe card / cookbook page / screenshot
@@ -1400,9 +1401,11 @@ function renderDashboard(container) {
           <button class="mode-tab ${state.currentMode === 'recipe' ? 'active' : ''}" data-mode="recipe" onclick="switchMode('recipe')">📖 Recipe</button>
         </div>
 
-        <!-- RECIPE: 3 sub-modes (write / snap / link) -->
+        <!-- RECIPE: 2 sub-modes (write / snap) — link support is merged
+             into the write textarea (URLs pasted there are detected
+             automatically and routed through web search) -->
         <div class="mode-panel ${state.currentMode === 'recipe' ? 'active' : ''}" id="mode-recipe">
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
             <button class="food-sub-btn ${state.recipeMode === 'write' ? 'active' : ''}"
               onclick="setRecipeMode('write')" id="recipe-btn-write">
               <span style="font-size:18px;display:block;margin-bottom:2px">✍️</span>
@@ -1411,18 +1414,14 @@ function renderDashboard(container) {
             <button class="food-sub-btn ${state.recipeMode === 'snap' ? 'active' : ''}"
               onclick="setRecipeMode('snap')" id="recipe-btn-snap">
               <span style="font-size:18px;display:block;margin-bottom:2px">📸</span>
-              <span style="font-size:11px">Snap recipe</span>
-            </button>
-            <button class="food-sub-btn ${state.recipeMode === 'link' ? 'active' : ''}"
-              onclick="setRecipeMode('link')" id="recipe-btn-link">
-              <span style="font-size:18px;display:block;margin-bottom:2px">🔗</span>
-              <span style="font-size:11px">From link</span>
+              <span style="font-size:11px">Photo</span>
             </button>
           </div>
 
-          <!-- Write it (merged describe + ingredients — one textarea) -->
+          <!-- Write it — handles description, ingredient lists, AND URLs -->
           <div id="recipe-panel-write" style="${state.recipeMode === 'write' ? '' : 'display:none'}">
-            <textarea class="recipe-textarea" id="recipe-input" rows="6" placeholder="Describe the recipe or paste the ingredient list.&#10;&#10;Either style works — AI handles both:&#10;&#10;• 'Grilled chicken bowl with rice and broccoli, high protein'&#10;&#10;• 2 cups chicken breast&#10;  1 cup brown rice&#10;  1 tbsp olive oil&#10;  2 cloves garlic"></textarea>
+            <textarea class="recipe-textarea" id="recipe-input" rows="6" placeholder="Describe the recipe, paste ingredients, or drop a URL.&#10;&#10;All of these work:&#10;&#10;• Grilled chicken bowl with rice and broccoli&#10;&#10;• 2 cups chicken breast&#10;  1 cup brown rice&#10;  1 tbsp olive oil&#10;&#10;• https://cookingclassy.com/chicken-piccata"></textarea>
+            <div class="link-note" style="font-size:11px;color:var(--text3);margin-top:6px">URLs get extracted and searched. Instagram/TikTok fall back to dish-name search.</div>
           </div>
 
           <!-- Snap recipe — photo of a cookbook page, recipe card, or screenshot -->
@@ -1447,16 +1446,11 @@ function renderDashboard(container) {
               </button>
             </div>
           </div>
-
-          <!-- From link — single combined field: URL or dish name -->
-          <div id="recipe-panel-link" style="${state.recipeMode === 'link' ? '' : 'display:none'}">
-            <textarea class="recipe-textarea" id="recipe-link-combined" rows="3"
-              placeholder="Paste a URL, or describe the dish.&#10;&#10;Works with both:&#10;• https://cookingclassy.com/chicken-piccata&#10;• Skillet chicken cacciatore"></textarea>
-            <div class="link-note">Instagram/TikTok links are private — AI falls back to searching the dish by name.</div>
-          </div>
         </div>
 
-        <!-- FOOD: 4 sub-modes (describe / barcode / label / snap-food) -->
+        <!-- FOOD: 2 sub-modes (describe / photo). The photo mode runs
+             auto-detection: barcode → nutrition label → meal photo.
+             User doesn't pick which; we figure it out from the image. -->
         <div class="mode-panel ${state.currentMode === 'food' ? 'active' : ''}" id="mode-food">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
             <button class="food-sub-btn ${state.foodMode === 'search' ? 'active' : ''}"
@@ -1464,20 +1458,10 @@ function renderDashboard(container) {
               <span style="font-size:18px;display:block;margin-bottom:2px">🔤</span>
               <span style="font-size:11px">Describe</span>
             </button>
-            <button class="food-sub-btn ${state.foodMode === 'barcode' ? 'active' : ''}"
-              onclick="setFoodMode('barcode')" id="food-btn-barcode">
-              <span style="font-size:18px;display:block;margin-bottom:2px">📷</span>
-              <span style="font-size:11px">Scan barcode</span>
-            </button>
-            <button class="food-sub-btn ${state.foodMode === 'label' ? 'active' : ''}"
-              onclick="setFoodMode('label')" id="food-btn-label">
-              <span style="font-size:18px;display:block;margin-bottom:2px">🏷️</span>
-              <span style="font-size:11px">Snap label</span>
-            </button>
-            <button class="food-sub-btn ${state.foodMode === 'snap' ? 'active' : ''}"
-              onclick="setFoodMode('snap')" id="food-btn-snap">
+            <button class="food-sub-btn ${state.foodMode === 'photo' ? 'active' : ''}"
+              onclick="setFoodMode('photo')" id="food-btn-photo">
               <span style="font-size:18px;display:block;margin-bottom:2px">📸</span>
-              <span style="font-size:11px">Snap food</span>
+              <span style="font-size:11px">Photo</span>
             </button>
           </div>
 
@@ -1489,76 +1473,33 @@ function renderDashboard(container) {
             <div style="font-size:11px;color:var(--text3)">AI looks up the exact nutrition facts for the product or food you describe</div>
           </div>
 
-          <!-- Scan barcode -->
-          <div id="food-panel-barcode" style="${state.foodMode !== 'barcode' ? 'display:none' : ''}">
-            <input type="file" id="barcode-file-input-camera" accept="image/*" capture="environment" style="display:none" />
-            <input type="file" id="barcode-file-input-library" accept="image/*" style="display:none" />
-            <div id="barcode-scanner-inner" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;padding:20px">
+          <!-- Unified photo input — auto-detects barcode / label / meal.
+               The underlying pipeline is unchanged (we still have
+               decodeBarcodeFromFile, analyzeNutritionLabel, analyzePhoto);
+               we just route based on what's in the image. -->
+          <div id="food-panel-photo" style="${state.foodMode === 'photo' ? '' : 'display:none'}">
+            <input type="file" id="foodphoto-camera" accept="image/*" capture="environment" style="display:none" />
+            <input type="file" id="foodphoto-library" accept="image/*" style="display:none" />
+            <div id="foodphoto-preview" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:140px;display:flex;align-items:center;justify-content:center;padding:20px">
               <div style="text-align:center">
-                <div style="font-size:28px;margin-bottom:6px">📷</div>
-                <div style="font-size:13px;color:var(--text2)">Scan a product barcode</div>
-                <div style="font-size:11px;color:var(--text3);margin-top:3px">We'll read the UPC and look it up</div>
+                <div style="font-size:28px;margin-bottom:6px">📸</div>
+                <div style="font-size:13px;color:var(--text2)">Take or upload a photo</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:3px">Barcode, nutrition label, or meal — we'll figure it out</div>
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-              <button type="button" id="barcode-btn-camera"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+              <button type="button" id="foodphoto-btn-camera"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
                 📷 Camera
               </button>
-              <button type="button" id="barcode-btn-library"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+              <button type="button" id="foodphoto-btn-library"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
                 🖼️ Choose photo
               </button>
             </div>
-            <div id="barcode-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center;min-height:18px"></div>
-            <input id="barcode-manual-input" class="link-input" placeholder="Or type barcode number..." style="margin-top:6px"
+            <div id="foodphoto-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center;min-height:18px"></div>
+            <input id="barcode-manual-input" class="link-input" placeholder="Or type barcode number..." style="margin-top:6px;display:none"
               onkeydown="if(event.key==='Enter')lookupBarcode(this.value)" />
-          </div>
-
-          <!-- Snap label (nutrition facts panel) -->
-          <div id="food-panel-label" style="${state.foodMode === 'label' ? '' : 'display:none'}">
-            <input type="file" id="label-file-input-camera" accept="image/*" capture="environment" style="display:none" />
-            <input type="file" id="label-file-input-library" accept="image/*" style="display:none" />
-            <div class="upload-area" id="label-upload-area" style="cursor:default">
-              <div id="label-upload-inner">
-                <div class="upload-icon">🏷️</div>
-                <div class="upload-text">Snap or upload nutrition label</div>
-                <div class="upload-hint">the white nutrition facts panel</div>
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-              <button type="button" id="label-btn-camera"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
-                📷 Camera
-              </button>
-              <button type="button" id="label-btn-library"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
-                🖼️ Choose photo
-              </button>
-            </div>
-          </div>
-
-          <!-- Snap food — photograph what's on your plate -->
-          <div id="food-panel-snap" style="${state.foodMode === 'snap' ? '' : 'display:none'}">
-            <input type="file" id="foodsnap-camera" accept="image/*" capture="environment" style="display:none" />
-            <input type="file" id="foodsnap-library" accept="image/*" style="display:none" />
-            <div class="upload-area" id="upload-area" style="cursor:default">
-              <div id="upload-inner">
-                <div class="upload-icon">📸</div>
-                <div class="upload-text">Photograph your meal</div>
-                <div class="upload-hint">AI identifies what's on the plate</div>
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-              <button type="button" id="foodsnap-btn-camera"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
-                📷 Camera
-              </button>
-              <button type="button" id="foodsnap-btn-library"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
-                🖼️ Choose photo
-              </button>
-            </div>
           </div>
         </div>
 
@@ -1629,17 +1570,15 @@ function renderDashboard(container) {
   // Set correct analyze button label for current mode
   setTimeout(() => window.updateAnalyzeBtn(), 0)
   if (state.currentMode === 'food') {
-    if (state.foodMode === 'label') wireLabelFileInput()
-    if (state.foodMode === 'barcode') wireBarcodeInput()
-    if (state.foodMode === 'snap') wireFoodSnapInput()
+    if (state.foodMode === 'photo') wireFoodPhotoInput()
   } else if (state.currentMode === 'recipe') {
     if (state.recipeMode === 'snap') wireRecipeSnapInput()
   }
 
-  // Restore food-snap preview if exists
+  // Restore food-photo preview if exists (shown inside foodphoto-preview now)
   if (state.imageBase64) {
-    const inner = document.getElementById('upload-inner')
-    if (inner) inner.innerHTML = `<img src="data:image/jpeg;base64,${state.imageBase64}" class="preview-img" alt="preview">`
+    const preview = document.getElementById('foodphoto-preview')
+    if (preview) preview.innerHTML = `<img src="data:image/jpeg;base64,${state.imageBase64}" style="max-height:220px;border-radius:var(--r);object-fit:contain" alt="preview">`
   }
   // Restore recipe-snap preview if exists
   if (state.recipeImageBase64) {
@@ -4799,25 +4738,23 @@ async function doAnalyze() {
 
   if (state.currentMode === 'recipe') {
     if (state.recipeMode === 'write') {
-      // Merged describe + ingredients — single textarea accepts both styles
-      const recipe = document.getElementById('recipe-input')?.value.trim()
-      if (!recipe) { showToast('Please write or paste the recipe first', 'error'); return null }
-      return await analyzeRecipe(recipe, mealHint)
+      // Single textarea handles description, ingredient list, AND URLs.
+      // Regex picks out any URL; if found, route to dishBySearch (web search)
+      // so we can pull the recipe off the page. Otherwise analyzeRecipe.
+      const raw = document.getElementById('recipe-input')?.value.trim()
+      if (!raw) { showToast('Please write, paste, or link the recipe first', 'error'); return null }
+      const urlMatch = raw.match(/https?:\/\/\S+/)
+      if (urlMatch) {
+        const url = urlMatch[0]
+        const dishName = raw.replace(urlMatch[0], '').trim() || url
+        return await analyzeDishBySearch(dishName, url)
+      }
+      return await analyzeRecipe(raw, mealHint)
     } else if (state.recipeMode === 'snap') {
       if (!state.recipeImageBase64) { showToast('Please snap or choose a recipe photo first', 'error'); return null }
       const btn = document.getElementById('analyze-btn')
       if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Reading recipe...'
       return await analyzeRecipePhoto(state.recipeImageBase64, mealHint)
-    } else if (state.recipeMode === 'link') {
-      // Combined field: URL or dish name (or both). Detect URL vs plain text.
-      const raw = document.getElementById('recipe-link-combined')?.value.trim()
-      if (!raw) { showToast('Please paste a URL or describe the dish', 'error'); return null }
-      const urlMatch = raw.match(/https?:\/\/\S+/)
-      const url = urlMatch ? urlMatch[0] : ''
-      // Dish name = whatever text is there minus the URL (if any)
-      const dishName = urlMatch ? raw.replace(urlMatch[0], '').trim() : raw
-      // If only a URL was pasted, pass the URL as the "dish" too so AI has something
-      return await analyzeDishBySearch(dishName || url, url)
     }
   }
 
@@ -4826,26 +4763,25 @@ async function doAnalyze() {
       const desc = document.getElementById('food-search-input')?.value.trim()
       if (!desc) { showToast('Please describe the food first', 'error'); return null }
       return await analyzeFoodItem(desc)
-    } else if (state.foodMode === 'label') {
-      if (!state.labelImageBase64) { showToast('Please snap or upload a nutrition label first', 'error'); return null }
-      const btn = document.getElementById('analyze-btn')
-      if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Reading label...'
-      return await analyzeNutritionLabel(state.labelImageBase64)
-    } else if (state.foodMode === 'snap') {
-      if (!state.imageBase64) { showToast('Please photograph or choose a food image first', 'error'); return null }
-      const btn = document.getElementById('analyze-btn')
-      if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Analyzing photo...'
-      return await analyzePhoto(state.imageBase64, mealHint)
-    } else {
-      // Barcode mode — trigger the file input if nothing scanned yet
-      const barcodeInput = document.getElementById('barcode-manual-input')
-      const manualCode = barcodeInput?.value.trim()
+    } else if (state.foodMode === 'photo') {
+      // Unified photo path. handlePhotoUnified() already ran when the file
+      // was picked, and either:
+      //  a) Found a barcode and called lookupBarcode (result shown directly)
+      //  b) Classified the image and cached what to run under
+      //     state._pendingFoodPhotoAction — we just execute that here.
+      if (state._pendingFoodPhotoAction) {
+        const action = state._pendingFoodPhotoAction
+        state._pendingFoodPhotoAction = null
+        return await action(mealHint)
+      }
+      // Manual barcode entry fallback (if user typed a UPC)
+      const manualCode = document.getElementById('barcode-manual-input')?.value.trim()
       if (manualCode) {
         return await new Promise(resolve => {
           lookupBarcode(manualCode).then(resolve).catch(() => resolve(null))
         })
       }
-      document.getElementById('barcode-btn-camera')?.click()
+      showToast('Please take or upload a photo first', 'error')
       return null
     }
   }
@@ -5154,18 +5090,15 @@ function wireGlobals() {
   window.updateAnalyzeBtn = function() {
     const btn = document.getElementById('analyze-btn')
     if (!btn) return
-    // Top-level is now only 'food' or 'recipe'. Each has sub-modes.
+    // Top-level is only 'food' or 'recipe'. Each has 2 sub-modes.
     const labels = {
       food: {
-        search:  '✨ Analyze with AI',
-        barcode: '🔍 Look up barcode',
-        label:   '📷 Read label',
-        snap:    '📸 Analyze photo',
+        search: '✨ Analyze with AI',
+        photo:  '📸 Analyze photo',
       },
       recipe: {
         write: '✨ Analyze recipe',
         snap:  '📸 Read recipe photo',
-        link:  '🔍 Search & analyze',
       },
     }
     const group = labels[state.currentMode] || labels.food
@@ -5175,10 +5108,16 @@ function wireGlobals() {
 
   window.switchMode = (mode) => {
     state.currentMode = mode
-    // Clear image state when leaving modes that use it — avoids a stale
-    // base64 being re-submitted from a different mode.
-    if (mode !== 'food' || state.foodMode !== 'snap') state.imageBase64 = null
-    if (mode !== 'recipe' || state.recipeMode !== 'snap') state.recipeImageBase64 = null
+    // Clear stale image state when leaving a photo mode, so a base64 from
+    // one mode can't leak into another.
+    if (mode !== 'food' || state.foodMode !== 'photo') {
+      state.imageBase64 = null
+      state.labelImageBase64 = null
+      state._pendingFoodPhotoAction = null
+    }
+    if (mode !== 'recipe' || state.recipeMode !== 'snap') {
+      state.recipeImageBase64 = null
+    }
     ;['recipe', 'food'].forEach(m => {
       const panel = document.getElementById(`mode-${m}`)
       if (panel) panel.classList.toggle('active', m === mode)
@@ -5186,20 +5125,14 @@ function wireGlobals() {
     document.querySelectorAll('.mode-tab[data-mode]').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === mode)
     })
-    if (mode === 'food') {
-      if (state.foodMode === 'label') wireLabelFileInput()
-      if (state.foodMode === 'barcode') wireBarcodeInput()
-      if (state.foodMode === 'snap') wireFoodSnapInput()
-    }
-    if (mode === 'recipe') {
-      if (state.recipeMode === 'snap') wireRecipeSnapInput()
-    }
+    if (mode === 'food' && state.foodMode === 'photo') wireFoodPhotoInput()
+    if (mode === 'recipe' && state.recipeMode === 'snap') wireRecipeSnapInput()
     window.updateAnalyzeBtn()
   }
 
   window.setRecipeMode = (mode) => {
     state.recipeMode = mode
-    ;['write', 'snap', 'link'].forEach(m => {
+    ;['write', 'snap'].forEach(m => {
       const panel = document.getElementById(`recipe-panel-${m}`)
       const btn = document.getElementById(`recipe-btn-${m}`)
       if (panel) panel.style.display = m === mode ? '' : 'none'
@@ -5211,15 +5144,13 @@ function wireGlobals() {
 
   window.setFoodMode = (mode) => {
     state.foodMode = mode
-    ;['search', 'barcode', 'label', 'snap'].forEach(m => {
+    ;['search', 'photo'].forEach(m => {
       const panel = document.getElementById(`food-panel-${m}`)
       const btn = document.getElementById(`food-btn-${m}`)
       if (panel) panel.style.display = m === mode ? '' : 'none'
       if (btn) btn.classList.toggle('active', m === mode)
     })
-    if (mode === 'label') wireLabelFileInput()
-    if (mode === 'barcode') wireBarcodeInput()
-    if (mode === 'snap') wireFoodSnapInput()
+    if (mode === 'photo') wireFoodPhotoInput()
     window.updateAnalyzeBtn()
   }
 
@@ -5436,65 +5367,11 @@ function wireGlobals() {
     })
   }
 
+  // Remove the dead handleBarcodeImage (replaced by handleFoodPhoto).
+  // The old one targeted #barcode-status which no longer exists.
   window.handleBarcodeImage = async (file) => {
-    const status = document.getElementById('barcode-status')
-    const inner = document.getElementById('barcode-scanner-inner')
-    if (!file) return
-
-    // Immediate loading state so the user sees feedback before any async work
-    if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">📷 Processing photo (${Math.round(file.size / 1024)}KB)…</div>`
-    if (status) status.textContent = 'Processing photo...'
-
-    let scaled
-    try {
-      scaled = await downscaleImage(file, { maxDim: 1600, quality: 0.9 })
-    } catch (e) {
-      console.error('[barcode] downscale threw:', e)
-      if (status) status.textContent = `Photo failed: ${e?.message || 'unknown'} — try typing the barcode`
-      if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:12px">Photo failed to process:<br>${esc(String(e?.message || e))}</div>`
-      return
-    }
-    if (inner) inner.innerHTML = `<img src="${scaled.dataUrl}" style="max-height:140px;border-radius:var(--r);object-fit:contain" />`
-    if (status) status.textContent = 'Scanning (trying full image, rotations, zoom)...'
-
-    // Local decode (no AI cost)
-    let code = null
-    try {
-      code = await decodeBarcodeFromFile(file)
-    } catch (e) {
-      console.error('[barcode] decodeBarcodeFromFile threw:', e)
-      if (status) status.textContent = `Scan error: ${e?.message || 'unknown'}`
-      // Don't give up — try AI fallback below
-    }
-
-    if (code) {
-      if (status) status.textContent = `Found: ${code} — looking up...`
-      const input = document.getElementById('barcode-manual-input')
-      if (input) input.value = code
-      await lookupBarcode(code)
-      return
-    }
-
-    // AI fallback — uses downscaled image so /api/analyze body stays small
-    if (status) status.textContent = 'Local decode found nothing — trying AI reader...'
-    try {
-      const aiCode = await readBarcodeFromImage(scaled.base64)
-      if (aiCode) {
-        if (status) status.textContent = `AI read: ${aiCode} — looking up...`
-        const input = document.getElementById('barcode-manual-input')
-        if (input) input.value = aiCode
-        await lookupBarcode(aiCode)
-      } else {
-        if (status) status.textContent = 'No barcode found in photo — type the number below'
-        const input = document.getElementById('barcode-manual-input')
-        if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
-      }
-    } catch (err) {
-      console.error('[barcode] AI reader threw:', err)
-      if (status) status.textContent = `AI read failed: ${err?.message || 'unknown'} — type the number`
-      const input = document.getElementById('barcode-manual-input')
-      if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
-    }
+    // Kept as a shim for any lingering callers — routes to the new handler
+    if (file) handleFoodPhoto(file)
   }
 
   function loadQuagga() { return Promise.resolve() } // no longer used
@@ -5503,56 +5380,69 @@ function wireGlobals() {
   window.lookupBarcode = async (code) => {
     code = String(code).trim()
     if (!code) return
-    const status = document.getElementById('barcode-status')
+    // Status now lives in the unified photo panel. Fall back gracefully
+    // if neither is present (e.g. programmatic call from elsewhere).
+    const status = document.getElementById('foodphoto-status') || document.getElementById('barcode-status')
     if (status) status.textContent = `Looking up ${code}...`
-    const btn = document.getElementById('analyze-btn')
     try {
       const res = await fetch(`/api/barcode?upc=${code}`)
       const data = await res.json()
       if (!data.found) {
-        if (status) status.textContent = `Not in database — try "Describe food" tab`
+        if (status) {
+          status.textContent = 'Not in database — try "Describe" instead'
+          status.style.color = 'var(--fat)'
+        }
         showToast('Product not found — try describing it instead', 'error')
         return
       }
-      if (status) status.textContent = `✓ Found: ${data.name}`
+      if (status) {
+        status.textContent = `✓ Found: ${data.name}`
+        status.style.color = 'var(--accent)'
+      }
       state.currentEntry = { ...data, ingredients: [] }
       showResult(state.currentEntry)
     } catch (err) {
-      if (status) status.textContent = 'Lookup failed'
+      if (status) {
+        status.textContent = 'Lookup failed'
+        status.style.color = 'var(--red)'
+      }
       showToast('Lookup failed: ' + err.message, 'error')
     }
   }
 
-  window.wireBarcodeInput = function() {
-    const container = document.getElementById('food-panel-barcode')
+  // ── Unified Food > Photo input ─────────────────────────────────
+  // One photo input. Auto-detects whether it's a barcode, a nutrition
+  // label, or a meal photo, and routes accordingly.
+  //
+  // Pipeline at upload time:
+  //  1. Downscale + show preview
+  //  2. Try barcode decoders (native + ZXing, multi-pass). Fast, free.
+  //  3. If barcode found: look up UPC immediately. Done.
+  //  4. If no barcode: ask AI classifier "barcode/label/food?"
+  //  5. Based on result, cache either:
+  //       - label → analyzeNutritionLabel call in state._pendingFoodPhotoAction
+  //       - food  → analyzePhoto call
+  //     User taps main Analyze button to run it.
+  //
+  // The manual barcode entry input stays hidden by default, but reveals
+  // itself as a fallback if the user wants to type a UPC manually.
+  window.wireFoodPhotoInput = function() {
+    const container = document.getElementById('food-panel-photo')
     if (!container || container._wired) return
     container._wired = true
 
-    const fiCam = document.getElementById('barcode-file-input-camera')
-    const fiLib = document.getElementById('barcode-file-input-library')
-    const btnCam = document.getElementById('barcode-btn-camera')
-    const btnLib = document.getElementById('barcode-btn-library')
+    const fiCam = document.getElementById('foodphoto-camera')
+    const fiLib = document.getElementById('foodphoto-library')
+    const btnCam = document.getElementById('foodphoto-btn-camera')
+    const btnLib = document.getElementById('foodphoto-btn-library')
     const manual = document.getElementById('barcode-manual-input')
 
-    if (btnCam && fiCam) {
-      btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
-    }
-    if (btnLib && fiLib) {
-      btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
-    }
+    if (btnCam && fiCam) btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
+    if (btnLib && fiLib) btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
 
     const onChange = (e) => {
-      try {
-        const file = e.target.files?.[0]
-        if (!file) return
-        const status = document.getElementById('barcode-status')
-        if (status) status.textContent = `Got photo (${Math.round(file.size / 1024)}KB) — reading barcode...`
-        window.handleBarcodeImage(file)
-      } catch (err) {
-        const status = document.getElementById('barcode-status')
-        if (status) status.textContent = 'Error: ' + (err?.message || err)
-        console.error('[barcode] onChange threw:', err)
-      }
+      const file = e.target.files?.[0]
+      if (file) handleFoodPhoto(file)
     }
     if (fiCam) fiCam.addEventListener('change', onChange)
     if (fiLib) fiLib.addEventListener('change', onChange)
@@ -5565,64 +5455,114 @@ function wireGlobals() {
     }
   }
 
-  // ── Nutrition label photo ───────────────────────────────────────
-  window.wireLabelFileInput = function() {
-    const container = document.getElementById('food-panel-label')
-    if (!container || container._wired) return
-    container._wired = true
+  // Runs the whole "figure out what this photo is and do the right thing"
+  // pipeline. Called from wireFoodPhotoInput's file-change handler.
+  async function handleFoodPhoto(file) {
+    const preview = document.getElementById('foodphoto-preview')
+    const status = document.getElementById('foodphoto-status')
+    const manual = document.getElementById('barcode-manual-input')
 
-    const fiCam = document.getElementById('label-file-input-camera')
-    const fiLib = document.getElementById('label-file-input-library')
-    const btnCam = document.getElementById('label-btn-camera')
-    const btnLib = document.getElementById('label-btn-library')
-    const ua = document.getElementById('label-upload-area')
-
-    if (btnCam && fiCam) btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
-    if (btnLib && fiLib) btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
-
-    const onChange = (e) => { const f = e.target.files?.[0]; if (f) handleLabelFile(f) }
-    if (fiCam) fiCam.addEventListener('change', onChange)
-    if (fiLib) fiLib.addEventListener('change', onChange)
-
-    // Drag-and-drop (desktop testing)
-    if (ua) {
-      ua.addEventListener('dragover', e => { e.preventDefault(); ua.style.borderColor = 'var(--accent)' })
-      ua.addEventListener('dragleave', () => { ua.style.borderColor = '' })
-      ua.addEventListener('drop', e => { e.preventDefault(); ua.style.borderColor = ''; const f = e.dataTransfer.files[0]; if (f) handleLabelFile(f) })
+    const setStatus = (msg, color) => {
+      if (!status) return
+      status.textContent = msg
+      status.style.color = color || 'var(--text3)'
     }
-  }
 
-  function handleLabelFile(file) {
-    const inner = document.getElementById('label-upload-inner')
-    if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Processing label…</div>`
-    downscaleImage(file).then(({ base64, dataUrl, bytes }) => {
-      state.labelImageBase64 = base64
-      if (inner) inner.innerHTML = `<img src="${dataUrl}" style="width:100%;border-radius:var(--r);max-height:180px;object-fit:contain" alt="label">`
-      console.log(`[label] Downscaled to ${Math.round(bytes / 1024)}KB`)
-    }).catch(err => {
-      if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:13px">Failed to load label: ${err?.message || err}</div>`
-    })
-  }
+    // Reset any previously cached action so re-uploading a new photo
+    // doesn't leave stale state around
+    state._pendingFoodPhotoAction = null
+    state.imageBase64 = null
+    state.labelImageBase64 = null
 
-  // ── Food > Snap food (photograph what's on the plate) ───────────
-  // Structurally identical to wireLabelFileInput — two file inputs
-  // (camera + library), two buttons, downscale + preview on change.
-  window.wireFoodSnapInput = function() {
-    const container = document.getElementById('food-panel-snap')
-    if (!container || container._wired) return
-    container._wired = true
+    // Step 1: downscale and show preview immediately
+    if (preview) preview.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Processing photo…</div>`
+    setStatus('Processing photo...')
 
-    const fiCam = document.getElementById('foodsnap-camera')
-    const fiLib = document.getElementById('foodsnap-library')
-    const btnCam = document.getElementById('foodsnap-btn-camera')
-    const btnLib = document.getElementById('foodsnap-btn-library')
+    let scaled
+    try {
+      scaled = await downscaleImage(file, { maxDim: 1600, quality: 0.9 })
+    } catch (err) {
+      if (preview) preview.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:13px">Couldn't read photo: ${esc(err?.message || err)}</div>`
+      setStatus('Failed to load photo', 'var(--red)')
+      return
+    }
 
-    if (btnCam && fiCam) btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
-    if (btnLib && fiLib) btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
+    if (preview) preview.innerHTML = `<img src="${scaled.dataUrl}" style="max-height:220px;border-radius:var(--r);object-fit:contain" alt="photo">`
 
-    const onChange = (e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }
-    if (fiCam) fiCam.addEventListener('change', onChange)
-    if (fiLib) fiLib.addEventListener('change', onChange)
+    // Step 2: try local barcode decoders (fast, zero cost)
+    setStatus('Checking for barcode...')
+    let code = null
+    try {
+      code = await decodeBarcodeFromFile(file)
+    } catch (err) {
+      console.warn('[foodphoto] barcode decode threw:', err?.message || err)
+    }
+
+    if (code) {
+      setStatus(`Barcode found: ${code} — looking up...`, 'var(--accent)')
+      if (manual) manual.value = code
+      // Direct lookup now, since this is the cheapest/fastest path.
+      try {
+        await lookupBarcode(code)
+        // lookupBarcode sets state.currentEntry + shows result card on success
+      } catch (err) {
+        setStatus(`Lookup failed: ${err?.message || err}`, 'var(--red)')
+      }
+      return
+    }
+
+    // Step 3: AI classifier to decide what kind of photo this is
+    setStatus('No barcode — detecting what this is...')
+    let kind = 'food' // safe default
+    try {
+      kind = await classifyFoodPhoto(scaled.base64)
+    } catch (err) {
+      console.warn('[foodphoto] classifier failed:', err?.message || err)
+      // Fall through with default 'food' — best guess for a random photo
+    }
+
+    // Step 4: based on classification, cache the appropriate action.
+    // User taps the main Analyze button to execute it.
+    if (kind === 'barcode') {
+      // Classifier thought it was a barcode but local decoders failed.
+      // Try the AI visual barcode reader as a last resort.
+      setStatus('Reading barcode digits from image...')
+      try {
+        const aiCode = await readBarcodeFromImage(scaled.base64)
+        if (aiCode) {
+          setStatus(`Read: ${aiCode} — looking up...`, 'var(--accent)')
+          if (manual) manual.value = aiCode
+          await lookupBarcode(aiCode)
+          return
+        }
+      } catch (err) {
+        console.warn('[foodphoto] AI barcode read failed:', err?.message || err)
+      }
+      // Couldn't read the number — reveal manual input
+      setStatus("Couldn't read barcode — type the number below", 'var(--fat)')
+      if (manual) { manual.style.display = ''; manual.focus(); manual.style.borderColor = 'var(--accent)' }
+      return
+    }
+
+    if (kind === 'label') {
+      state.labelImageBase64 = scaled.base64
+      state._pendingFoodPhotoAction = async () => {
+        const btn = document.getElementById('analyze-btn')
+        if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Reading label...'
+        return await analyzeNutritionLabel(state.labelImageBase64)
+      }
+      setStatus('Nutrition label detected — tap Analyze photo', 'var(--accent)')
+      return
+    }
+
+    // Default: it's a meal photo
+    state.imageBase64 = scaled.base64
+    state._pendingFoodPhotoAction = async (mealHint) => {
+      const btn = document.getElementById('analyze-btn')
+      if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Analyzing photo...'
+      return await analyzePhoto(state.imageBase64, mealHint)
+    }
+    setStatus('Meal photo detected — tap Analyze photo', 'var(--accent)')
   }
 
   // ── Recipe > Snap recipe (photograph a recipe card / cookbook page) ──
