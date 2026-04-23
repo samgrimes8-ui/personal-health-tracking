@@ -65,7 +65,7 @@ let state = {
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false, isProvider: false },
   currentPage: 'log',
   currentMode: 'food',
-  foodMode: 'barcode',    // 'barcode' | 'label' | 'search'
+  foodMode: 'search',     // 'search' | 'barcode' | 'label'  (default: describe food)
   imageBase64: null,
   labelImageBase64: null,
   currentEntry: null,
@@ -1445,8 +1445,14 @@ function renderDashboard(container) {
           <div class="link-note">Instagram/TikTok are private — AI searches the web for the recipe by dish name.</div>
         </div>
         <div class="mode-panel ${state.currentMode === 'food' ? 'active' : ''}" id="mode-food">
-          <!-- Three sub-options for single food items -->
+          <!-- Three sub-options for single food items. Describe goes first
+               because it's the fastest path that never fails. -->
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+            <button class="food-sub-btn ${state.foodMode === 'search' ? 'active' : ''}"
+              onclick="setFoodMode('search')" id="food-btn-search">
+              <span style="font-size:20px;display:block;margin-bottom:3px">🔤</span>
+              <span style="font-size:11px">Describe food</span>
+            </button>
             <button class="food-sub-btn ${state.foodMode === 'barcode' ? 'active' : ''}"
               onclick="setFoodMode('barcode')" id="food-btn-barcode">
               <span style="font-size:20px;display:block;margin-bottom:3px">📷</span>
@@ -1457,27 +1463,42 @@ function renderDashboard(container) {
               <span style="font-size:20px;display:block;margin-bottom:3px">🏷️</span>
               <span style="font-size:11px">Snap label</span>
             </button>
-            <button class="food-sub-btn ${state.foodMode === 'search' ? 'active' : ''}"
-              onclick="setFoodMode('search')" id="food-btn-search">
-              <span style="font-size:20px;display:block;margin-bottom:3px">🔤</span>
-              <span style="font-size:11px">Describe food</span>
-            </button>
+          </div>
+
+          <!-- Manual food search (default, shown first) -->
+          <div id="food-panel-search" style="${state.foodMode === 'search' ? '' : 'display:none'}">
+            <input class="link-input" id="food-search-input"
+              placeholder="e.g. RXBAR Chocolate Sea Salt, greek yogurt 150g, Quest bar..."
+              style="margin-bottom:6px" />
+            <div style="font-size:11px;color:var(--text3)">AI looks up the exact nutrition facts for the product or food you describe</div>
           </div>
 
           <!-- Barcode scanner -->
           <div id="food-panel-barcode" style="${state.foodMode !== 'barcode' ? 'display:none' : ''}">
-            <!-- Tap area opens camera on iOS via file input capture -->
-            <div id="barcode-scanner-area" style="border:1.5px dashed var(--border2);border-radius:var(--r);overflow:hidden;position:relative;background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;cursor:pointer"
-              onclick="document.getElementById('barcode-file-input').click()">
-              <div id="barcode-scanner-inner" style="text-align:center;padding:20px">
-                <div style="font-size:28px;margin-bottom:6px">📷</div>
-                <div style="font-size:13px;color:var(--text2)">Tap to scan barcode</div>
-                <div style="font-size:11px;color:var(--text3);margin-top:3px">Opens camera — point at barcode</div>
-              </div>
-              <video id="barcode-video" style="display:none;width:100%;border-radius:var(--r)" autoplay playsinline muted></video>
-            </div>
-            <input type="file" id="barcode-file-input" accept="image/*" capture="environment" style="display:none"
+            <!-- Two file inputs: one captures from camera, one opens photo library.
+                 iOS treats capture="environment" as "camera only" and blocks the
+                 photo library, so we keep them separate and label clearly. -->
+            <input type="file" id="barcode-file-input-camera" accept="image/*" capture="environment" style="display:none"
               onchange="handleBarcodeImage(this.files[0])" />
+            <input type="file" id="barcode-file-input-library" accept="image/*" style="display:none"
+              onchange="handleBarcodeImage(this.files[0])" />
+            <div id="barcode-scanner-inner" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;padding:20px">
+              <div style="text-align:center">
+                <div style="font-size:28px;margin-bottom:6px">📷</div>
+                <div style="font-size:13px;color:var(--text2)">Scan a product barcode</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:3px">We'll read the UPC and look it up</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+              <button onclick="document.getElementById('barcode-file-input-camera').click()"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+                📷 Camera
+              </button>
+              <button onclick="document.getElementById('barcode-file-input-library').click()"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+                🖼️ Choose photo
+              </button>
+            </div>
             <div id="barcode-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center;min-height:18px"></div>
             <input id="barcode-manual-input" class="link-input" placeholder="Or type barcode number..." style="margin-top:6px"
               onkeydown="if(event.key==='Enter')lookupBarcode(this.value)" />
@@ -1485,22 +1506,25 @@ function renderDashboard(container) {
 
           <!-- Label photo -->
           <div id="food-panel-label" style="${state.foodMode === 'label' ? '' : 'display:none'}">
-            <div class="upload-area" id="label-upload-area" onclick="document.getElementById('label-file-input').click()">
+            <input type="file" id="label-file-input-camera" accept="image/*" capture="environment" style="display:none" />
+            <input type="file" id="label-file-input-library" accept="image/*" style="display:none" />
+            <div class="upload-area" id="label-upload-area" style="cursor:default">
               <div id="label-upload-inner">
                 <div class="upload-icon">🏷️</div>
                 <div class="upload-text">Snap or upload nutrition label</div>
                 <div class="upload-hint">the white nutrition facts panel</div>
               </div>
             </div>
-            <input type="file" id="label-file-input" accept="image/*" style="display:none" />
-          </div>
-
-          <!-- Manual food search -->
-          <div id="food-panel-search" style="${state.foodMode === 'search' ? '' : 'display:none'}">
-            <input class="link-input" id="food-search-input"
-              placeholder="e.g. RXBAR Chocolate Sea Salt, greek yogurt 150g, Quest bar..."
-              style="margin-bottom:6px" />
-            <div style="font-size:11px;color:var(--text3)">AI looks up the exact nutrition facts for the product or food you describe</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+              <button onclick="document.getElementById('label-file-input-camera').click()"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+                📷 Camera
+              </button>
+              <button onclick="document.getElementById('label-file-input-library').click()"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+                🖼️ Choose photo
+              </button>
+            </div>
           </div>
         </div>
         <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px">
@@ -5062,7 +5086,7 @@ function wireGlobals() {
 
     // iOS Safari doesn't support BarcodeDetector or getUserMedia reliably
     // Best approach: use file input with camera capture, then decode with ZXing
-    const fileInput = document.getElementById('barcode-file-input')
+    const fileInput = document.getElementById('barcode-file-input-camera')
     if (fileInput) {
       fileInput.click()
       return
@@ -5112,7 +5136,7 @@ function wireGlobals() {
   async function decodeBarcodeFromFile(file) {
     // Downscale large photos first (12MP → much faster decode)
     const bitmap = await createImageBitmap(file)
-    const maxSize = 1200
+    const maxSize = 1600  // bumped from 1200 — more detail helps small/crinkled codes
     const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height))
     const w = Math.round(bitmap.width * scale)
     const h = Math.round(bitmap.height * scale)
@@ -5120,7 +5144,7 @@ function wireGlobals() {
     canvas.width = w; canvas.height = h
     canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h)
 
-    // 1. Try native BarcodeDetector (free, instant)
+    // 1. Try native BarcodeDetector (free, instant — iOS 17+, Chrome Android)
     if ('BarcodeDetector' in window) {
       try {
         const detector = new window.BarcodeDetector({
@@ -5128,20 +5152,35 @@ function wireGlobals() {
         })
         const results = await detector.detect(canvas)
         if (results.length > 0) return results[0].rawValue
-      } catch {}
+      } catch (e) {
+        console.warn('Native BarcodeDetector failed:', e.message)
+      }
     }
 
-    // 2. Try ZXing WASM (free JS library)
+    // 2. Try ZXing WASM (free JS library).
+    //    The @zxing/browser API is decodeFromCanvas / decodeFromImageUrl /
+    //    decodeFromImageElement — NOT readBarcodesFromImageUrl (which is
+    //    from a different library). The reader throws NotFoundException
+    //    rather than returning null when it can't find a code, so we
+    //    catch and fall through.
     try {
       await loadZXing()
-      const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9))
-      const url = URL.createObjectURL(blob)
-      const results = await window._ZXing.readBarcodesFromImageUrl(url, {
-        formats: ['EAN-13','EAN-8','UPC-A','UPC-E','Code128','Code39']
-      })
-      URL.revokeObjectURL(url)
-      if (results?.length > 0) return results[0].text
-    } catch {}
+      if (window._ZXing) {
+        try {
+          const result = await window._ZXing.decodeFromCanvas(canvas)
+          const text = result?.getText?.() || result?.text
+          if (text) return text
+        } catch (e) {
+          // NotFoundException is expected for "no barcode found" —
+          // only log real errors
+          if (e?.name !== 'NotFoundException' && !/not.*found/i.test(e?.message || '')) {
+            console.warn('ZXing decode error:', e?.message || e)
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('ZXing failed to load:', e?.message || e)
+    }
 
     return null
   }
@@ -5177,10 +5216,12 @@ function wireGlobals() {
       const code = await decodeBarcodeFromFile(file)
       if (code) {
         if (status) status.textContent = `Found: ${code} — looking up...`
+        const input = document.getElementById('barcode-manual-input')
+        if (input) input.value = code
         await lookupBarcode(code)
       } else {
         // 3. Claude visual fallback — reads the number from the image
-        if (status) status.textContent = 'Trying AI barcode reader...'
+        if (status) status.textContent = 'No barcode detected — trying AI reader...'
         try {
           const b64 = dataUrl.split(',')[1]
           const aiCode = await readBarcodeFromImage(b64)
@@ -5194,13 +5235,15 @@ function wireGlobals() {
             const input = document.getElementById('barcode-manual-input')
             if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
           }
-        } catch {
+        } catch (err) {
+          console.warn('AI barcode reader failed:', err?.message || err)
           if (status) status.textContent = 'Could not read barcode — type the number below'
           const input = document.getElementById('barcode-manual-input')
           if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
         }
       }
     } catch (e) {
+      console.warn('Barcode image handling failed:', e?.message || e)
       if (status) status.textContent = 'Read failed — type the number below'
       document.getElementById('barcode-manual-input')?.focus()
     }
@@ -5243,11 +5286,13 @@ function wireGlobals() {
 
   // ── Nutrition label photo ───────────────────────────────────────
   window.wireLabelFileInput = function() {
-    const fi = document.getElementById('label-file-input')
+    const fiCam = document.getElementById('label-file-input-camera')
+    const fiLib = document.getElementById('label-file-input-library')
     const ua = document.getElementById('label-upload-area')
-    if (!fi || !ua || ua._wired) return
+    if (!ua || ua._wired) return
     ua._wired = true
-    fi.addEventListener('change', e => { const f = e.target.files[0]; if (f) handleLabelFile(f) })
+    if (fiCam) fiCam.addEventListener('change', e => { const f = e.target.files[0]; if (f) handleLabelFile(f) })
+    if (fiLib) fiLib.addEventListener('change', e => { const f = e.target.files[0]; if (f) handleLabelFile(f) })
     ua.addEventListener('dragover', e => { e.preventDefault(); ua.style.borderColor = 'var(--accent)' })
     ua.addEventListener('dragleave', () => { ua.style.borderColor = '' })
     ua.addEventListener('drop', e => { e.preventDefault(); ua.style.borderColor = ''; const f = e.dataTransfer.files[0]; if (f) handleLabelFile(f) })
