@@ -60,6 +60,7 @@ let state = {
   recipeSearch: '',
   recipeActiveTag: '', // '' = all recipes; otherwise filter to that tag
   providerSearch: '',
+  analyticsRange: 30, // default range for analytics page (days)
   planner: { meals: Array(7).fill(null).map(() => []) },
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false, isProvider: false },
   currentPage: 'log',
@@ -149,7 +150,7 @@ export async function initApp(user, container) {
   if (!_appInitialized) {
     // Restore page BEFORE renderShell so nav active class is correct on first render
     const savedPage = sessionStorage.getItem('macrolens_page')
-    const validPages = ['log','planner','history','goals','recipes','foods','account']
+    const validPages = ['log','analytics','planner','history','goals','recipes','foods','account','providers']
     if (savedPage && validPages.includes(savedPage)) state.currentPage = savedPage
     renderShell(container)
     wireGlobals()
@@ -157,7 +158,7 @@ export async function initApp(user, container) {
   }
   // Also sync on re-init (auth refresh etc) without full shell re-render
   const savedPage = sessionStorage.getItem('macrolens_page')
-  const validPages = ['log','planner','history','goals','recipes','foods','account']
+  const validPages = ['log','analytics','planner','history','goals','recipes','foods','account','providers']
   if (savedPage && validPages.includes(savedPage)) state.currentPage = savedPage
   renderPage()
   // Load new user badge for admins (background, non-blocking)
@@ -227,6 +228,587 @@ async function loadAll() {
   }
 }
 
+// ─── Analytics helpers ───────────────────────────────────────────────────────
+// All computation is derived on-the-fly from state (log, checkins, goals).
+// No new storage needed — this is pure frontend analytics.
+
+// Local date string 'YYYY-MM-DD' in the user's timezone (never toISOString)
+function analyticsLocalDs(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+// Aggregate log entries into { 'YYYY-MM-DD': { cal, p, c, f, count } }
+function aggregateLogByDay(log) {
+  const byDay = {}
+  for (const e of (log || [])) {
+    const ts = e.logged_at || e.timestamp
+    if (!ts) continue
+    const d = new Date(ts)
+    if (isNaN(d.getTime())) continue
+    const k = analyticsLocalDs(d)
+    if (!byDay[k]) byDay[k] = { date: k, cal: 0, p: 0, c: 0, f: 0, fi: 0, count: 0 }
+    byDay[k].cal += (e.calories || 0)
+    byDay[k].p += (e.protein || 0)
+    byDay[k].c += (e.carbs || 0)
+    byDay[k].f += (e.fat || 0)
+    byDay[k].fi += (e.fiber || 0)
+    byDay[k].count += 1
+  }
+  return byDay
+}
+
+// Return N days ending today, oldest first, with zeros for days without logs
+function buildDailyWindow(log, days) {
+  const byDay = aggregateLogByDay(log)
+  const out = []
+  const today = new Date()
+  today.setHours(0,0,0,0)
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - i)
+    const k = analyticsLocalDs(d)
+    out.push(byDay[k] || { date: k, cal: 0, p: 0, c: 0, f: 0, fi: 0, count: 0 })
+  }
+  return out
+}
+
+// Summary stats across a daily window: avg, count of days with logs,
+// adherence = % of logged days that hit goal within ±15%
+function summarizeWindow(daily, goals) {
+  const logged = daily.filter(d => d.count > 0)
+  const n = logged.length || 1
+  const avg = {
+    cal: logged.reduce((a, d) => a + d.cal, 0) / n,
+    p: logged.reduce((a, d) => a + d.p, 0) / n,
+    c: logged.reduce((a, d) => a + d.c, 0) / n,
+    f: logged.reduce((a, d) => a + d.f, 0) / n,
+    fi: logged.reduce((a, d) => a + d.fi, 0) / n,
+  }
+  // Adherence: within ±15% of goal for calories, or hit protein ≥ goal
+  const calTarget = goals?.calories || 2000
+  const proteinTarget = goals?.protein || 150
+  const calInRange = logged.filter(d => Math.abs(d.cal - calTarget) <= calTarget * 0.15).length
+  const proteinHit = logged.filter(d => d.p >= proteinTarget).length
+  return {
+    avg,
+    loggedDays: logged.length,
+    totalDays: daily.length,
+    calAdherencePct: logged.length ? Math.round((calInRange / logged.length) * 100) : 0,
+    proteinAdherencePct: logged.length ? Math.round((proteinHit / logged.length) * 100) : 0,
+  }
+}
+
+// Most-logged items — map log entries to recipe_id or food_item_id,
+// count occurrences, return top N with display info
+function topLoggedItems(log, recipes, foodItems, topN = 5) {
+  const counts = {} // key -> { id, type, name, count, kcal }
+  for (const e of (log || [])) {
+    let key = null, type = null, ref = null
+    if (e.recipe_id) {
+      key = 'r:' + e.recipe_id
+      type = 'recipe'
+      ref = (recipes || []).find(r => r.id === e.recipe_id)
+    } else if (e.food_item_id) {
+      key = 'f:' + e.food_item_id
+      type = 'food'
+      ref = (foodItems || []).find(f => f.id === e.food_item_id)
+    } else {
+      // Fall back to name-based grouping for entries without links
+      const name = (e.name || '').trim().toLowerCase()
+      if (!name) continue
+      key = 'n:' + name
+      type = 'unlinked'
+    }
+    if (!counts[key]) {
+      counts[key] = {
+        key,
+        type,
+        name: ref?.name || e.name || 'Unknown',
+        count: 0,
+        totalCal: 0,
+        id: ref?.id,
+      }
+    }
+    counts[key].count += 1
+    counts[key].totalCal += (e.calories || 0)
+  }
+  return Object.values(counts)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, topN)
+}
+
+// Day-of-week pattern: avg calories per DOW
+function dayOfWeekPattern(log) {
+  const byDow = [0,1,2,3,4,5,6].map(i => ({ dow: i, cal: 0, count: 0 }))
+  const byDay = aggregateLogByDay(log)
+  for (const k of Object.keys(byDay)) {
+    const [y,m,d] = k.split('-').map(Number)
+    const dow = new Date(y, m - 1, d).getDay()
+    byDow[dow].cal += byDay[k].cal
+    byDow[dow].count += 1
+  }
+  return byDow.map(r => ({ ...r, avg: r.count ? r.cal / r.count : 0 }))
+}
+
+// Meal timing: average first-meal and last-meal hour of day
+function mealTimingStats(log) {
+  const firstByDay = {}, lastByDay = {}
+  for (const e of (log || [])) {
+    const ts = e.logged_at || e.timestamp
+    if (!ts) continue
+    const d = new Date(ts)
+    if (isNaN(d.getTime())) continue
+    const k = analyticsLocalDs(d)
+    const hours = d.getHours() + d.getMinutes() / 60
+    if (firstByDay[k] == null || hours < firstByDay[k]) firstByDay[k] = hours
+    if (lastByDay[k] == null || hours > lastByDay[k]) lastByDay[k] = hours
+  }
+  const firsts = Object.values(firstByDay)
+  const lasts = Object.values(lastByDay)
+  const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null
+  const fmtHour = h => {
+    if (h == null) return '—'
+    const hh = Math.floor(h)
+    const mm = Math.round((h - hh) * 60)
+    const period = hh >= 12 ? 'PM' : 'AM'
+    const display = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh
+    return `${display}:${String(mm).padStart(2,'0')} ${period}`
+  }
+  return {
+    firstMeal: fmtHour(avg(firsts)),
+    lastMeal: fmtHour(avg(lasts)),
+    eatingWindowHrs: firsts.length && lasts.length
+      ? +((avg(lasts) - avg(firsts)).toFixed(1))
+      : null,
+  }
+}
+
+// Sparkline SVG — compact inline line chart
+function sparkline(values, opts = {}) {
+  const { width = 100, height = 28, color = 'var(--accent)', fill = true } = opts
+  if (!values.length) return ''
+  const max = Math.max(...values, 1)
+  const min = Math.min(...values, 0)
+  const range = max - min || 1
+  const pts = values.map((v, i) => {
+    const x = (i / (values.length - 1 || 1)) * width
+    const y = height - ((v - min) / range) * height
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+  const fillPath = fill
+    ? `<polygon fill="${color}" fill-opacity="0.12" points="0,${height} ${pts} ${width},${height}" />`
+    : ''
+  return `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="none" style="display:block">
+    ${fillPath}
+    <polyline fill="none" stroke="${color}" stroke-width="1.5" points="${pts}" />
+  </svg>`
+}
+
+// Line chart with x/y axis labels — used for the full-page trends
+function lineChart(values, opts = {}) {
+  const {
+    width = 600, height = 180, color = 'var(--accent)',
+    targetLine = null, targetLabel = '', labels = [],
+    yFormat = (v) => Math.round(v)
+  } = opts
+  if (!values.length) return '<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">No data yet</div>'
+
+  const padL = 44, padR = 12, padT = 12, padB = 28
+  const plotW = width - padL - padR
+  const plotH = height - padT - padB
+
+  const allValues = targetLine != null ? [...values, targetLine] : values
+  const maxRaw = Math.max(...allValues, 1)
+  const minRaw = Math.min(...allValues.filter(v => v > 0), 0)
+  // Round max up to next nice number
+  const magnitude = Math.pow(10, Math.floor(Math.log10(maxRaw)))
+  const max = Math.ceil(maxRaw / magnitude) * magnitude
+  const min = 0
+  const range = max - min || 1
+
+  const xFor = i => padL + (i / (values.length - 1 || 1)) * plotW
+  const yFor = v => padT + plotH - ((v - min) / range) * plotH
+
+  const linePoints = values.map((v, i) => `${xFor(i).toFixed(1)},${yFor(v).toFixed(1)}`).join(' ')
+  const areaPoints = `${padL},${padT + plotH} ${linePoints} ${padL + plotW},${padT + plotH}`
+
+  // Grid lines
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => min + f * range)
+  const gridLines = yTicks.map(v => {
+    const y = yFor(v)
+    return `<line x1="${padL}" x2="${padL + plotW}" y1="${y}" y2="${y}" stroke="var(--border)" stroke-width="0.5" />
+      <text x="${padL - 6}" y="${y + 3}" font-size="9" fill="var(--text3)" text-anchor="end">${yFormat(v)}</text>`
+  }).join('')
+
+  // X labels: show ~5 of them evenly spread
+  const labelStride = Math.max(1, Math.floor(labels.length / 5))
+  const xLabels = labels.map((lbl, i) => {
+    if (i % labelStride !== 0 && i !== labels.length - 1) return ''
+    return `<text x="${xFor(i)}" y="${height - 8}" font-size="9" fill="var(--text3)" text-anchor="middle">${esc(lbl)}</text>`
+  }).join('')
+
+  const targetLineEl = targetLine != null ? `
+    <line x1="${padL}" x2="${padL + plotW}" y1="${yFor(targetLine)}" y2="${yFor(targetLine)}"
+      stroke="var(--text3)" stroke-width="1" stroke-dasharray="3,3" />
+    <text x="${padL + plotW - 4}" y="${yFor(targetLine) - 4}" font-size="9" fill="var(--text3)" text-anchor="end">${esc(targetLabel)}</text>
+  ` : ''
+
+  return `<svg viewBox="0 0 ${width} ${height}" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">
+    ${gridLines}
+    ${targetLineEl}
+    <polygon fill="${color}" fill-opacity="0.12" points="${areaPoints}" />
+    <polyline fill="none" stroke="${color}" stroke-width="1.75" points="${linePoints}" />
+    ${xLabels}
+  </svg>`
+}
+
+// Github-style contribution heatmap for goal adherence
+function adherenceHeatmap(daily, goals) {
+  const cellSize = 12, gap = 2
+  const calTarget = goals?.calories || 2000
+  const proteinTarget = goals?.protein || 150
+
+  const cells = daily.map(d => {
+    if (d.count === 0) return { d, status: 'empty', score: 0 }
+    const calOK = Math.abs(d.cal - calTarget) <= calTarget * 0.15
+    const proteinOK = d.p >= proteinTarget
+    const score = (calOK ? 1 : 0) + (proteinOK ? 1 : 0)
+    return { d, status: score === 2 ? 'good' : score === 1 ? 'ok' : 'off', score }
+  })
+
+  // Render as a grid — 7 rows per week, reading left-to-right
+  // Align first week to start on Sunday
+  const firstDate = new Date(daily[0].date + 'T00:00:00')
+  const startDow = firstDate.getDay()
+  const totalCells = startDow + daily.length
+  const weeks = Math.ceil(totalCells / 7)
+  const gridW = weeks * (cellSize + gap)
+  const gridH = 7 * (cellSize + gap)
+
+  let rects = ''
+  for (let i = 0; i < daily.length; i++) {
+    const cellIndex = startDow + i
+    const col = Math.floor(cellIndex / 7)
+    const row = cellIndex % 7
+    const x = col * (cellSize + gap)
+    const y = row * (cellSize + gap)
+    const c = cells[i]
+    const color = c.status === 'good' ? 'var(--protein)'
+                : c.status === 'ok' ? 'rgba(126,211,173,0.4)'
+                : c.status === 'off' ? 'rgba(224,110,110,0.35)'
+                : 'var(--bg3)'
+    rects += `<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" rx="2" fill="${color}">
+      <title>${c.d.date}: ${c.d.count ? `${Math.round(c.d.cal)} kcal · ${Math.round(c.d.p)}g P` : 'no log'}</title>
+    </rect>`
+  }
+
+  return `<div style="overflow-x:auto;padding:4px 0">
+    <svg viewBox="0 0 ${gridW} ${gridH}" width="${gridW}" height="${gridH}" style="display:block">${rects}</svg>
+  </div>`
+}
+
+// ─── Analytics page ──────────────────────────────────────────────────────────
+function renderAnalyticsPage(container) {
+  const log = state.log || []
+  const checkins = state.checkins || []
+  const recipes = state.recipes || []
+  const foodItems = state.foodItems || []
+  const goals = state.goals || {}
+  const range = state.analyticsRange || 30 // days
+
+  const daily = buildDailyWindow(log, range)
+  const summary = summarizeWindow(daily, goals)
+  const prevDaily = buildDailyWindow(log, range).map(() => null) // placeholder
+  // Compute the previous comparable period for delta
+  const prevWindow = (() => {
+    const byDay = aggregateLogByDay(log)
+    const today = new Date()
+    today.setHours(0,0,0,0)
+    const out = []
+    for (let i = range * 2 - 1; i >= range; i--) {
+      const d = new Date(today)
+      d.setDate(d.getDate() - i)
+      const k = analyticsLocalDs(d)
+      out.push(byDay[k] || { date: k, cal: 0, p: 0, c: 0, f: 0, fi: 0, count: 0 })
+    }
+    return out
+  })()
+  const prevSummary = summarizeWindow(prevWindow, goals)
+  const calDelta = prevSummary.avg.cal > 0
+    ? Math.round(((summary.avg.cal - prevSummary.avg.cal) / prevSummary.avg.cal) * 100)
+    : null
+
+  const topItems = topLoggedItems(log, recipes, foodItems, 5)
+  const dowPattern = dayOfWeekPattern(log.filter(e => {
+    const ts = e.logged_at || e.timestamp
+    if (!ts) return false
+    const d = new Date(ts)
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - range)
+    return d >= cutoff
+  }))
+  const timing = mealTimingStats(log.filter(e => {
+    const ts = e.logged_at || e.timestamp
+    if (!ts) return false
+    const d = new Date(ts)
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - range)
+    return d >= cutoff
+  }))
+
+  // Weight trend from checkins — sort ascending, filter to range
+  const cutoffDate = new Date(); cutoffDate.setDate(cutoffDate.getDate() - range)
+  const weightData = [...checkins]
+    .filter(c => c.weight_kg)
+    .map(c => ({ date: c.scan_date || c.checked_in_at, weight: c.weight_kg, bodyFat: c.body_fat_pct, lean: c.lean_body_mass_kg }))
+    .filter(c => c.date && new Date(c.date + 'T00:00:00') >= cutoffDate)
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  const isImperial = state.units === 'imperial'
+  const weightFor = kg => isImperial ? +(kg * 2.20462).toFixed(1) : +kg.toFixed(1)
+  const weightUnit = isImperial ? 'lbs' : 'kg'
+
+  const shortDate = (dateStr) => {
+    const d = new Date(dateStr + 'T00:00:00')
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  }
+
+  // Range picker pills
+  const rangeBtn = (days, label) => `<button onclick="setAnalyticsRange(${days})"
+    style="padding:6px 14px;border-radius:999px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;border:1px solid ${range === days ? 'var(--accent)' : 'var(--border2)'};background:${range === days ? 'rgba(234,203,87,0.15)' : 'var(--bg3)'};color:${range === days ? 'var(--accent)' : 'var(--text2)'};transition:all 0.15s">${esc(label)}</button>`
+
+  container.innerHTML = `
+    <div class="greeting">Analytics</div>
+    <div class="greeting-sub">Trends, patterns, and goal adherence across your logged data.</div>
+
+    <!-- Range picker -->
+    <div style="display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap">
+      ${rangeBtn(7, '7 days')}
+      ${rangeBtn(30, '30 days')}
+      ${rangeBtn(90, '90 days')}
+      ${rangeBtn(365, '1 year')}
+    </div>
+
+    <!-- Headline metric -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:6px">${range}-day average</div>
+      <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+        <div style="font-family:'DM Serif Display',serif;font-size:44px;color:var(--cal);line-height:1">${Math.round(summary.avg.cal)}</div>
+        <div style="font-size:14px;color:var(--text3)">kcal / day</div>
+        ${calDelta != null ? `
+          <div style="font-size:13px;color:${calDelta > 0 ? 'var(--fat)' : 'var(--protein)'};font-weight:500">
+            ${calDelta > 0 ? '↑' : '↓'} ${Math.abs(calDelta)}% vs prior ${range} days
+          </div>
+        ` : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:16px">
+        <div><div style="font-size:11px;color:var(--text3);margin-bottom:2px">PROTEIN</div><div style="font-size:18px;font-weight:600;color:var(--protein)">${Math.round(summary.avg.p)}g</div><div style="font-size:10px;color:var(--text3)">of ${goals.protein || 150}g goal</div></div>
+        <div><div style="font-size:11px;color:var(--text3);margin-bottom:2px">CARBS</div><div style="font-size:18px;font-weight:600;color:var(--carbs)">${Math.round(summary.avg.c)}g</div></div>
+        <div><div style="font-size:11px;color:var(--text3);margin-bottom:2px">FAT</div><div style="font-size:18px;font-weight:600;color:var(--fat)">${Math.round(summary.avg.f)}g</div></div>
+        <div><div style="font-size:11px;color:var(--text3);margin-bottom:2px">FIBER</div><div style="font-size:18px;font-weight:600;color:var(--text2)">${Math.round(summary.avg.fi)}g</div></div>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--text3)">
+        Logged ${summary.loggedDays} of ${summary.totalDays} days
+        · <span style="color:${summary.calAdherencePct >= 70 ? 'var(--protein)' : summary.calAdherencePct >= 40 ? 'var(--accent)' : 'var(--fat)'}">${summary.calAdherencePct}%</span> within calorie goal
+        · <span style="color:${summary.proteinAdherencePct >= 70 ? 'var(--protein)' : summary.proteinAdherencePct >= 40 ? 'var(--accent)' : 'var(--fat)'}">${summary.proteinAdherencePct}%</span> hit protein
+      </div>
+    </div>
+
+    <!-- Calorie trend -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:500;color:var(--text2)">Daily calories</div>
+        <div style="font-size:11px;color:var(--text3)">Goal: ${goals.calories || 2000} kcal</div>
+      </div>
+      ${lineChart(daily.map(d => d.cal), {
+        width: 600, height: 180, color: 'var(--cal)',
+        targetLine: goals.calories || 2000, targetLabel: `${goals.calories || 2000} goal`,
+        labels: daily.map(d => shortDate(d.date))
+      })}
+    </div>
+
+    <!-- Protein trend -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:500;color:var(--text2)">Daily protein</div>
+        <div style="font-size:11px;color:var(--text3)">Goal: ${goals.protein || 150}g</div>
+      </div>
+      ${lineChart(daily.map(d => d.p), {
+        width: 600, height: 160, color: 'var(--protein)',
+        targetLine: goals.protein || 150, targetLabel: `${goals.protein || 150}g goal`,
+        labels: daily.map(d => shortDate(d.date)),
+        yFormat: v => Math.round(v) + 'g'
+      })}
+    </div>
+
+    <!-- Weight trend (only if we have check-ins) -->
+    ${weightData.length >= 2 ? `
+      <div class="upload-card" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:13px;font-weight:500;color:var(--text2)">Weight</div>
+          <div style="font-size:11px;color:var(--text3)">
+            ${(() => {
+              const diff = weightData[weightData.length - 1].weight - weightData[0].weight
+              const diffDisp = isImperial ? diff * 2.20462 : diff
+              return `${diff > 0 ? '+' : ''}${diffDisp.toFixed(1)} ${weightUnit} over ${range} days`
+            })()}
+          </div>
+        </div>
+        ${lineChart(weightData.map(c => weightFor(c.weight)), {
+          width: 600, height: 160, color: 'var(--accent)',
+          labels: weightData.map(c => shortDate(c.date)),
+          yFormat: v => v + ' ' + weightUnit
+        })}
+      </div>
+    ` : ''}
+
+    <!-- Heatmap -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div style="font-size:13px;font-weight:500;color:var(--text2);margin-bottom:4px">Goal adherence heatmap</div>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:12px">Green = hit calorie + protein goals · Yellow = partial · Red = off · Gray = no log</div>
+      ${adherenceHeatmap(daily, goals)}
+    </div>
+
+    <!-- Secondary grid: two columns on desktop -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:16px">
+
+      <!-- Most-logged items -->
+      <div class="upload-card">
+        <div style="font-size:13px;font-weight:500;color:var(--text2);margin-bottom:12px">Most-logged items</div>
+        ${topItems.length ? topItems.map((it, i) => `
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 0;${i < topItems.length - 1 ? 'border-bottom:1px solid var(--border);' : ''}">
+            <div style="font-size:11px;color:var(--text3);width:16px;text-align:right">${i + 1}</div>
+            <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--text)">${esc(it.name)}</div>
+            <div style="font-size:11px;color:${it.type === 'recipe' ? 'var(--protein)' : it.type === 'food' ? 'var(--carbs)' : 'var(--text3)'};text-transform:uppercase;letter-spacing:0.5px">${it.type === 'recipe' ? '⭐' : it.type === 'food' ? '🥫' : ''}</div>
+            <div style="font-size:13px;font-weight:600;color:var(--text2)">${it.count}×</div>
+          </div>
+        `).join('') : '<div style="font-size:12px;color:var(--text3)">No entries yet.</div>'}
+      </div>
+
+      <!-- Day of week -->
+      <div class="upload-card">
+        <div style="font-size:13px;font-weight:500;color:var(--text2);margin-bottom:12px">Avg calories by day of week</div>
+        ${(() => {
+          const maxAvg = Math.max(...dowPattern.map(d => d.avg), 1)
+          return dowPattern.map(d => {
+            const pct = (d.avg / maxAvg) * 100
+            return `<div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+              <div style="font-size:11px;color:var(--text3);width:28px">${DAYS[d.dow]}</div>
+              <div style="flex:1;height:14px;background:var(--bg3);border-radius:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--cal);border-radius:3px"></div></div>
+              <div style="font-size:11px;color:var(--text2);width:48px;text-align:right">${d.count ? Math.round(d.avg) : '—'}</div>
+            </div>`
+          }).join('')
+        })()}
+      </div>
+
+      <!-- Meal timing -->
+      <div class="upload-card">
+        <div style="font-size:13px;font-weight:500;color:var(--text2);margin-bottom:12px">Meal timing</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:12px;color:var(--text3)">First meal (avg)</div>
+            <div style="font-size:15px;font-weight:600;color:var(--text)">${timing.firstMeal}</div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:12px;color:var(--text3)">Last meal (avg)</div>
+            <div style="font-size:15px;font-weight:600;color:var(--text)">${timing.lastMeal}</div>
+          </div>
+          ${timing.eatingWindowHrs != null ? `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--border)">
+              <div style="font-size:12px;color:var(--text3)">Eating window</div>
+              <div style="font-size:15px;font-weight:600;color:var(--accent)">${timing.eatingWindowHrs}h</div>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+
+      <!-- Body composition summary -->
+      ${weightData.length >= 1 ? `
+        <div class="upload-card">
+          <div style="font-size:13px;font-weight:500;color:var(--text2);margin-bottom:12px">Latest body scan</div>
+          ${(() => {
+            const latest = weightData[weightData.length - 1]
+            return `
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--text3)">Weight</span><span style="font-size:15px;font-weight:600;color:var(--accent)">${weightFor(latest.weight)} ${weightUnit}</span></div>
+                ${latest.bodyFat != null ? `<div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--text3)">Body fat</span><span style="font-size:15px;font-weight:600;color:var(--fat)">${latest.bodyFat}%</span></div>` : ''}
+                ${latest.lean ? `<div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--text3)">Lean mass</span><span style="font-size:15px;font-weight:600;color:var(--protein)">${weightFor(latest.lean)} ${weightUnit}</span></div>` : ''}
+                <div style="font-size:10px;color:var(--text3);margin-top:2px">${shortDate(latest.date)}</div>
+              </div>
+            `
+          })()}
+        </div>
+      ` : ''}
+
+    </div>
+  `
+}
+
+// Compact strip shown on the dashboard — a teaser that summarises the
+// last 7 days and links through to the full analytics page. Kept
+// intentionally small (3 stat tiles + one sparkline) so it doesn't
+// clutter the main dashboard.
+function renderDashboardAnalyticsWidget() {
+  const log = state.log || []
+  const goals = state.goals || {}
+  const checkins = state.checkins || []
+
+  const daily = buildDailyWindow(log, 7)
+  const summary = summarizeWindow(daily, goals)
+
+  // Don't render until there's something worth showing — avoids a
+  // misleading "0 kcal / 0 days logged" strip on brand-new accounts.
+  if (summary.loggedDays === 0 && checkins.length === 0) return ''
+
+  const calValues = daily.map(d => d.cal)
+  const proteinValues = daily.map(d => d.p)
+
+  // Weight delta across whatever checkins we have in the last 30 days
+  const isImperial = state.units === 'imperial'
+  const weightUnit = isImperial ? 'lbs' : 'kg'
+  const weightFor = kg => isImperial ? +(kg * 2.20462).toFixed(1) : +kg.toFixed(1)
+  const recentCheckins = [...checkins]
+    .filter(c => c.weight_kg)
+    .sort((a, b) => (a.scan_date || a.checked_in_at || '').localeCompare(b.scan_date || b.checked_in_at || ''))
+  const weightDelta = recentCheckins.length >= 2
+    ? (recentCheckins[recentCheckins.length - 1].weight_kg - recentCheckins[0].weight_kg)
+    : null
+  const weightDeltaDisp = weightDelta != null
+    ? `${weightDelta > 0 ? '+' : ''}${(isImperial ? weightDelta * 2.20462 : weightDelta).toFixed(1)} ${weightUnit}`
+    : null
+
+  const tile = (label, value, sub, sparkVals, color) => `
+    <button onclick="switchPage('analytics')" style="flex:1;min-width:150px;background:none;border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;text-align:left;cursor:pointer;font-family:inherit;transition:border-color 0.15s"
+      onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:4px">${label}</div>
+      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
+        <div style="font-size:20px;font-weight:600;color:${color};line-height:1">${value}</div>
+        ${sub ? `<div style="font-size:11px;color:var(--text3)">${sub}</div>` : ''}
+      </div>
+      ${sparkVals ? sparkline(sparkVals, { width: 140, height: 22, color }) : ''}
+    </button>
+  `
+
+  return `
+    <div class="upload-card" style="margin-bottom:16px;padding:14px 16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Last 7 days</div>
+        <button onclick="switchPage('analytics')"
+          style="background:none;border:none;color:var(--accent);font-size:12px;font-family:inherit;cursor:pointer;padding:0">
+          View analytics →
+        </button>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${tile('Avg calories', Math.round(summary.avg.cal), 'kcal/day', calValues, 'var(--cal)')}
+        ${tile('Avg protein', Math.round(summary.avg.p) + 'g', `${summary.proteinAdherencePct}% hit goal`, proteinValues, 'var(--protein)')}
+        ${weightDeltaDisp
+          ? tile('Weight change', weightDeltaDisp, `${recentCheckins.length} check-ins`, null, 'var(--accent)')
+          : tile('Days logged', summary.loggedDays + '/7', 'this week', null, 'var(--text)')}
+      </div>
+    </div>
+  `
+}
+
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
 function renderShell(container) {
   container.innerHTML = `
@@ -244,13 +826,13 @@ function renderShell(container) {
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
             Dashboard
           </div>
+          <div class="nav-item ${state.currentPage === 'analytics' ? 'active' : ''}" id="nav-analytics" onclick="switchPage('analytics')">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            Analytics
+          </div>
           <div class="nav-item ${state.currentPage === 'planner' ? 'active' : ''}" id="nav-planner" onclick="switchPage('planner')">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
             Meal Planner
-          </div>
-          <div class="nav-item ${state.currentPage === 'history' ? 'active' : ''}" id="nav-history" onclick="switchPage('history')">
-            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            History
           </div>
           <div class="nav-item ${state.currentPage === 'goals' ? 'active' : ''}" id="nav-goals" onclick="switchPage('goals')">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
@@ -677,7 +1259,7 @@ function renderPage() {
   // Toggle wide layout for pages that benefit from horizontal space (planner
   // week grid, recipe/food card grids). Dashboard/goals/account stay at the
   // focused ~1040px reading width.
-  const widePages = new Set(['planner', 'recipes', 'foods', 'history'])
+  const widePages = new Set(['planner', 'recipes', 'foods', 'history', 'analytics'])
   if (main) {
     if (widePages.has(state.currentPage)) main.classList.add('main-wide')
     else main.classList.remove('main-wide')
@@ -690,6 +1272,7 @@ function renderPage() {
   }
   switch (state.currentPage) {
     case 'log':      renderDashboard(main); break
+    case 'analytics': renderAnalyticsPage(main); break
     case 'planner':  renderPlanner(main); break
     case 'history':  renderHistory(main); break
     case 'goals':    renderGoalsPage(main); break
@@ -751,6 +1334,8 @@ function renderDashboard(container) {
       <div class="stat-card"><div class="stat-label">Carbs</div><div class="stat-val" style="color:var(--carbs)" id="stat-c">0g</div><div class="stat-sub">of <span id="stat-c-goal">${state.goals.carbs}</span>g</div></div>
       <div class="stat-card"><div class="stat-label">Fat</div><div class="stat-val" style="color:var(--fat)" id="stat-f">0g</div><div class="stat-sub">of <span id="stat-f-goal">${state.goals.fat}</span>g</div></div>
     </div>
+
+    ${renderDashboardAnalyticsWidget()}
 
     <!-- Quick log — above analyze -->
     <div class="log-card" style="margin-bottom:16px">
@@ -3718,6 +4303,33 @@ function renderAccount(container) {
     <div class="greeting">Account</div>
     <div class="greeting-sub">${state.user.email}</div>
 
+    <!-- Data & history -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title">Your data</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button onclick="switchPage('history')"
+          style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text);font-family:inherit;font-size:14px;cursor:pointer;text-align:left;transition:border-color 0.15s"
+          onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+          <span style="font-size:18px">📜</span>
+          <div style="flex:1">
+            <div style="font-weight:500">View all meal history</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:2px">Every meal you've logged, searchable and editable</div>
+          </div>
+          <span style="color:var(--text3)">›</span>
+        </button>
+        <button onclick="switchPage('analytics')"
+          style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text);font-family:inherit;font-size:14px;cursor:pointer;text-align:left;transition:border-color 0.15s"
+          onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+          <span style="font-size:18px">📊</span>
+          <div style="flex:1">
+            <div style="font-weight:500">Analytics</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:2px">Trends, goal adherence, patterns</div>
+          </div>
+          <span style="color:var(--text3)">›</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Usage card -->
 
     <div class="upload-card" style="margin-bottom:16px">
@@ -5344,6 +5956,12 @@ function wireGlobals() {
   // reflects the new selection and the grid updates at the same time.
   window.setRecipeTag = (tag) => {
     state.recipeActiveTag = tag === state.recipeActiveTag ? '' : tag
+    renderPage()
+  }
+
+  // Switch the analytics lookback window (7 / 30 / 90 / 365 days)
+  window.setAnalyticsRange = (days) => {
+    state.analyticsRange = days
     renderPage()
   }
 
