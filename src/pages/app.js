@@ -1475,13 +1475,11 @@ function renderDashboard(container) {
 
           <!-- Barcode scanner -->
           <div id="food-panel-barcode" style="${state.foodMode !== 'barcode' ? 'display:none' : ''}">
-            <!-- Two file inputs: one captures from camera, one opens photo library.
+            <!-- Two file inputs: one for camera capture, one for photo library.
                  iOS treats capture="environment" as "camera only" and blocks the
-                 photo library, so we keep them separate and label clearly. -->
-            <input type="file" id="barcode-file-input-camera" accept="image/*" capture="environment" style="display:none"
-              onchange="handleBarcodeImage(this.files[0])" />
-            <input type="file" id="barcode-file-input-library" accept="image/*" style="display:none"
-              onchange="handleBarcodeImage(this.files[0])" />
+                 photo library, so we keep them separate and labelled clearly. -->
+            <input type="file" id="barcode-file-input-camera" accept="image/*" capture="environment" style="display:none" />
+            <input type="file" id="barcode-file-input-library" accept="image/*" style="display:none" />
             <div id="barcode-scanner-inner" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;padding:20px">
               <div style="text-align:center">
                 <div style="font-size:28px;margin-bottom:6px">📷</div>
@@ -1490,11 +1488,11 @@ function renderDashboard(container) {
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-              <button onclick="document.getElementById('barcode-file-input-camera').click()"
+              <button type="button" id="barcode-btn-camera"
                 style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
                 📷 Camera
               </button>
-              <button onclick="document.getElementById('barcode-file-input-library').click()"
+              <button type="button" id="barcode-btn-library"
                 style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
                 🖼️ Choose photo
               </button>
@@ -1516,11 +1514,11 @@ function renderDashboard(container) {
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-              <button onclick="document.getElementById('label-file-input-camera').click()"
+              <button type="button" id="label-btn-camera"
                 style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
                 📷 Camera
               </button>
-              <button onclick="document.getElementById('label-file-input-library').click()"
+              <button type="button" id="label-btn-library"
                 style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
                 🖼️ Choose photo
               </button>
@@ -5276,26 +5274,70 @@ function wireGlobals() {
   }
 
   window.wireBarcodeInput = function() {
-    const input = document.getElementById('barcode-manual-input')
-    if (!input || input._wired) return
-    input._wired = true
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Enter') lookupBarcode(input.value)
-    })
+    const container = document.getElementById('food-panel-barcode')
+    if (!container || container._wired) return
+    container._wired = true
+
+    // Two separate file inputs: camera (with capture) and library (without)
+    const fiCam = document.getElementById('barcode-file-input-camera')
+    const fiLib = document.getElementById('barcode-file-input-library')
+    const btnCam = document.getElementById('barcode-btn-camera')
+    const btnLib = document.getElementById('barcode-btn-library')
+    const manual = document.getElementById('barcode-manual-input')
+
+    // Wire buttons → click the appropriate file input. Using a real handler
+    // (not inline onclick) is more reliable on iOS, and lets us reset the
+    // input's value so picking the same photo twice still fires change.
+    if (btnCam && fiCam) btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
+    if (btnLib && fiLib) btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
+
+    // Wire change events — iOS is more reliable with addEventListener than
+    // inline onchange attributes for programmatically-triggered file inputs.
+    const onChange = (e) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      // Show immediate visual feedback so the user knows the tap registered
+      const status = document.getElementById('barcode-status')
+      if (status) status.textContent = 'Got photo — reading barcode...'
+      window.handleBarcodeImage(file)
+    }
+    if (fiCam) fiCam.addEventListener('change', onChange)
+    if (fiLib) fiLib.addEventListener('change', onChange)
+
+    // Manual input — Enter submits. Inline attr is a belt-and-suspenders backup.
+    if (manual && !manual._wired) {
+      manual._wired = true
+      manual.addEventListener('keydown', e => {
+        if (e.key === 'Enter') lookupBarcode(manual.value)
+      })
+    }
   }
 
   // ── Nutrition label photo ───────────────────────────────────────
   window.wireLabelFileInput = function() {
+    const container = document.getElementById('food-panel-label')
+    if (!container || container._wired) return
+    container._wired = true
+
     const fiCam = document.getElementById('label-file-input-camera')
     const fiLib = document.getElementById('label-file-input-library')
+    const btnCam = document.getElementById('label-btn-camera')
+    const btnLib = document.getElementById('label-btn-library')
     const ua = document.getElementById('label-upload-area')
-    if (!ua || ua._wired) return
-    ua._wired = true
-    if (fiCam) fiCam.addEventListener('change', e => { const f = e.target.files[0]; if (f) handleLabelFile(f) })
-    if (fiLib) fiLib.addEventListener('change', e => { const f = e.target.files[0]; if (f) handleLabelFile(f) })
-    ua.addEventListener('dragover', e => { e.preventDefault(); ua.style.borderColor = 'var(--accent)' })
-    ua.addEventListener('dragleave', () => { ua.style.borderColor = '' })
-    ua.addEventListener('drop', e => { e.preventDefault(); ua.style.borderColor = ''; const f = e.dataTransfer.files[0]; if (f) handleLabelFile(f) })
+
+    if (btnCam && fiCam) btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
+    if (btnLib && fiLib) btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
+
+    const onChange = (e) => { const f = e.target.files?.[0]; if (f) handleLabelFile(f) }
+    if (fiCam) fiCam.addEventListener('change', onChange)
+    if (fiLib) fiLib.addEventListener('change', onChange)
+
+    // Drag-and-drop (desktop testing)
+    if (ua) {
+      ua.addEventListener('dragover', e => { e.preventDefault(); ua.style.borderColor = 'var(--accent)' })
+      ua.addEventListener('dragleave', () => { ua.style.borderColor = '' })
+      ua.addEventListener('drop', e => { e.preventDefault(); ua.style.borderColor = ''; const f = e.dataTransfer.files[0]; if (f) handleLabelFile(f) })
+    }
   }
 
   function handleLabelFile(file) {
