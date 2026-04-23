@@ -1434,8 +1434,26 @@ function renderDashboard(container) {
 
           <!-- Write it — handles description, ingredient lists, AND URLs -->
           <div id="recipe-panel-write" style="${state.recipeMode === 'write' ? '' : 'display:none'}">
-            <textarea class="recipe-textarea" id="recipe-input" rows="6" placeholder="Describe the recipe, paste ingredients, or drop a URL.&#10;&#10;All of these work:&#10;&#10;• Grilled chicken bowl with rice and broccoli&#10;&#10;• 2 cups chicken breast&#10;  1 cup brown rice&#10;  1 tbsp olive oil&#10;&#10;• https://cookingclassy.com/chicken-piccata"></textarea>
-            <div class="link-note" style="font-size:11px;color:var(--text3);margin-top:6px">URLs get extracted and searched. Instagram/TikTok fall back to dish-name search.</div>
+            <textarea class="recipe-textarea" id="recipe-input" rows="6"
+              oninput="checkRecipeWriteHint(this.value)"
+              placeholder="Describe the recipe, paste ingredients, or drop a URL.&#10;&#10;All of these work:&#10;&#10;• Grilled chicken bowl with rice and broccoli&#10;&#10;• 2 cups chicken breast&#10;  1 cup brown rice&#10;  1 tbsp olive oil&#10;&#10;• https://cookingclassy.com/chicken-piccata"></textarea>
+
+            <!-- Static fallback note (default) -->
+            <div id="recipe-write-note" class="link-note" style="font-size:11px;color:var(--text3);margin-top:6px">
+              URLs get extracted and searched. Instagram/TikTok fall back to dish-name search.
+            </div>
+
+            <!-- Active hint for private-platform URLs. Hidden by default;
+                 checkRecipeWriteHint() flips display based on textarea content. -->
+            <div id="recipe-write-private-hint" style="display:none;margin-top:8px;padding:10px 12px;border-radius:var(--r);background:rgba(234,203,87,0.08);border:1px solid rgba(234,203,87,0.25);font-size:12px;color:var(--text2);line-height:1.45">
+              <div style="font-weight:600;color:var(--accent);margin-bottom:4px">📱 <span id="recipe-write-private-platform">Instagram</span> links are private</div>
+              <div>We can't read reel content directly. Try one of these:</div>
+              <ul style="margin:6px 0 0 0;padding-left:18px">
+                <li>Add the dish name below the link (e.g. <em>"viral baked feta pasta"</em>) — AI will search for the recipe</li>
+                <li>Copy the caption text and paste it here</li>
+                <li>Screenshot the ingredient list and use <strong>Photo</strong> instead</li>
+              </ul>
+            </div>
           </div>
 
           <!-- Snap recipe — photo of a cookbook page, recipe card, or screenshot -->
@@ -5165,6 +5183,34 @@ function wireGlobals() {
     })
     if (mode === 'snap') wireRecipeSnapInput()
     window.updateAnalyzeBtn()
+  }
+
+  // Shows an actionable hint when the user pastes an Instagram or TikTok URL
+  // into the Write-it textarea. These platforms block automated fetching,
+  // so the "just paste a URL" flow silently falls back to dish-name search —
+  // which fails if the user didn't also describe the dish. Better to tell
+  // them up front what they need to do.
+  //
+  // Regex matches instagram.com, www.instagram.com, tiktok.com, www.tiktok.com,
+  // and the short vm.tiktok.com / t.instagram share domains. Case-insensitive.
+  window.checkRecipeWriteHint = (value) => {
+    const hint = document.getElementById('recipe-write-private-hint')
+    const defaultNote = document.getElementById('recipe-write-note')
+    const platformSpan = document.getElementById('recipe-write-private-platform')
+    if (!hint || !defaultNote) return
+
+    const text = (value || '').toLowerCase()
+    const isInstagram = /https?:\/\/(www\.|m\.)?(instagram\.com|instagr\.am)\//.test(text)
+    const isTikTok = /https?:\/\/(www\.|vm\.|vt\.)?tiktok\.com\//.test(text)
+
+    if (isInstagram || isTikTok) {
+      if (platformSpan) platformSpan.textContent = isInstagram ? 'Instagram' : 'TikTok'
+      hint.style.display = ''
+      defaultNote.style.display = 'none'
+    } else {
+      hint.style.display = 'none'
+      defaultNote.style.display = ''
+    }
   }
 
   window.setFoodMode = (mode) => {
