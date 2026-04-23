@@ -1428,11 +1428,11 @@ function renderDashboard(container) {
           <div id="recipe-panel-snap" style="${state.recipeMode === 'snap' ? '' : 'display:none'}">
             <input type="file" id="recipe-snap-camera" accept="image/*" capture="environment" style="display:none" />
             <input type="file" id="recipe-snap-library" accept="image/*" style="display:none" />
-            <div id="recipe-snap-preview" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:140px;display:flex;align-items:center;justify-content:center;padding:20px">
+            <div id="recipe-snap-preview" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:160px;display:flex;align-items:center;justify-content:center;padding:24px 20px">
               <div style="text-align:center">
-                <div style="font-size:28px;margin-bottom:6px">📸</div>
-                <div style="font-size:13px;color:var(--text2)">Snap a recipe page</div>
-                <div style="font-size:11px;color:var(--text3);margin-top:3px">Cookbook, card, blog screenshot — AI reads it</div>
+                <div style="font-size:36px;margin-bottom:10px">📸</div>
+                <div style="font-size:16px;color:var(--text);font-weight:500;margin-bottom:6px">Snap a recipe</div>
+                <div style="font-size:13px;color:var(--text2);line-height:1.4;max-width:280px;margin:0 auto">Cookbook page, recipe card, or blog screenshot — AI reads and analyzes it</div>
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
@@ -1480,11 +1480,11 @@ function renderDashboard(container) {
           <div id="food-panel-photo" style="${state.foodMode === 'photo' ? '' : 'display:none'}">
             <input type="file" id="foodphoto-camera" accept="image/*" capture="environment" style="display:none" />
             <input type="file" id="foodphoto-library" accept="image/*" style="display:none" />
-            <div id="foodphoto-preview" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:140px;display:flex;align-items:center;justify-content:center;padding:20px">
+            <div id="foodphoto-preview" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:160px;display:flex;align-items:center;justify-content:center;padding:24px 20px">
               <div style="text-align:center">
-                <div style="font-size:28px;margin-bottom:6px">📸</div>
-                <div style="font-size:13px;color:var(--text2)">Take or upload a photo</div>
-                <div style="font-size:11px;color:var(--text3);margin-top:3px">Barcode, nutrition label, or meal — we'll figure it out</div>
+                <div style="font-size:36px;margin-bottom:10px">📸</div>
+                <div style="font-size:16px;color:var(--text);font-weight:500;margin-bottom:6px">Take or upload a photo</div>
+                <div style="font-size:13px;color:var(--text2);line-height:1.4;max-width:280px;margin:0 auto">Barcode, nutrition label, or a meal — we'll figure out what it is</div>
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
