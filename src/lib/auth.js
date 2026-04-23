@@ -37,8 +37,27 @@ export async function getUser() {
 }
 
 export function onAuthStateChange(callback) {
-  return supabase.auth.onAuthStateChange((_event, session) => {
-    callback(session?.user ?? null)
+  // Supabase fires this callback on every auth-related event, including
+  // TOKEN_REFRESHED and INITIAL_SESSION. On iOS, opening a file picker
+  // briefly backgrounds the page, which triggers a TOKEN_REFRESHED when
+  // the page comes back — re-initializing the whole app and wiping any
+  // in-progress DOM state (like a photo preview the user just selected).
+  //
+  // We only want to react to genuine sign-in / sign-out transitions.
+  let lastUserId = null
+  return supabase.auth.onAuthStateChange((event, session) => {
+    const userId = session?.user?.id ?? null
+    // INITIAL_SESSION fires on first load — always let it through.
+    // SIGNED_IN / SIGNED_OUT fire on real auth changes.
+    // TOKEN_REFRESHED, USER_UPDATED, PASSWORD_RECOVERY: skip if the user
+    // identity hasn't changed (same user, just fresh token).
+    const isIdentityChange = userId !== lastUserId
+    const isInitial = event === 'INITIAL_SESSION'
+    const isExplicit = event === 'SIGNED_IN' || event === 'SIGNED_OUT'
+    if (isInitial || isExplicit || isIdentityChange) {
+      lastUserId = userId
+      callback(session?.user ?? null)
+    }
   })
 }
 
