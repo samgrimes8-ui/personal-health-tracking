@@ -10,3 +10,8 @@ create index if not exists recipes_tags_idx
 
 comment on column public.recipes.tags is
   'Array of tag names (e.g. Winter, Crockpot, Meal Prep). Used for grouping recipes into browsable categories.';
+
+-- IMPORTANT: tell PostgREST to reload its schema cache. Supabase's API
+-- caches the schema, and new columns added via `alter table` sometimes
+-- don't appear in the API until this is run. Safe to re-run anytime.
+notify pgrst, 'reload schema';

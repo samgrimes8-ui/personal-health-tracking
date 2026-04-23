@@ -10106,6 +10106,12 @@ function wireGlobals() {
     if (!state.editingRecipe) return
     const btn = document.getElementById('recipe-save-btn')
     if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
+    // Tags from the chip editor (window._editingTags is a Set of lowercase
+    // keys; we map back to display casing before saving). Computed once so
+    // we can both log it and include it in the payload.
+    const tagsFromEditor = window._editingTags
+      ? Array.from(window._editingTags).map(k => window._editingTagsDisplay?.[k] || k)
+      : (Array.isArray(state.editingRecipe.tags) ? state.editingRecipe.tags : [])
     const recipe = {
       ...state.editingRecipe,
       name: document.getElementById('recipe-name')?.value.trim() || state.editingRecipe.name,
@@ -10119,12 +10125,9 @@ function wireGlobals() {
       fat: parseFloat(document.getElementById('r-fat')?.value) || 0,
       fiber: parseFloat(document.getElementById('r-fiber')?.value) || 0,
       sugar: parseFloat(document.getElementById('r-sugar')?.value) || 0,
-      // Tags from the chip editor (window._editingTags is a Set of
-      // lowercase keys; we map back to display casing before saving)
-      tags: window._editingTags
-        ? Array.from(window._editingTags).map(k => window._editingTagsDisplay?.[k] || k)
-        : (Array.isArray(state.editingRecipe.tags) ? state.editingRecipe.tags : []),
+      tags: tagsFromEditor,
     }
+    console.log('[saveRecipeHandler] Saving recipe', recipe.name, 'with tags:', tagsFromEditor)
     if (!recipe.name) { showToast('Recipe needs a name', 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Save recipe' }; return }
     try {
       const saved = await upsertRecipe(state.user.id, recipe)

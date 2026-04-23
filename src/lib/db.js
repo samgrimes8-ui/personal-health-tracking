@@ -430,14 +430,25 @@ export async function upsertRecipe(userId, recipe) {
   try {
     return await tryUpsert(payload)
   } catch (err) {
-    // Schema cache lag — strip only the specific column causing the error and retry
-    if (err.message?.includes("'recipes'")) {
+    // Schema cache lag — strip only specific columns we know are optional.
+    // Important: do NOT strip `tags`. Previously we did, which meant any
+    // Supabase schema-cache blip caused tags to silently vanish from saves
+    // while the user saw "Recipe saved!". If the tags column is genuinely
+    // missing (user skipped the migration), we'd rather fail loudly so they
+    // know to run it, rather than pretend tags worked.
+    const msg = err?.message || ''
+    if (msg.includes("'recipes'") || msg.includes('column')) {
       const stripped = { ...payload }
-      if (err.message?.includes('source_url')) delete stripped.source_url
-      if (err.message?.includes('notes') && !err.message?.includes('ai_notes')) delete stripped.notes
-      if (err.message?.includes('tags')) delete stripped.tags
-      // Never strip instructions — it's the most important field to persist
-      return await tryUpsert(stripped)
+      let strippedAnything = false
+      if (msg.includes('source_url')) { delete stripped.source_url; strippedAnything = true }
+      if (msg.includes('notes') && !msg.includes('ai_notes')) { delete stripped.notes; strippedAnything = true }
+      // Tags specifically: log a loud console warning so if this path ever
+      // gets hit we can see it. Re-throw rather than silently drop.
+      if (msg.includes('tags')) {
+        console.error('[upsertRecipe] DB rejected "tags" column. Did you run add_recipe_tags.sql? Error:', err)
+        throw new Error('Tags column not found. Run the add_recipe_tags.sql migration in Supabase, or try: NOTIFY pgrst, \'reload schema\';')
+      }
+      if (strippedAnything) return await tryUpsert(stripped)
     }
     throw err
   }
