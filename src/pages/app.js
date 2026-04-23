@@ -5206,10 +5206,7 @@ function wireGlobals() {
   // 3. Manual entry — never burn tokens on barcode reading
 
   async function decodeBarcodeFromFile(file) {
-    const maxSize = 1600  // bumped from 1200 — more detail helps small/crinkled codes
-    // Two-path approach to decode the image to a canvas (HEIC support):
-    // Path A: createImageBitmap (fast but no HEIC on Safari)
-    // Path B: <img> element via object URL (slower, but native HEIC decode)
+    const maxSize = 1600
     const drawToCanvas = async () => {
       try {
         const bitmap = await createImageBitmap(file)
@@ -5222,7 +5219,6 @@ function wireGlobals() {
         return canvas
       } catch (e1) {
         console.warn('[barcode] createImageBitmap failed, trying img element:', e1?.message || e1)
-        // HEIC fallback via <img>
         const objUrl = URL.createObjectURL(file)
         try {
           const img = await new Promise((resolve, reject) => {
@@ -5246,43 +5242,106 @@ function wireGlobals() {
       }
     }
 
-    const canvas = await drawToCanvas()
-
-    // 1. Try native BarcodeDetector (free, instant — iOS 17+, Chrome Android)
-    if ('BarcodeDetector' in window) {
-      try {
-        const detector = new window.BarcodeDetector({
-          formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code']
-        })
-        const results = await detector.detect(canvas)
-        if (results.length > 0) return results[0].rawValue
-      } catch (e) {
-        console.warn('Native BarcodeDetector failed:', e?.message || e)
-      }
+    // Center-crop a canvas to a fraction of its size (0.6 = keep middle 60%)
+    const centerCrop = (source, fraction) => {
+      const cropW = Math.round(source.width * fraction)
+      const cropH = Math.round(source.height * fraction)
+      const sx = Math.round((source.width - cropW) / 2)
+      const sy = Math.round((source.height - cropH) / 2)
+      // Scale up the cropped region so it's the same total size as the
+      // original — gives ZXing / BarcodeDetector more pixels per bar.
+      const outW = source.width
+      const outH = source.height
+      const canvas = document.createElement('canvas')
+      canvas.width = outW
+      canvas.height = outH
+      canvas.getContext('2d').drawImage(source, sx, sy, cropW, cropH, 0, 0, outW, outH)
+      return canvas
     }
 
-    // 2. Try ZXing WASM (free JS library).
-    //    The @zxing/browser API is decodeFromCanvas / decodeFromImageUrl /
-    //    decodeFromImageElement — NOT readBarcodesFromImageUrl (which is
-    //    from a different library). The reader throws NotFoundException
-    //    rather than returning null when it can't find a code, so we
-    //    catch and fall through.
-    try {
-      await loadZXing()
-      if (window._ZXing) {
+    // Try all four orientations (0°, 90°, 180°, 270°) — some barcodes end
+    // up sideways when taking photos freehand.
+    const rotate = (source, degrees) => {
+      const rad = degrees * Math.PI / 180
+      const sin = Math.abs(Math.sin(rad))
+      const cos = Math.abs(Math.cos(rad))
+      const w = Math.round(source.width * cos + source.height * sin)
+      const h = Math.round(source.width * sin + source.height * cos)
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      ctx.translate(w / 2, h / 2)
+      ctx.rotate(rad)
+      ctx.drawImage(source, -source.width / 2, -source.height / 2)
+      return canvas
+    }
+
+    // Attempt a decode with both detectors on a given canvas.
+    const tryDecode = async (canvas, label) => {
+      // 1. Native BarcodeDetector (free, fast — iOS 17+, Chrome Android)
+      if ('BarcodeDetector' in window) {
         try {
-          const result = await window._ZXing.decodeFromCanvas(canvas)
-          const text = result?.getText?.() || result?.text
-          if (text) return text
-        } catch (e) {
-          if (e?.name !== 'NotFoundException' && !/not.*found/i.test(e?.message || '')) {
-            console.warn('ZXing decode error:', e?.message || e)
+          const detector = new window.BarcodeDetector({
+            formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code']
+          })
+          const results = await detector.detect(canvas)
+          if (results.length > 0) {
+            console.log(`[barcode] BarcodeDetector hit on ${label}:`, results[0].rawValue)
+            return results[0].rawValue
           }
+        } catch (e) {
+          console.warn(`[barcode] BarcodeDetector error on ${label}:`, e?.message || e)
         }
       }
-    } catch (e) {
-      console.warn('ZXing failed to load:', e?.message || e)
+      // 2. ZXing
+      try {
+        if (window._ZXing) {
+          const result = await window._ZXing.decodeFromCanvas(canvas)
+          const text = result?.getText?.() || result?.text
+          if (text) {
+            console.log(`[barcode] ZXing hit on ${label}:`, text)
+            return text
+          }
+        }
+      } catch (e) {
+        if (e?.name !== 'NotFoundException' && !/not.*found/i.test(e?.message || '')) {
+          console.warn(`[barcode] ZXing error on ${label}:`, e?.message || e)
+        }
+      }
+      return null
     }
+
+    // Load ZXing once upfront so it's ready for each pass
+    try { await loadZXing() } catch (e) { console.warn('[barcode] ZXing load failed:', e?.message || e) }
+
+    const canvas = await drawToCanvas()
+
+    // Pass 1: full image, no rotation
+    let result = await tryDecode(canvas, 'full')
+    if (result) return result
+
+    // Pass 2: 90° rotation (common when phone is held in portrait but the
+    // barcode on the product is in landscape orientation)
+    result = await tryDecode(rotate(canvas, 90), 'full-90°')
+    if (result) return result
+
+    // Pass 3: center-crop to 60% and scale back up (zoom on the center of
+    // the frame — where users typically aim the barcode)
+    const zoomed60 = centerCrop(canvas, 0.6)
+    result = await tryDecode(zoomed60, 'center-60%')
+    if (result) return result
+
+    result = await tryDecode(rotate(zoomed60, 90), 'center-60%-90°')
+    if (result) return result
+
+    // Pass 4: even tighter crop (40%) — for tiny distant barcodes
+    const zoomed40 = centerCrop(canvas, 0.4)
+    result = await tryDecode(zoomed40, 'center-40%')
+    if (result) return result
+
+    result = await tryDecode(rotate(zoomed40, 90), 'center-40%-90°')
+    if (result) return result
 
     return null
   }
@@ -5323,7 +5382,7 @@ function wireGlobals() {
       return
     }
     if (inner) inner.innerHTML = `<img src="${scaled.dataUrl}" style="max-height:140px;border-radius:var(--r);object-fit:contain" />`
-    if (status) status.textContent = `Scanning ${scaled.width || '?'}×${scaled.height || '?'} photo...`
+    if (status) status.textContent = 'Scanning (trying full image, rotations, zoom)...'
 
     // Local decode (no AI cost)
     let code = null

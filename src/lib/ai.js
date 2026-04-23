@@ -525,17 +525,36 @@ Respond ONLY with a JSON object, no markdown:
 }
 
 export async function readBarcodeFromImage(imageBase64) {
-  // Last resort — use Claude to visually read the barcode number
+  // Last resort — use Claude to visually read the barcode number from the
+  // photo. Anthropic returns a structured response with content blocks,
+  // not a plain string, so we need to extract the text properly.
   const data = await callProxy('food', [{
     role: 'user',
     content: [
       { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
-      { type: 'text', text: `Read the barcode number in this image. Return ONLY the numeric barcode digits, nothing else. If you cannot read it clearly, return the word "null".` }
+      { type: 'text', text: `Look at the barcode in this image (the vertical black lines with numbers beneath).
+
+Read the printed number under the bars — this is a UPC/EAN product code, typically 12-13 digits. Small leading/trailing digits may be offset from the main group (e.g. "1 97870 05291 5" is all part of the code).
+
+Respond with ONLY the digits, no spaces, no other text. If you genuinely cannot read any digits at all, respond with "UNREADABLE".
+
+Examples of good responses:
+197870052915
+0123456789012
+UNREADABLE` }
     ]
   }], { max_tokens: 50 })
-  const text = typeof data === 'string' ? data.trim() : ''
-  const match = text.match(/\d{6,14}/)
-  return match ? match[0] : null
+
+  // Anthropic responses come back as { content: [{type: 'text', text: '...'}] }
+  const raw = (data?.content || [])
+    .map(b => b.text || '')
+    .join('')
+    .trim()
+  if (!raw || /unreadable/i.test(raw)) return null
+  // Strip anything that isn't a digit, then validate length
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length >= 6 && digits.length <= 14) return digits
+  return null
 }
 
 export async function extractRecipeFromPhoto(imageBase64) {
