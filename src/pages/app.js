@@ -5003,6 +5003,26 @@ function handleFile(file) {
 
 // ─── Wire Global Handlers ─────────────────────────────────────────────────────
 function wireGlobals() {
+  // Global error surface — if an uncaught error happens while the user is
+  // in the barcode flow, show it on the barcode status line so we don't
+  // have to guess from a blank screen.
+  if (!window._globalErrHandlerWired) {
+    window._globalErrHandlerWired = true
+    window.addEventListener('error', (e) => {
+      console.error('[uncaught]', e.error || e.message)
+      const status = document.getElementById('barcode-status')
+      if (status && state.foodMode === 'barcode') {
+        status.textContent = 'Error: ' + (e.message || 'unknown')
+      }
+    })
+    window.addEventListener('unhandledrejection', (e) => {
+      console.error('[unhandled promise]', e.reason)
+      const status = document.getElementById('barcode-status')
+      if (status && state.foodMode === 'barcode') {
+        status.textContent = 'Promise rejected: ' + (e.reason?.message || e.reason || 'unknown')
+      }
+    })
+  }
   window.switchPage = (name) => {
     state.currentPage = name
     sessionStorage.setItem('macrolens_page', name)
@@ -5278,6 +5298,12 @@ function wireGlobals() {
     if (!container || container._wired) return
     container._wired = true
 
+    const log = (msg) => {
+      const status = document.getElementById('barcode-status')
+      if (status) status.textContent = msg
+      console.log('[barcode]', msg)
+    }
+
     // Two separate file inputs: camera (with capture) and library (without)
     const fiCam = document.getElementById('barcode-file-input-camera')
     const fiLib = document.getElementById('barcode-file-input-library')
@@ -5285,26 +5311,41 @@ function wireGlobals() {
     const btnLib = document.getElementById('barcode-btn-library')
     const manual = document.getElementById('barcode-manual-input')
 
-    // Wire buttons → click the appropriate file input. Using a real handler
-    // (not inline onclick) is more reliable on iOS, and lets us reset the
-    // input's value so picking the same photo twice still fires change.
-    if (btnCam && fiCam) btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
-    if (btnLib && fiLib) btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
+    // Show on-screen confirmation that wiring ran (will be overwritten by
+    // actual status once the user taps something — harmless otherwise)
+    log(fiCam && fiLib && btnCam && btnLib ? 'Ready — tap Camera or Choose photo' : `Wiring issue (cam:${!!fiCam} lib:${!!fiLib} bCam:${!!btnCam} bLib:${!!btnLib})`)
 
-    // Wire change events — iOS is more reliable with addEventListener than
-    // inline onchange attributes for programmatically-triggered file inputs.
+    if (btnCam && fiCam) {
+      btnCam.addEventListener('click', () => {
+        log('Opening camera...')
+        fiCam.value = ''
+        fiCam.click()
+      })
+    }
+    if (btnLib && fiLib) {
+      btnLib.addEventListener('click', () => {
+        log('Opening photo library...')
+        fiLib.value = ''
+        fiLib.click()
+      })
+    }
+
+    // Change handler — logs to status line so even without a dev console we
+    // can see whether this fires.
     const onChange = (e) => {
-      const file = e.target.files?.[0]
-      if (!file) return
-      // Show immediate visual feedback so the user knows the tap registered
-      const status = document.getElementById('barcode-status')
-      if (status) status.textContent = 'Got photo — reading barcode...'
-      window.handleBarcodeImage(file)
+      try {
+        const file = e.target.files?.[0]
+        if (!file) { log('No file received'); return }
+        log(`Got photo (${Math.round(file.size / 1024)}KB) — reading...`)
+        window.handleBarcodeImage(file)
+      } catch (err) {
+        log('Error in onChange: ' + (err?.message || err))
+        console.error('[barcode] onChange threw:', err)
+      }
     }
     if (fiCam) fiCam.addEventListener('change', onChange)
     if (fiLib) fiLib.addEventListener('change', onChange)
 
-    // Manual input — Enter submits. Inline attr is a belt-and-suspenders backup.
     if (manual && !manual._wired) {
       manual._wired = true
       manual.addEventListener('keydown', e => {
