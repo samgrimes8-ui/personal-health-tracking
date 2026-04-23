@@ -188,6 +188,27 @@ export async function analyzePhoto(imageBase64, mealHint) {
   return parseJSON(data)
 }
 
+// Like analyzePhoto, but biased for reading a written recipe from a cookbook
+// page, recipe card, or blog screenshot. Extracts the recipe name, servings,
+// ingredients list, and calculates per-serving macros — same shape as
+// analyzeRecipe so the result can be saved / logged the same way.
+export async function analyzeRecipePhoto(imageBase64, mealHint) {
+  const data = await callProxy('recipe', [{
+    role: 'user',
+    content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
+      { type: 'text', text: `This image contains a written recipe — from a cookbook, a recipe card, a blog post, or a social media screenshot.
+
+Read the recipe carefully. Extract the recipe name, the number of servings it makes, the full ingredient list with amounts as written, and estimate accurate macros PER SERVING.
+
+If servings aren't stated explicitly, infer a reasonable number from the ingredient quantities (e.g. 1 lb ground beef → ~4 servings).
+
+${FULL_ANALYSIS_PROMPT}` + (mealHint ? `\n\nMeal name hint: ${mealHint}` : '') }
+    ]
+  }], { max_tokens: 3000 })
+  return parseJSON(data)
+}
+
 export async function analyzeRecipe(recipe, mealHint) {
   const data = await callProxy('recipe', [{
     role: 'user',

@@ -18,7 +18,7 @@ import {
   getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar
 } from '../lib/db.js'
 import {
-  analyzePhoto, analyzeRecipe, analyzeDishBySearch, analyzePlannerDescription,
+  analyzePhoto, analyzeRecipe, analyzeRecipePhoto, analyzeDishBySearch, analyzePlannerDescription,
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
   generateRecipeInstructions, extractBodyScan, fetchOgMetadata, readBarcodeFromImage,
   extractRecipeFromPhoto, generateRecipeFromMood
@@ -49,7 +49,7 @@ let state = {
   providers: [],
   followedProviders: [],
   myBroadcasts: [],
-  recipeMode: 'describe', // describe | ingredients | link
+  recipeMode: 'write',    // 'write' | 'snap' | 'link'
   incomingShares: [],
   units: null, // set on init from locale
   newUsersCount: 0,
@@ -65,9 +65,10 @@ let state = {
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false, isProvider: false },
   currentPage: 'log',
   currentMode: 'food',
-  foodMode: 'search',     // 'search' | 'barcode' | 'label'  (default: describe food)
+  foodMode: 'search',     // 'search' | 'barcode' | 'label' | 'snap'  (default: describe)
   imageBase64: null,
   labelImageBase64: null,
+  recipeImageBase64: null, // photo of recipe card / cookbook page / screenshot
   currentEntry: null,
   editingEntry: null,
   editingBaseMacros: null,
@@ -1393,79 +1394,94 @@ function renderDashboard(container) {
     <div class="two-col">
       <div class="upload-card">
         <div class="section-title">Analyze food</div>
+        <!-- Top-level: just Food vs Recipe. Everything else is nested. -->
         <div class="mode-tabs">
           <button class="mode-tab ${state.currentMode === 'food' ? 'active' : ''}" data-mode="food" onclick="switchMode('food')">🍎 Food</button>
-          <button class="mode-tab ${state.currentMode === 'recipe' ? 'active' : ''}" data-mode="recipe" onclick="switchMode('recipe')">📝 Recipe</button>
-          <button class="mode-tab ${state.currentMode === 'photo' ? 'active' : ''}" data-mode="photo" onclick="switchMode('photo')">📸 Photo</button>
-          <button class="mode-tab ${state.currentMode === 'link' ? 'active' : ''}" data-mode="link" onclick="switchMode('link')">🔍 Search</button>
+          <button class="mode-tab ${state.currentMode === 'recipe' ? 'active' : ''}" data-mode="recipe" onclick="switchMode('recipe')">📖 Recipe</button>
         </div>
+
+        <!-- RECIPE: 3 sub-modes (write / snap / link) -->
         <div class="mode-panel ${state.currentMode === 'recipe' ? 'active' : ''}" id="mode-recipe">
-          <!-- Recipe sub-mode tabs -->
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
-            <button class="food-sub-btn ${state.recipeMode !== 'link' && state.recipeMode !== 'ingredients' ? 'active' : ''}"
-              onclick="setRecipeMode('describe')" id="recipe-btn-describe">
-              <span style="font-size:18px;display:block;margin-bottom:2px">✏️</span>
-              <span style="font-size:11px">Describe</span>
+            <button class="food-sub-btn ${state.recipeMode === 'write' ? 'active' : ''}"
+              onclick="setRecipeMode('write')" id="recipe-btn-write">
+              <span style="font-size:18px;display:block;margin-bottom:2px">✍️</span>
+              <span style="font-size:11px">Write it</span>
             </button>
-            <button class="food-sub-btn ${state.recipeMode === 'ingredients' ? 'active' : ''}"
-              onclick="setRecipeMode('ingredients')" id="recipe-btn-ingredients">
-              <span style="font-size:18px;display:block;margin-bottom:2px">📋</span>
-              <span style="font-size:11px">Ingredients</span>
+            <button class="food-sub-btn ${state.recipeMode === 'snap' ? 'active' : ''}"
+              onclick="setRecipeMode('snap')" id="recipe-btn-snap">
+              <span style="font-size:18px;display:block;margin-bottom:2px">📸</span>
+              <span style="font-size:11px">Snap recipe</span>
             </button>
             <button class="food-sub-btn ${state.recipeMode === 'link' ? 'active' : ''}"
               onclick="setRecipeMode('link')" id="recipe-btn-link">
               <span style="font-size:18px;display:block;margin-bottom:2px">🔗</span>
-              <span style="font-size:11px">Link</span>
+              <span style="font-size:11px">From link</span>
             </button>
           </div>
-          <!-- Describe panel -->
-          <div id="recipe-panel-describe" style="${state.recipeMode === 'link' || state.recipeMode === 'ingredients' ? 'display:none' : ''}">
-            <textarea class="recipe-textarea" id="recipe-input" placeholder="Describe your recipe...&#10;&#10;e.g. Grilled chicken breast with rice and broccoli, high protein meal"></textarea>
+
+          <!-- Write it (merged describe + ingredients — one textarea) -->
+          <div id="recipe-panel-write" style="${state.recipeMode === 'write' ? '' : 'display:none'}">
+            <textarea class="recipe-textarea" id="recipe-input" rows="6" placeholder="Describe the recipe or paste the ingredient list.&#10;&#10;Either style works — AI handles both:&#10;&#10;• 'Grilled chicken bowl with rice and broccoli, high protein'&#10;&#10;• 2 cups chicken breast&#10;  1 cup brown rice&#10;  1 tbsp olive oil&#10;  2 cloves garlic"></textarea>
           </div>
-          <!-- Ingredients panel -->
-          <div id="recipe-panel-ingredients" style="${state.recipeMode === 'ingredients' ? '' : 'display:none'}">
-            <textarea class="recipe-textarea" id="recipe-ingredients-input" placeholder="Paste your ingredient list...&#10;&#10;e.g. 2 cups chicken breast&#10;1 cup brown rice&#10;1 tbsp olive oil&#10;2 cloves garlic"></textarea>
+
+          <!-- Snap recipe — photo of a cookbook page, recipe card, or screenshot -->
+          <div id="recipe-panel-snap" style="${state.recipeMode === 'snap' ? '' : 'display:none'}">
+            <input type="file" id="recipe-snap-camera" accept="image/*" capture="environment" style="display:none" />
+            <input type="file" id="recipe-snap-library" accept="image/*" style="display:none" />
+            <div id="recipe-snap-preview" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:140px;display:flex;align-items:center;justify-content:center;padding:20px">
+              <div style="text-align:center">
+                <div style="font-size:28px;margin-bottom:6px">📸</div>
+                <div style="font-size:13px;color:var(--text2)">Snap a recipe page</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:3px">Cookbook, card, blog screenshot — AI reads it</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+              <button type="button" id="recipe-snap-btn-camera"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
+                📷 Camera
+              </button>
+              <button type="button" id="recipe-snap-btn-library"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
+                🖼️ Choose photo
+              </button>
+            </div>
           </div>
-          <!-- Link panel -->
+
+          <!-- From link — single combined field: URL or dish name -->
           <div id="recipe-panel-link" style="${state.recipeMode === 'link' ? '' : 'display:none'}">
-            <input class="link-input" type="url" id="recipe-link-url" placeholder="Paste URL (optional)..." style="margin-bottom:8px" />
-            <textarea class="recipe-textarea" id="recipe-link-dish" rows="2" placeholder="What's the dish? (required)&#10;e.g. Skillet chicken cacciatore..."></textarea>
-            <div class="link-note">Instagram/TikTok are private — AI searches the web for the recipe by dish name.</div>
+            <textarea class="recipe-textarea" id="recipe-link-combined" rows="3"
+              placeholder="Paste a URL, or describe the dish.&#10;&#10;Works with both:&#10;• https://cookingclassy.com/chicken-piccata&#10;• Skillet chicken cacciatore"></textarea>
+            <div class="link-note">Instagram/TikTok links are private — AI falls back to searching the dish by name.</div>
           </div>
         </div>
-        <div class="mode-panel ${state.currentMode === 'photo' ? 'active' : ''}" id="mode-photo">
-          <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
-            <div id="upload-inner"><div class="upload-icon">📸</div><div class="upload-text">Drop a photo of your food</div><div class="upload-hint">supports jpg, png, webp</div></div>
-          </div>
-          <input type="file" id="file-input" accept="image/*" style="display:none" />
-        </div>
-        <div class="mode-panel ${state.currentMode === 'link' ? 'active' : ''}" id="mode-link">
-          <input class="link-input" type="url" id="link-input" placeholder="Paste URL (optional)..." style="margin-bottom:8px" />
-          <textarea class="recipe-textarea" id="dish-name-input" rows="2" placeholder="What's the dish? (required)&#10;e.g. Skillet chicken cacciatore..."></textarea>
-          <div class="link-note">Instagram/TikTok are private — AI searches the web for the recipe by dish name.</div>
-        </div>
+
+        <!-- FOOD: 4 sub-modes (describe / barcode / label / snap-food) -->
         <div class="mode-panel ${state.currentMode === 'food' ? 'active' : ''}" id="mode-food">
-          <!-- Three sub-options for single food items. Describe goes first
-               because it's the fastest path that never fails. -->
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
             <button class="food-sub-btn ${state.foodMode === 'search' ? 'active' : ''}"
               onclick="setFoodMode('search')" id="food-btn-search">
-              <span style="font-size:20px;display:block;margin-bottom:3px">🔤</span>
-              <span style="font-size:11px">Describe food</span>
+              <span style="font-size:18px;display:block;margin-bottom:2px">🔤</span>
+              <span style="font-size:11px">Describe</span>
             </button>
             <button class="food-sub-btn ${state.foodMode === 'barcode' ? 'active' : ''}"
               onclick="setFoodMode('barcode')" id="food-btn-barcode">
-              <span style="font-size:20px;display:block;margin-bottom:3px">📷</span>
+              <span style="font-size:18px;display:block;margin-bottom:2px">📷</span>
               <span style="font-size:11px">Scan barcode</span>
             </button>
             <button class="food-sub-btn ${state.foodMode === 'label' ? 'active' : ''}"
               onclick="setFoodMode('label')" id="food-btn-label">
-              <span style="font-size:20px;display:block;margin-bottom:3px">🏷️</span>
+              <span style="font-size:18px;display:block;margin-bottom:2px">🏷️</span>
               <span style="font-size:11px">Snap label</span>
+            </button>
+            <button class="food-sub-btn ${state.foodMode === 'snap' ? 'active' : ''}"
+              onclick="setFoodMode('snap')" id="food-btn-snap">
+              <span style="font-size:18px;display:block;margin-bottom:2px">📸</span>
+              <span style="font-size:11px">Snap food</span>
             </button>
           </div>
 
-          <!-- Manual food search (default, shown first) -->
+          <!-- Describe food -->
           <div id="food-panel-search" style="${state.foodMode === 'search' ? '' : 'display:none'}">
             <input class="link-input" id="food-search-input"
               placeholder="e.g. RXBAR Chocolate Sea Salt, greek yogurt 150g, Quest bar..."
@@ -1473,11 +1489,8 @@ function renderDashboard(container) {
             <div style="font-size:11px;color:var(--text3)">AI looks up the exact nutrition facts for the product or food you describe</div>
           </div>
 
-          <!-- Barcode scanner -->
+          <!-- Scan barcode -->
           <div id="food-panel-barcode" style="${state.foodMode !== 'barcode' ? 'display:none' : ''}">
-            <!-- Two file inputs: one for camera capture, one for photo library.
-                 iOS treats capture="environment" as "camera only" and blocks the
-                 photo library, so we keep them separate and labelled clearly. -->
             <input type="file" id="barcode-file-input-camera" accept="image/*" capture="environment" style="display:none" />
             <input type="file" id="barcode-file-input-library" accept="image/*" style="display:none" />
             <div id="barcode-scanner-inner" style="border:1.5px dashed var(--border2);border-radius:var(--r);background:var(--bg3);min-height:120px;display:flex;align-items:center;justify-content:center;padding:20px">
@@ -1502,7 +1515,7 @@ function renderDashboard(container) {
               onkeydown="if(event.key==='Enter')lookupBarcode(this.value)" />
           </div>
 
-          <!-- Label photo -->
+          <!-- Snap label (nutrition facts panel) -->
           <div id="food-panel-label" style="${state.foodMode === 'label' ? '' : 'display:none'}">
             <input type="file" id="label-file-input-camera" accept="image/*" capture="environment" style="display:none" />
             <input type="file" id="label-file-input-library" accept="image/*" style="display:none" />
@@ -1524,7 +1537,31 @@ function renderDashboard(container) {
               </button>
             </div>
           </div>
+
+          <!-- Snap food — photograph what's on your plate -->
+          <div id="food-panel-snap" style="${state.foodMode === 'snap' ? '' : 'display:none'}">
+            <input type="file" id="foodsnap-camera" accept="image/*" capture="environment" style="display:none" />
+            <input type="file" id="foodsnap-library" accept="image/*" style="display:none" />
+            <div class="upload-area" id="upload-area" style="cursor:default">
+              <div id="upload-inner">
+                <div class="upload-icon">📸</div>
+                <div class="upload-text">Photograph your meal</div>
+                <div class="upload-hint">AI identifies what's on the plate</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+              <button type="button" id="foodsnap-btn-camera"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
+                📷 Camera
+              </button>
+              <button type="button" id="foodsnap-btn-library"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
+                🖼️ Choose photo
+              </button>
+            </div>
+          </div>
         </div>
+
         <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px">
           <textarea id="meal-name-input" placeholder="Meal name (optional)..." rows="1" style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:13px;font-family:'DM Sans',sans-serif;resize:none;outline:none;"></textarea>
           <button class="analyze-btn" id="analyze-btn" onclick="analyzeFoodHandler()">Analyze with AI</button>
@@ -1582,7 +1619,6 @@ function renderDashboard(container) {
   `
 
   updateStats()
-  wireFileInput()
   // Wire today log clicks — use setTimeout to ensure DOM is ready
   setTimeout(() => {
     const el = document.getElementById('today-log-body')
@@ -1595,12 +1631,20 @@ function renderDashboard(container) {
   if (state.currentMode === 'food') {
     if (state.foodMode === 'label') wireLabelFileInput()
     if (state.foodMode === 'barcode') wireBarcodeInput()
+    if (state.foodMode === 'snap') wireFoodSnapInput()
+  } else if (state.currentMode === 'recipe') {
+    if (state.recipeMode === 'snap') wireRecipeSnapInput()
   }
 
-  // Restore image preview if exists
+  // Restore food-snap preview if exists
   if (state.imageBase64) {
     const inner = document.getElementById('upload-inner')
     if (inner) inner.innerHTML = `<img src="data:image/jpeg;base64,${state.imageBase64}" class="preview-img" alt="preview">`
+  }
+  // Restore recipe-snap preview if exists
+  if (state.recipeImageBase64) {
+    const preview = document.getElementById('recipe-snap-preview')
+    if (preview) preview.innerHTML = `<img src="data:image/jpeg;base64,${state.recipeImageBase64}" style="max-height:220px;border-radius:var(--r);object-fit:contain" alt="recipe">`
   }
   // Restore result if exists
   if (state.currentEntry) {
@@ -4753,19 +4797,31 @@ async function loadAdminPanel() {
 async function doAnalyze() {
   const mealHint = document.getElementById('meal-name-input')?.value.trim() ?? ''
 
-  if (state.currentMode === 'photo') {
-    if (!state.imageBase64) { showToast('Please upload a food image first', 'error'); return null }
-    return await analyzePhoto(state.imageBase64, mealHint)
-  } else if (state.currentMode === 'recipe') {
-    const recipe = document.getElementById('recipe-input')?.value.trim()
-    if (!recipe) { showToast('Please describe your recipe first', 'error'); return null }
-    return await analyzeRecipe(recipe, mealHint)
-  } else if (state.currentMode === 'link') {
-    const dishName = document.getElementById('dish-name-input')?.value.trim()
-    const link = document.getElementById('link-input')?.value.trim()
-    if (!dishName) { showToast('Please enter the dish name', 'error'); return null }
-    return await analyzeDishBySearch(dishName, link)
-  } else if (state.currentMode === 'food') {
+  if (state.currentMode === 'recipe') {
+    if (state.recipeMode === 'write') {
+      // Merged describe + ingredients — single textarea accepts both styles
+      const recipe = document.getElementById('recipe-input')?.value.trim()
+      if (!recipe) { showToast('Please write or paste the recipe first', 'error'); return null }
+      return await analyzeRecipe(recipe, mealHint)
+    } else if (state.recipeMode === 'snap') {
+      if (!state.recipeImageBase64) { showToast('Please snap or choose a recipe photo first', 'error'); return null }
+      const btn = document.getElementById('analyze-btn')
+      if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Reading recipe...'
+      return await analyzeRecipePhoto(state.recipeImageBase64, mealHint)
+    } else if (state.recipeMode === 'link') {
+      // Combined field: URL or dish name (or both). Detect URL vs plain text.
+      const raw = document.getElementById('recipe-link-combined')?.value.trim()
+      if (!raw) { showToast('Please paste a URL or describe the dish', 'error'); return null }
+      const urlMatch = raw.match(/https?:\/\/\S+/)
+      const url = urlMatch ? urlMatch[0] : ''
+      // Dish name = whatever text is there minus the URL (if any)
+      const dishName = urlMatch ? raw.replace(urlMatch[0], '').trim() : raw
+      // If only a URL was pasted, pass the URL as the "dish" too so AI has something
+      return await analyzeDishBySearch(dishName || url, url)
+    }
+  }
+
+  if (state.currentMode === 'food') {
     if (state.foodMode === 'search') {
       const desc = document.getElementById('food-search-input')?.value.trim()
       if (!desc) { showToast('Please describe the food first', 'error'); return null }
@@ -4775,6 +4831,11 @@ async function doAnalyze() {
       const btn = document.getElementById('analyze-btn')
       if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Reading label...'
       return await analyzeNutritionLabel(state.labelImageBase64)
+    } else if (state.foodMode === 'snap') {
+      if (!state.imageBase64) { showToast('Please photograph or choose a food image first', 'error'); return null }
+      const btn = document.getElementById('analyze-btn')
+      if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Analyzing photo...'
+      return await analyzePhoto(state.imageBase64, mealHint)
     } else {
       // Barcode mode — trigger the file input if nothing scanned yet
       const barcodeInput = document.getElementById('barcode-manual-input')
@@ -4784,10 +4845,11 @@ async function doAnalyze() {
           lookupBarcode(manualCode).then(resolve).catch(() => resolve(null))
         })
       }
-      document.getElementById('barcode-file-input')?.click()
+      document.getElementById('barcode-btn-camera')?.click()
       return null
     }
   }
+
   return null
 }
 
@@ -5092,27 +5154,32 @@ function wireGlobals() {
   window.updateAnalyzeBtn = function() {
     const btn = document.getElementById('analyze-btn')
     if (!btn) return
+    // Top-level is now only 'food' or 'recipe'. Each has sub-modes.
     const labels = {
-      photo:   '📸 Analyze photo',
-      recipe:  '✨ Analyze recipe',
-      link:    '🔍 Search & analyze',
-      food:    {
+      food: {
         search:  '✨ Analyze with AI',
-        label:   '📷 Read label',
         barcode: '🔍 Look up barcode',
-      }
+        label:   '📷 Read label',
+        snap:    '📸 Analyze photo',
+      },
+      recipe: {
+        write: '✨ Analyze recipe',
+        snap:  '📸 Read recipe photo',
+        link:  '🔍 Search & analyze',
+      },
     }
-    if (state.currentMode === 'food') {
-      btn.textContent = labels.food[state.foodMode] || '✨ Analyze with AI'
-    } else {
-      btn.textContent = labels[state.currentMode] || '✨ Analyze with AI'
-    }
+    const group = labels[state.currentMode] || labels.food
+    const subMode = state.currentMode === 'food' ? state.foodMode : state.recipeMode
+    btn.textContent = group[subMode] || '✨ Analyze with AI'
   }
 
   window.switchMode = (mode) => {
     state.currentMode = mode
-    if (mode !== 'photo') state.imageBase64 = null
-    ;['recipe', 'photo', 'link', 'food'].forEach(m => {
+    // Clear image state when leaving modes that use it — avoids a stale
+    // base64 being re-submitted from a different mode.
+    if (mode !== 'food' || state.foodMode !== 'snap') state.imageBase64 = null
+    if (mode !== 'recipe' || state.recipeMode !== 'snap') state.recipeImageBase64 = null
+    ;['recipe', 'food'].forEach(m => {
       const panel = document.getElementById(`mode-${m}`)
       if (panel) panel.classList.toggle('active', m === mode)
     })
@@ -5122,24 +5189,29 @@ function wireGlobals() {
     if (mode === 'food') {
       if (state.foodMode === 'label') wireLabelFileInput()
       if (state.foodMode === 'barcode') wireBarcodeInput()
+      if (state.foodMode === 'snap') wireFoodSnapInput()
+    }
+    if (mode === 'recipe') {
+      if (state.recipeMode === 'snap') wireRecipeSnapInput()
     }
     window.updateAnalyzeBtn()
   }
 
   window.setRecipeMode = (mode) => {
     state.recipeMode = mode
-    ;['describe', 'ingredients', 'link'].forEach(m => {
+    ;['write', 'snap', 'link'].forEach(m => {
       const panel = document.getElementById(`recipe-panel-${m}`)
       const btn = document.getElementById(`recipe-btn-${m}`)
       if (panel) panel.style.display = m === mode ? '' : 'none'
       if (btn) btn.classList.toggle('active', m === mode)
     })
+    if (mode === 'snap') wireRecipeSnapInput()
     window.updateAnalyzeBtn()
   }
 
   window.setFoodMode = (mode) => {
     state.foodMode = mode
-    ;['barcode', 'label', 'search'].forEach(m => {
+    ;['search', 'barcode', 'label', 'snap'].forEach(m => {
       const panel = document.getElementById(`food-panel-${m}`)
       const btn = document.getElementById(`food-btn-${m}`)
       if (panel) panel.style.display = m === mode ? '' : 'none'
@@ -5147,6 +5219,7 @@ function wireGlobals() {
     })
     if (mode === 'label') wireLabelFileInput()
     if (mode === 'barcode') wireBarcodeInput()
+    if (mode === 'snap') wireFoodSnapInput()
     window.updateAnalyzeBtn()
   }
 
@@ -5529,6 +5602,59 @@ function wireGlobals() {
     }).catch(err => {
       if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:13px">Failed to load label: ${err?.message || err}</div>`
     })
+  }
+
+  // ── Food > Snap food (photograph what's on the plate) ───────────
+  // Structurally identical to wireLabelFileInput — two file inputs
+  // (camera + library), two buttons, downscale + preview on change.
+  window.wireFoodSnapInput = function() {
+    const container = document.getElementById('food-panel-snap')
+    if (!container || container._wired) return
+    container._wired = true
+
+    const fiCam = document.getElementById('foodsnap-camera')
+    const fiLib = document.getElementById('foodsnap-library')
+    const btnCam = document.getElementById('foodsnap-btn-camera')
+    const btnLib = document.getElementById('foodsnap-btn-library')
+
+    if (btnCam && fiCam) btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
+    if (btnLib && fiLib) btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
+
+    const onChange = (e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }
+    if (fiCam) fiCam.addEventListener('change', onChange)
+    if (fiLib) fiLib.addEventListener('change', onChange)
+  }
+
+  // ── Recipe > Snap recipe (photograph a recipe card / cookbook page) ──
+  // Saves the base64 to state.recipeImageBase64 so doAnalyze can pick it up.
+  window.wireRecipeSnapInput = function() {
+    const container = document.getElementById('recipe-panel-snap')
+    if (!container || container._wired) return
+    container._wired = true
+
+    const fiCam = document.getElementById('recipe-snap-camera')
+    const fiLib = document.getElementById('recipe-snap-library')
+    const btnCam = document.getElementById('recipe-snap-btn-camera')
+    const btnLib = document.getElementById('recipe-snap-btn-library')
+
+    if (btnCam && fiCam) btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
+    if (btnLib && fiLib) btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
+
+    const onChange = (e) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      const preview = document.getElementById('recipe-snap-preview')
+      if (preview) preview.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Processing recipe photo…</div>`
+      downscaleImage(file).then(({ base64, dataUrl, bytes }) => {
+        state.recipeImageBase64 = base64
+        if (preview) preview.innerHTML = `<img src="${dataUrl}" style="max-height:220px;border-radius:var(--r);object-fit:contain" alt="recipe">`
+        console.log(`[recipe-snap] Downscaled to ${Math.round(bytes / 1024)}KB`)
+      }).catch(err => {
+        if (preview) preview.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:13px">Failed to load photo: ${err?.message || err}</div>`
+      })
+    }
+    if (fiCam) fiCam.addEventListener('change', onChange)
+    if (fiLib) fiLib.addEventListener('change', onChange)
   }
 
   window.toggleSidebar = () => {
