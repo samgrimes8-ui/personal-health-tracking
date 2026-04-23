@@ -4997,45 +4997,67 @@ function wireFileInput() {
 // Targets a max dimension of 1600px and JPEG quality 0.85, which preserves
 // enough detail for nutrition-label OCR and food-photo analysis while
 // typically landing under 500KB.
+//
+// Tries two paths: createImageBitmap (fast, efficient, but chokes on HEIC
+// in older Safari versions), then falls back to <img> element decoding
+// (slower but handles HEIC via the browser's native image pipeline).
 async function downscaleImage(file, { maxDim = 1600, quality = 0.85 } = {}) {
-  try {
-    const bitmap = await createImageBitmap(file)
-    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height))
-    const w = Math.round(bitmap.width * scale)
-    const h = Math.round(bitmap.height * scale)
+  const drawAndEncode = async (source, srcW, srcH) => {
+    const scale = Math.min(1, maxDim / Math.max(srcW, srcH))
+    const w = Math.max(1, Math.round(srcW * scale))
+    const h = Math.max(1, Math.round(srcH * scale))
     const canvas = document.createElement('canvas')
     canvas.width = w
     canvas.height = h
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h)
+    canvas.getContext('2d').drawImage(source, 0, 0, w, h)
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality))
     if (!blob) throw new Error('toBlob returned null')
-    // Convert blob → base64 (no data URL prefix)
     const dataUrl = await new Promise((resolve, reject) => {
       const fr = new FileReader()
       fr.onload = () => resolve(fr.result)
       fr.onerror = () => reject(fr.error || new Error('FileReader failed'))
       fr.readAsDataURL(blob)
     })
-    return {
-      base64: dataUrl.split(',')[1],
-      dataUrl,
-      width: w,
-      height: h,
-      bytes: blob.size,
-    }
-  } catch (err) {
-    // Fall back to reading the raw file — better a chance at working than
-    // failing entirely. Downstream may still hit the size limit but the
-    // user will see a clearer error.
-    console.warn('downscaleImage failed, using raw file:', err?.message || err)
-    const dataUrl = await new Promise((resolve, reject) => {
-      const fr = new FileReader()
-      fr.onload = () => resolve(fr.result)
-      fr.onerror = () => reject(fr.error)
-      fr.readAsDataURL(file)
-    })
-    return { base64: dataUrl.split(',')[1], dataUrl, width: 0, height: 0, bytes: file.size }
+    return { base64: dataUrl.split(',')[1], dataUrl, width: w, height: h, bytes: blob.size }
   }
+
+  // Attempt 1: createImageBitmap — fast, works for most formats
+  try {
+    const bitmap = await createImageBitmap(file)
+    return await drawAndEncode(bitmap, bitmap.width, bitmap.height)
+  } catch (err1) {
+    console.warn('createImageBitmap path failed:', err1?.message || err1)
+  }
+
+  // Attempt 2: load into an <img> element via object URL. This handles
+  // HEIC (iPhone's default format since iOS 11), because Safari decodes
+  // HEIC natively for <img> but not for createImageBitmap.
+  try {
+    const objUrl = URL.createObjectURL(file)
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const el = new Image()
+        el.onload = () => resolve(el)
+        el.onerror = () => reject(new Error('Image failed to load (unsupported format?)'))
+        el.src = objUrl
+      })
+      return await drawAndEncode(img, img.naturalWidth || img.width, img.naturalHeight || img.height)
+    } finally {
+      URL.revokeObjectURL(objUrl)
+    }
+  } catch (err2) {
+    console.warn('img-element path failed:', err2?.message || err2)
+  }
+
+  // Attempt 3: give up on resizing — return the raw bytes as base64.
+  // Downstream may reject if too big, but at least we give it a shot.
+  const dataUrl = await new Promise((resolve, reject) => {
+    const fr = new FileReader()
+    fr.onload = () => resolve(fr.result)
+    fr.onerror = () => reject(fr.error || new Error('FileReader failed'))
+    fr.readAsDataURL(file)
+  })
+  return { base64: dataUrl.split(',')[1], dataUrl, width: 0, height: 0, bytes: file.size }
 }
 
 function handleFile(file) {
@@ -5184,15 +5206,47 @@ function wireGlobals() {
   // 3. Manual entry — never burn tokens on barcode reading
 
   async function decodeBarcodeFromFile(file) {
-    // Downscale large photos first (12MP → much faster decode)
-    const bitmap = await createImageBitmap(file)
     const maxSize = 1600  // bumped from 1200 — more detail helps small/crinkled codes
-    const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height))
-    const w = Math.round(bitmap.width * scale)
-    const h = Math.round(bitmap.height * scale)
-    const canvas = document.createElement('canvas')
-    canvas.width = w; canvas.height = h
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h)
+    // Two-path approach to decode the image to a canvas (HEIC support):
+    // Path A: createImageBitmap (fast but no HEIC on Safari)
+    // Path B: <img> element via object URL (slower, but native HEIC decode)
+    const drawToCanvas = async () => {
+      try {
+        const bitmap = await createImageBitmap(file)
+        const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height))
+        const w = Math.max(1, Math.round(bitmap.width * scale))
+        const h = Math.max(1, Math.round(bitmap.height * scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = w; canvas.height = h
+        canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h)
+        return canvas
+      } catch (e1) {
+        console.warn('[barcode] createImageBitmap failed, trying img element:', e1?.message || e1)
+        // HEIC fallback via <img>
+        const objUrl = URL.createObjectURL(file)
+        try {
+          const img = await new Promise((resolve, reject) => {
+            const el = new Image()
+            el.onload = () => resolve(el)
+            el.onerror = () => reject(new Error('Image element load failed'))
+            el.src = objUrl
+          })
+          const iw = img.naturalWidth || img.width
+          const ih = img.naturalHeight || img.height
+          const scale = Math.min(1, maxSize / Math.max(iw, ih))
+          const w = Math.max(1, Math.round(iw * scale))
+          const h = Math.max(1, Math.round(ih * scale))
+          const canvas = document.createElement('canvas')
+          canvas.width = w; canvas.height = h
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+          return canvas
+        } finally {
+          URL.revokeObjectURL(objUrl)
+        }
+      }
+    }
+
+    const canvas = await drawToCanvas()
 
     // 1. Try native BarcodeDetector (free, instant — iOS 17+, Chrome Android)
     if ('BarcodeDetector' in window) {
@@ -5203,7 +5257,7 @@ function wireGlobals() {
         const results = await detector.detect(canvas)
         if (results.length > 0) return results[0].rawValue
       } catch (e) {
-        console.warn('Native BarcodeDetector failed:', e.message)
+        console.warn('Native BarcodeDetector failed:', e?.message || e)
       }
     }
 
@@ -5221,8 +5275,6 @@ function wireGlobals() {
           const text = result?.getText?.() || result?.text
           if (text) return text
         } catch (e) {
-          // NotFoundException is expected for "no barcode found" —
-          // only log real errors
           if (e?.name !== 'NotFoundException' && !/not.*found/i.test(e?.message || '')) {
             console.warn('ZXing decode error:', e?.message || e)
           }
@@ -5257,53 +5309,59 @@ function wireGlobals() {
     const inner = document.getElementById('barcode-scanner-inner')
     if (!file) return
 
-    // Downscale once, reuse for both preview and the AI fallback path.
-    // The local barcode decoder (decodeBarcodeFromFile) re-reads the file
-    // on its own and does its own downscale.
+    // Immediate loading state so the user sees feedback before any async work
+    if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">📷 Processing photo (${Math.round(file.size / 1024)}KB)…</div>`
+    if (status) status.textContent = 'Processing photo...'
+
     let scaled
     try {
       scaled = await downscaleImage(file, { maxDim: 1600, quality: 0.9 })
     } catch (e) {
-      if (status) status.textContent = 'Could not read photo'
-      console.error('[barcode] downscale failed:', e)
+      console.error('[barcode] downscale threw:', e)
+      if (status) status.textContent = `Photo failed: ${e?.message || 'unknown'} — try typing the barcode`
+      if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:12px">Photo failed to process:<br>${esc(String(e?.message || e))}</div>`
       return
     }
     if (inner) inner.innerHTML = `<img src="${scaled.dataUrl}" style="max-height:140px;border-radius:var(--r);object-fit:contain" />`
-    if (status) status.textContent = 'Reading barcode...'
+    if (status) status.textContent = `Scanning ${scaled.width || '?'}×${scaled.height || '?'} photo...`
 
+    // Local decode (no AI cost)
+    let code = null
     try {
-      const code = await decodeBarcodeFromFile(file)
-      if (code) {
-        if (status) status.textContent = `Found: ${code} — looking up...`
-        const input = document.getElementById('barcode-manual-input')
-        if (input) input.value = code
-        await lookupBarcode(code)
-      } else {
-        // Claude visual fallback — reads the number from the downscaled image
-        if (status) status.textContent = 'No barcode detected — trying AI reader...'
-        try {
-          const aiCode = await readBarcodeFromImage(scaled.base64)
-          if (aiCode) {
-            if (status) status.textContent = `Read: ${aiCode} — looking up...`
-            const input = document.getElementById('barcode-manual-input')
-            if (input) input.value = aiCode
-            await lookupBarcode(aiCode)
-          } else {
-            if (status) status.textContent = 'Could not read barcode — type the number below'
-            const input = document.getElementById('barcode-manual-input')
-            if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
-          }
-        } catch (err) {
-          console.warn('AI barcode reader failed:', err?.message || err)
-          if (status) status.textContent = `Could not read — ${err?.message || 'try typing below'}`
-          const input = document.getElementById('barcode-manual-input')
-          if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
-        }
-      }
+      code = await decodeBarcodeFromFile(file)
     } catch (e) {
-      console.warn('Barcode image handling failed:', e?.message || e)
-      if (status) status.textContent = 'Read failed — type the number below'
-      document.getElementById('barcode-manual-input')?.focus()
+      console.error('[barcode] decodeBarcodeFromFile threw:', e)
+      if (status) status.textContent = `Scan error: ${e?.message || 'unknown'}`
+      // Don't give up — try AI fallback below
+    }
+
+    if (code) {
+      if (status) status.textContent = `Found: ${code} — looking up...`
+      const input = document.getElementById('barcode-manual-input')
+      if (input) input.value = code
+      await lookupBarcode(code)
+      return
+    }
+
+    // AI fallback — uses downscaled image so /api/analyze body stays small
+    if (status) status.textContent = 'Local decode found nothing — trying AI reader...'
+    try {
+      const aiCode = await readBarcodeFromImage(scaled.base64)
+      if (aiCode) {
+        if (status) status.textContent = `AI read: ${aiCode} — looking up...`
+        const input = document.getElementById('barcode-manual-input')
+        if (input) input.value = aiCode
+        await lookupBarcode(aiCode)
+      } else {
+        if (status) status.textContent = 'No barcode found in photo — type the number below'
+        const input = document.getElementById('barcode-manual-input')
+        if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
+      }
+    } catch (err) {
+      console.error('[barcode] AI reader threw:', err)
+      if (status) status.textContent = `AI read failed: ${err?.message || 'unknown'} — type the number`
+      const input = document.getElementById('barcode-manual-input')
+      if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
     }
   }
 
