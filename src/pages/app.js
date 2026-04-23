@@ -4989,40 +4989,72 @@ function wireFileInput() {
   ua.addEventListener('drop', e => { e.preventDefault(); ua.classList.remove('drag-over'); const f = e.dataTransfer.files[0]; if (f) handleFile(f) })
 }
 
+// Downscale a photo file to a base64 JPEG (no data URL prefix) that fits
+// comfortably within Vercel's 4.5MB edge function body limit. iPhone 12MP
+// photos routinely hit ~4-7MB base64 — unscaled, they cause "Load failed"
+// fetch errors before our code even sees the request.
+//
+// Targets a max dimension of 1600px and JPEG quality 0.85, which preserves
+// enough detail for nutrition-label OCR and food-photo analysis while
+// typically landing under 500KB.
+async function downscaleImage(file, { maxDim = 1600, quality = 0.85 } = {}) {
+  try {
+    const bitmap = await createImageBitmap(file)
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height))
+    const w = Math.round(bitmap.width * scale)
+    const h = Math.round(bitmap.height * scale)
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h)
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality))
+    if (!blob) throw new Error('toBlob returned null')
+    // Convert blob → base64 (no data URL prefix)
+    const dataUrl = await new Promise((resolve, reject) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(fr.result)
+      fr.onerror = () => reject(fr.error || new Error('FileReader failed'))
+      fr.readAsDataURL(blob)
+    })
+    return {
+      base64: dataUrl.split(',')[1],
+      dataUrl,
+      width: w,
+      height: h,
+      bytes: blob.size,
+    }
+  } catch (err) {
+    // Fall back to reading the raw file — better a chance at working than
+    // failing entirely. Downstream may still hit the size limit but the
+    // user will see a clearer error.
+    console.warn('downscaleImage failed, using raw file:', err?.message || err)
+    const dataUrl = await new Promise((resolve, reject) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(fr.result)
+      fr.onerror = () => reject(fr.error)
+      fr.readAsDataURL(file)
+    })
+    return { base64: dataUrl.split(',')[1], dataUrl, width: 0, height: 0, bytes: file.size }
+  }
+}
+
 function handleFile(file) {
-  const reader = new FileReader()
-  reader.onload = ev => {
-    state.imageBase64 = ev.target.result.split(',')[1]
-    const inner = document.getElementById('upload-inner')
-    if (inner) inner.innerHTML = `<img src="${ev.target.result}" class="preview-img" alt="preview">`
+  // Show immediate loading state so the user knows the upload registered
+  const inner = document.getElementById('upload-inner')
+  if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Processing photo…</div>`
+  downscaleImage(file).then(({ base64, dataUrl, bytes }) => {
+    state.imageBase64 = base64
+    if (inner) inner.innerHTML = `<img src="${dataUrl}" class="preview-img" alt="preview">`
     const empty = document.getElementById('result-empty')
     if (empty) empty.style.display = 'none'
-  }
-  reader.readAsDataURL(file)
+    console.log(`[photo] Downscaled to ${Math.round(bytes / 1024)}KB`)
+  }).catch(err => {
+    if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:13px">Failed to load photo: ${err?.message || err}</div>`
+  })
 }
 
 // ─── Wire Global Handlers ─────────────────────────────────────────────────────
 function wireGlobals() {
-  // Global error surface — if an uncaught error happens while the user is
-  // in the barcode flow, show it on the barcode status line so we don't
-  // have to guess from a blank screen.
-  if (!window._globalErrHandlerWired) {
-    window._globalErrHandlerWired = true
-    window.addEventListener('error', (e) => {
-      console.error('[uncaught]', e.error || e.message)
-      const status = document.getElementById('barcode-status')
-      if (status && state.foodMode === 'barcode') {
-        status.textContent = 'Error: ' + (e.message || 'unknown')
-      }
-    })
-    window.addEventListener('unhandledrejection', (e) => {
-      console.error('[unhandled promise]', e.reason)
-      const status = document.getElementById('barcode-status')
-      if (status && state.foodMode === 'barcode') {
-        status.textContent = 'Promise rejected: ' + (e.reason?.message || e.reason || 'unknown')
-      }
-    })
-  }
   window.switchPage = (name) => {
     state.currentPage = name
     sessionStorage.setItem('macrolens_page', name)
@@ -5225,9 +5257,18 @@ function wireGlobals() {
     const inner = document.getElementById('barcode-scanner-inner')
     if (!file) return
 
-    // Show preview
-    const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = e => r(e.target.result); fr.readAsDataURL(file) })
-    if (inner) inner.innerHTML = `<img src="${dataUrl}" style="max-height:140px;border-radius:var(--r);object-fit:contain" />`
+    // Downscale once, reuse for both preview and the AI fallback path.
+    // The local barcode decoder (decodeBarcodeFromFile) re-reads the file
+    // on its own and does its own downscale.
+    let scaled
+    try {
+      scaled = await downscaleImage(file, { maxDim: 1600, quality: 0.9 })
+    } catch (e) {
+      if (status) status.textContent = 'Could not read photo'
+      console.error('[barcode] downscale failed:', e)
+      return
+    }
+    if (inner) inner.innerHTML = `<img src="${scaled.dataUrl}" style="max-height:140px;border-radius:var(--r);object-fit:contain" />`
     if (status) status.textContent = 'Reading barcode...'
 
     try {
@@ -5238,11 +5279,10 @@ function wireGlobals() {
         if (input) input.value = code
         await lookupBarcode(code)
       } else {
-        // 3. Claude visual fallback — reads the number from the image
+        // Claude visual fallback — reads the number from the downscaled image
         if (status) status.textContent = 'No barcode detected — trying AI reader...'
         try {
-          const b64 = dataUrl.split(',')[1]
-          const aiCode = await readBarcodeFromImage(b64)
+          const aiCode = await readBarcodeFromImage(scaled.base64)
           if (aiCode) {
             if (status) status.textContent = `Read: ${aiCode} — looking up...`
             const input = document.getElementById('barcode-manual-input')
@@ -5255,7 +5295,7 @@ function wireGlobals() {
           }
         } catch (err) {
           console.warn('AI barcode reader failed:', err?.message || err)
-          if (status) status.textContent = 'Could not read barcode — type the number below'
+          if (status) status.textContent = `Could not read — ${err?.message || 'try typing below'}`
           const input = document.getElementById('barcode-manual-input')
           if (input) { input.focus(); input.style.borderColor = 'var(--accent)' }
         }
@@ -5298,48 +5338,29 @@ function wireGlobals() {
     if (!container || container._wired) return
     container._wired = true
 
-    const log = (msg) => {
-      const status = document.getElementById('barcode-status')
-      if (status) status.textContent = msg
-      console.log('[barcode]', msg)
-    }
-
-    // Two separate file inputs: camera (with capture) and library (without)
     const fiCam = document.getElementById('barcode-file-input-camera')
     const fiLib = document.getElementById('barcode-file-input-library')
     const btnCam = document.getElementById('barcode-btn-camera')
     const btnLib = document.getElementById('barcode-btn-library')
     const manual = document.getElementById('barcode-manual-input')
 
-    // Show on-screen confirmation that wiring ran (will be overwritten by
-    // actual status once the user taps something — harmless otherwise)
-    log(fiCam && fiLib && btnCam && btnLib ? 'Ready — tap Camera or Choose photo' : `Wiring issue (cam:${!!fiCam} lib:${!!fiLib} bCam:${!!btnCam} bLib:${!!btnLib})`)
-
     if (btnCam && fiCam) {
-      btnCam.addEventListener('click', () => {
-        log('Opening camera...')
-        fiCam.value = ''
-        fiCam.click()
-      })
+      btnCam.addEventListener('click', () => { fiCam.value = ''; fiCam.click() })
     }
     if (btnLib && fiLib) {
-      btnLib.addEventListener('click', () => {
-        log('Opening photo library...')
-        fiLib.value = ''
-        fiLib.click()
-      })
+      btnLib.addEventListener('click', () => { fiLib.value = ''; fiLib.click() })
     }
 
-    // Change handler — logs to status line so even without a dev console we
-    // can see whether this fires.
     const onChange = (e) => {
       try {
         const file = e.target.files?.[0]
-        if (!file) { log('No file received'); return }
-        log(`Got photo (${Math.round(file.size / 1024)}KB) — reading...`)
+        if (!file) return
+        const status = document.getElementById('barcode-status')
+        if (status) status.textContent = `Got photo (${Math.round(file.size / 1024)}KB) — reading barcode...`
         window.handleBarcodeImage(file)
       } catch (err) {
-        log('Error in onChange: ' + (err?.message || err))
+        const status = document.getElementById('barcode-status')
+        if (status) status.textContent = 'Error: ' + (err?.message || err)
         console.error('[barcode] onChange threw:', err)
       }
     }
@@ -5382,13 +5403,15 @@ function wireGlobals() {
   }
 
   function handleLabelFile(file) {
-    const reader = new FileReader()
-    reader.onload = ev => {
-      state.labelImageBase64 = ev.target.result.split(',')[1]
-      const inner = document.getElementById('label-upload-inner')
-      if (inner) inner.innerHTML = `<img src="${ev.target.result}" style="width:100%;border-radius:var(--r);max-height:180px;object-fit:contain" alt="label">`
-    }
-    reader.readAsDataURL(file)
+    const inner = document.getElementById('label-upload-inner')
+    if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Processing label…</div>`
+    downscaleImage(file).then(({ base64, dataUrl, bytes }) => {
+      state.labelImageBase64 = base64
+      if (inner) inner.innerHTML = `<img src="${dataUrl}" style="width:100%;border-radius:var(--r);max-height:180px;object-fit:contain" alt="label">`
+      console.log(`[label] Downscaled to ${Math.round(bytes / 1024)}KB`)
+    }).catch(err => {
+      if (inner) inner.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:13px">Failed to load label: ${err?.message || err}</div>`
+    })
   }
 
   window.toggleSidebar = () => {

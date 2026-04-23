@@ -45,22 +45,55 @@ async function callProxy(feature, messages, options = {}) {
 
   aiLoadingStart()
   try {
-    const res = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`
-      },
-      body: JSON.stringify({
-        feature,
-        messages,
-        max_tokens: options.max_tokens ?? 2000,
-        ...(options.tools ? { tools: options.tools } : {})
-      })
-    })
+    // Compute approximate payload size so we can give a helpful error if
+    // it's likely to exceed Vercel's 4.5MB edge function body limit.
+    let approxSize = 0
+    try {
+      // Fast size estimation — no need to fully stringify if we find a big image
+      for (const m of messages) {
+        if (Array.isArray(m.content)) {
+          for (const c of m.content) {
+            if (c.type === 'image' && c.source?.data) approxSize += c.source.data.length
+            if (c.text) approxSize += c.text.length
+          }
+        } else if (typeof m.content === 'string') approxSize += m.content.length
+      }
+    } catch {}
+    const approxMB = approxSize / 1024 / 1024
+    if (approxMB > 4.2) {
+      throw new Error(`Image too large (~${approxMB.toFixed(1)}MB). Try a smaller photo or tighter crop.`)
+    }
 
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`)
+    let res
+    try {
+      res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          feature,
+          messages,
+          max_tokens: options.max_tokens ?? 2000,
+          ...(options.tools ? { tools: options.tools } : {})
+        })
+      })
+    } catch (networkErr) {
+      // iOS Safari surfaces "Load failed" for any network failure — size
+      // limits, CORS, offline, DNS, etc. Translate to something actionable.
+      const msg = networkErr?.message || 'Network request failed'
+      if (/load failed|failed to fetch|network/i.test(msg)) {
+        throw new Error(`Network error${approxMB > 1 ? ` (payload was ${approxMB.toFixed(1)}MB — image may be too big)` : ' — check your connection'}`)
+      }
+      throw networkErr
+    }
+
+    const data = await res.json().catch(() => ({ error: `Server returned ${res.status} with invalid JSON` }))
+    if (!res.ok) {
+      if (res.status === 413) throw new Error('Image too large for server. Try a smaller photo.')
+      throw new Error(data.error ?? `Request failed (${res.status})`)
+    }
     return data
   } finally {
     aiLoadingEnd()
