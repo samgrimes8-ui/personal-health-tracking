@@ -749,64 +749,72 @@ function renderAnalyticsPage(container) {
 // intentionally small (3 stat tiles + one sparkline) so it doesn't
 // clutter the main dashboard.
 function renderDashboardAnalyticsWidget() {
-  const log = state.log || []
-  const goals = state.goals || {}
-  const checkins = state.checkins || []
+  // Wrap the whole thing — this runs during dashboard render, and a crash
+  // here takes the entire dashboard with it. Returning '' on any error
+  // means the user just doesn't see the widget, instead of seeing nothing.
+  try {
+    const log = state.log || []
+    const goals = state.goals || {}
+    const checkins = state.checkins || []
 
-  const daily = buildDailyWindow(log, 7)
-  const summary = summarizeWindow(daily, goals)
+    const daily = buildDailyWindow(log, 7)
+    const summary = summarizeWindow(daily, goals)
 
-  // Don't render until there's something worth showing — avoids a
-  // misleading "0 kcal / 0 days logged" strip on brand-new accounts.
-  if (summary.loggedDays === 0 && checkins.length === 0) return ''
+    // Don't render until there's something worth showing — avoids a
+    // misleading "0 kcal / 0 days logged" strip on brand-new accounts.
+    if (summary.loggedDays === 0 && checkins.length === 0) return ''
 
-  const calValues = daily.map(d => d.cal)
-  const proteinValues = daily.map(d => d.p)
+    const calValues = daily.map(d => d.cal)
+    const proteinValues = daily.map(d => d.p)
 
-  // Weight delta across whatever checkins we have in the last 30 days
-  const isImperial = state.units === 'imperial'
-  const weightUnit = isImperial ? 'lbs' : 'kg'
-  const weightFor = kg => isImperial ? +(kg * 2.20462).toFixed(1) : +kg.toFixed(1)
-  const recentCheckins = [...checkins]
-    .filter(c => c.weight_kg)
-    .sort((a, b) => (a.scan_date || a.checked_in_at || '').localeCompare(b.scan_date || b.checked_in_at || ''))
-  const weightDelta = recentCheckins.length >= 2
-    ? (recentCheckins[recentCheckins.length - 1].weight_kg - recentCheckins[0].weight_kg)
-    : null
-  const weightDeltaDisp = weightDelta != null
-    ? `${weightDelta > 0 ? '+' : ''}${(isImperial ? weightDelta * 2.20462 : weightDelta).toFixed(1)} ${weightUnit}`
-    : null
+    // Weight delta across whatever checkins we have in the last 30 days
+    const isImperial = state.units === 'imperial'
+    const weightUnit = isImperial ? 'lbs' : 'kg'
+    const recentCheckins = [...checkins]
+      .filter(c => c.weight_kg)
+      .sort((a, b) => (a.scan_date || a.checked_in_at || '').localeCompare(b.scan_date || b.checked_in_at || ''))
+    const weightDelta = recentCheckins.length >= 2
+      ? (recentCheckins[recentCheckins.length - 1].weight_kg - recentCheckins[0].weight_kg)
+      : null
+    const weightDeltaDisp = weightDelta != null
+      ? `${weightDelta > 0 ? '+' : ''}${(isImperial ? weightDelta * 2.20462 : weightDelta).toFixed(1)} ${weightUnit}`
+      : null
 
-  const tile = (label, value, sub, sparkVals, color) => `
-    <button onclick="switchPage('analytics')" style="flex:1;min-width:150px;background:none;border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;text-align:left;cursor:pointer;font-family:inherit;transition:border-color 0.15s"
-      onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:4px">${label}</div>
-      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
-        <div style="font-size:20px;font-weight:600;color:${color};line-height:1">${value}</div>
-        ${sub ? `<div style="font-size:11px;color:var(--text3)">${sub}</div>` : ''}
+    const tile = (label, value, sub, sparkVals, color) => `
+      <button onclick="switchPage('analytics')" style="flex:1;min-width:150px;background:none;border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;text-align:left;cursor:pointer;font-family:inherit;transition:border-color 0.15s"
+        onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:4px">${label}</div>
+        <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
+          <div style="font-size:20px;font-weight:600;color:${color};line-height:1">${value}</div>
+          ${sub ? `<div style="font-size:11px;color:var(--text3)">${sub}</div>` : ''}
+        </div>
+        ${sparkVals ? sparkline(sparkVals, { width: 140, height: 22, color }) : ''}
+      </button>
+    `
+
+    return `
+      <div class="upload-card" style="margin-bottom:16px;padding:14px 16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Last 7 days</div>
+          <button onclick="switchPage('analytics')"
+            style="background:none;border:none;color:var(--accent);font-size:12px;font-family:inherit;cursor:pointer;padding:0">
+            View analytics →
+          </button>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          ${tile('Avg calories', Math.round(summary.avg.cal), 'kcal/day', calValues, 'var(--cal)')}
+          ${tile('Avg protein', Math.round(summary.avg.p) + 'g', `${summary.proteinAdherencePct}% hit goal`, proteinValues, 'var(--protein)')}
+          ${weightDeltaDisp
+            ? tile('Weight change', weightDeltaDisp, `${recentCheckins.length} check-ins`, null, 'var(--accent)')
+            : tile('Days logged', summary.loggedDays + '/7', 'this week', null, 'var(--text)')}
+        </div>
       </div>
-      ${sparkVals ? sparkline(sparkVals, { width: 140, height: 22, color }) : ''}
-    </button>
-  `
-
-  return `
-    <div class="upload-card" style="margin-bottom:16px;padding:14px 16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Last 7 days</div>
-        <button onclick="switchPage('analytics')"
-          style="background:none;border:none;color:var(--accent);font-size:12px;font-family:inherit;cursor:pointer;padding:0">
-          View analytics →
-        </button>
-      </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        ${tile('Avg calories', Math.round(summary.avg.cal), 'kcal/day', calValues, 'var(--cal)')}
-        ${tile('Avg protein', Math.round(summary.avg.p) + 'g', `${summary.proteinAdherencePct}% hit goal`, proteinValues, 'var(--protein)')}
-        ${weightDeltaDisp
-          ? tile('Weight change', weightDeltaDisp, `${recentCheckins.length} check-ins`, null, 'var(--accent)')
-          : tile('Days logged', summary.loggedDays + '/7', 'this week', null, 'var(--text)')}
-      </div>
-    </div>
-  `
+    `
+  } catch (err) {
+    // Dev-visible console error but user just doesn't see the widget
+    console.error('Dashboard analytics widget failed:', err)
+    return ''
+  }
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────────────────────
@@ -1271,8 +1279,39 @@ function renderPage() {
     return
   }
   switch (state.currentPage) {
-    case 'log':      renderDashboard(main); break
-    case 'analytics': renderAnalyticsPage(main); break
+    case 'log':
+      try {
+        renderDashboard(main)
+      } catch (e) {
+        console.error('Dashboard render failed:', e)
+        main.innerHTML = `<div style="padding:20px">
+          <div class="greeting">Dashboard</div>
+          <div class="greeting-sub" style="color:var(--fat)">Something went wrong rendering the dashboard.</div>
+          <div class="upload-card">
+            <div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(e.message || 'Unknown error')}</div>
+            <pre style="font-size:11px;color:var(--text3);white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow-y:auto">${esc(e.stack || '')}</pre>
+            <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+              <button onclick="switchPage('analytics')" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:8px 14px;border-radius:var(--r);font-family:inherit;font-size:13px;cursor:pointer">Try analytics</button>
+              <button onclick="switchPage('planner')" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:8px 14px;border-radius:var(--r);font-family:inherit;font-size:13px;cursor:pointer">Try planner</button>
+              <button onclick="location.reload()" style="background:var(--accent);border:none;color:#1a1500;padding:8px 14px;border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">Hard reload</button>
+            </div>
+          </div>
+        </div>`
+      }
+      break
+    case 'analytics':
+      try {
+        renderAnalyticsPage(main)
+      } catch (e) {
+        console.error('Analytics page render failed:', e)
+        main.innerHTML = `<div class="greeting">Analytics</div>
+          <div class="greeting-sub">Something went wrong loading analytics.</div>
+          <div class="upload-card">
+            <div style="font-size:13px;color:var(--text2);margin-bottom:8px">${esc(e.message || 'Unknown error')}</div>
+            <div style="font-size:11px;color:var(--text3)">Try reloading. If the issue persists, tap the thumbs-down to report it.</div>
+          </div>`
+      }
+      break
     case 'planner':  renderPlanner(main); break
     case 'history':  renderHistory(main); break
     case 'goals':    renderGoalsPage(main); break
