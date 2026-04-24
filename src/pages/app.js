@@ -5994,7 +5994,7 @@ function wireGlobals() {
     const linkActions = document.getElementById('share-link-actions')
     const linkBtn = document.getElementById('share-link-btn')
     if (recipe.share_token) {
-      const url = `${location.origin}/api/recipe?token=${recipe.share_token}`
+      const url = `${location.origin}/api/recipe/${recipe.share_token}`
       linkDisplay.textContent = url
       linkDisplay.style.color = 'var(--text)'
       linkBtn.textContent = 'Regenerate'
@@ -6018,11 +6018,13 @@ function wireGlobals() {
     btn.textContent = 'Generating...'
     btn.disabled = true
     try {
+      // generateShareToken is now a thin alias over enableRecipeSharing;
+      // both use is_shared=true in the DB and /api/recipe/[token] to read.
       const token = await generateShareToken(state.user.id, state.sharingRecipeId)
       const recipe = state.recipes.find(r => r.id === state.sharingRecipeId)
-      if (recipe) { recipe.share_token = token; recipe.is_public = true }
+      if (recipe) { recipe.share_token = token; recipe.is_shared = true }
       state.sharingToken = token
-      const url = `${location.origin}/api/recipe?token=${token}`
+      const url = `${location.origin}/api/recipe/${token}`
       const linkDisplay = document.getElementById('share-link-display')
       linkDisplay.textContent = url
       linkDisplay.style.color = 'var(--text)'
@@ -6033,7 +6035,7 @@ function wireGlobals() {
   }
 
   window.copyShareLink = async () => {
-    const url = `${location.origin}/api/recipe?token=${state.sharingToken}`
+    const url = `${location.origin}/api/recipe/${state.sharingToken}`
     try {
       await navigator.clipboard.writeText(url)
       showToast('Link copied!', 'success')
@@ -6042,7 +6044,7 @@ function wireGlobals() {
 
   window.nativeShareRecipe = async () => {
     const recipe = state.recipes.find(r => r.id === state.sharingRecipeId)
-    const url = `${location.origin}/api/recipe?token=${state.sharingToken}`
+    const url = `${location.origin}/api/recipe/${state.sharingToken}`
     if (navigator.share) {
       await navigator.share({ title: recipe?.name || 'Recipe', text: `Check out this recipe on MacroLens`, url })
     } else {

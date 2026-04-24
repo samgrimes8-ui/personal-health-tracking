@@ -794,32 +794,22 @@ export async function getScanUrl(path) {
 }
 
 // ─── Recipe Sharing ───────────────────────────────────────────────────────────
+//
+// Historically there were two share flows writing to two different booleans
+// on public.recipes: is_public (legacy, full Share modal) and is_shared
+// (newer, card-tile Share button). That led to share links from one flow
+// being unreadable by the other endpoint. We've consolidated on is_shared.
+//
+// generateShareToken() is kept as a thin alias for enableRecipeSharing()
+// so any caller still using the old name keeps working. Same for the
+// reader — getRecipeByShareToken() delegates to getSharedRecipe().
 
 export async function generateShareToken(userId, recipeId) {
-  if (!supabase) return null
-  // Generate a UUID token and make recipe public
-  const token = crypto.randomUUID()
-  const { data, error } = await supabase
-    .from('recipes')
-    .update({ share_token: token, is_public: true })
-    .eq('id', recipeId)
-    .eq('user_id', userId)
-    .select('share_token')
-    .single()
-  if (error) throw error
-  return data.share_token
+  return enableRecipeSharing(userId, recipeId)
 }
 
 export async function getRecipeByShareToken(token) {
-  if (!supabase) return null
-  const { data, error } = await supabase
-    .from('recipes')
-    .select('*')
-    .eq('share_token', token)
-    .eq('is_public', true)
-    .single()
-  if (error) return null
-  return data
+  return getSharedRecipe(token)
 }
 
 export async function shareRecipeWithUser(fromUserId, recipeId, toEmail) {
@@ -870,8 +860,6 @@ export async function getUnreadShareCount(userId) {
     .eq('is_read', false)
   return count || 0
 }
-
-// ─── Recipe Sharing ───────────────────────────────────────────────────────────
 
 export async function enableRecipeSharing(userId, recipeId) {
   if (!supabase) return null
@@ -1307,13 +1295,12 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
 
     // Insert a fresh copy into the user's library
     try {
-      const { share_token, is_shared, is_public, id, user_id, created_at, updated_at, ...fields } = source
+      const { share_token, is_shared, id, user_id, created_at, updated_at, ...fields } = source
       const payload = {
         ...fields,
         user_id: userId,
         share_token: null,
         is_shared: false,
-        is_public: false,
         source_recipe_id: origId,
         source_updated_at: source.updated_at || null,
         update_history: [],
