@@ -59,11 +59,25 @@ where role is distinct from case
   else                                                                       'free'
 end;
 
--- ─── Step 3: Drop obsolete columns ────────────────────────────────────────
--- is_provider and unlimited_access are fully subsumed by role now. We
--- CASCADE on the drops because the old check_spend_limit RPC references
--- unlimited_access — once we drop the column the function breaks, so we
--- recreate it in step 5 below.
+-- ─── Step 3: Rewrite RLS policies that reference is_provider ─────────────
+-- Postgres refuses to drop a column if a policy's USING/WITH CHECK clause
+-- references it, so we have to rewrite the policy first. The only one on
+-- user_profiles that hits this column is providers_readable_by_all, which
+-- lets logged-in users SELECT rows of other users who are providers (for
+-- the directory). Rewrite to use role instead of is_provider.
+--
+-- If you add more RLS policies referencing is_provider later, rewrite them
+-- here before the drop below.
+
+drop policy if exists providers_readable_by_all on public.user_profiles;
+
+create policy providers_readable_by_all
+  on public.user_profiles
+  for select
+  using (role in ('provider', 'admin'));
+
+-- ─── Step 4: Drop obsolete columns ────────────────────────────────────────
+-- is_provider and unlimited_access are fully subsumed by role now.
 
 alter table public.user_profiles
   drop column if exists is_provider,
