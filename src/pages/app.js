@@ -1004,19 +1004,36 @@ function renderShell(container) {
         <!-- Public link -->
         <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:16px">
           <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">🔗 Public link</div>
-          <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Anyone with this link can view the recipe — no account needed.</div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <div id="share-link-display" style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              Tap Generate to create a link
-            </div>
-            <button id="share-link-btn" onclick="generateShareLink()"
-              style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:9px 14px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">
-              Generate
+          <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Anyone with this link can view the recipe — no account needed.</div>
+
+          <!-- Before a link exists: prominent "Generate and share" CTA that
+               creates the token AND immediately opens the native share sheet,
+               rather than making the user tap twice. -->
+          <button id="share-generate-btn" onclick="generateAndShareLink()"
+            style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:12px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer">
+            Create link & share
+          </button>
+
+          <!-- After a link exists: show the URL + a single Share button that
+               triggers native sheet (iOS) or clipboard fallback. No separate
+               Copy vs Share — they do the same thing now. -->
+          <div id="share-link-actions" style="display:none">
+            <div id="share-link-display" style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:10px"></div>
+            <button onclick="nativeShareRecipe()"
+              style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:12px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:8px">
+              ↗ Share link
             </button>
-          </div>
-          <div id="share-link-actions" style="display:none;gap:8px;margin-top:8px">
-            <button onclick="copyShareLink()" style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px;font-size:12px;font-family:inherit;cursor:pointer;color:var(--text)">📋 Copy link</button>
-            <button onclick="nativeShareRecipe()" style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px;font-size:12px;font-family:inherit;cursor:pointer;color:var(--text)">↗ Share</button>
+            <div style="display:flex;gap:8px">
+              <button onclick="regenerateShareLink()"
+                style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px;font-size:12px;font-family:inherit;cursor:pointer;color:var(--text2)"
+                title="Creates a new link. The old one stops working.">
+                🔄 Regenerate
+              </button>
+              <button onclick="stopSharingRecipeFromModal()"
+                style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px;font-size:12px;font-family:inherit;cursor:pointer;color:var(--red)">
+                Stop sharing
+              </button>
+            </div>
           </div>
         </div>
 
@@ -5990,20 +6007,20 @@ function wireGlobals() {
     document.getElementById('share-recipe-name').textContent = recipe.name
     document.getElementById('share-email-input').value = ''
     document.getElementById('share-send-status').textContent = ''
-    const linkDisplay = document.getElementById('share-link-display')
+    // Two mutually exclusive UI states:
+    //   - no token yet → show the "Create link & share" CTA
+    //   - token exists → show the URL + Share/Regenerate/Stop sharing
+    const generateBtn = document.getElementById('share-generate-btn')
     const linkActions = document.getElementById('share-link-actions')
-    const linkBtn = document.getElementById('share-link-btn')
+    const linkDisplay = document.getElementById('share-link-display')
     if (recipe.share_token) {
       const url = `${location.origin}/api/recipe/${recipe.share_token}`
-      linkDisplay.textContent = url
-      linkDisplay.style.color = 'var(--text)'
-      linkBtn.textContent = 'Regenerate'
-      linkActions.style.display = 'flex'
+      if (linkDisplay) linkDisplay.textContent = url
+      if (generateBtn) generateBtn.style.display = 'none'
+      if (linkActions) linkActions.style.display = ''
     } else {
-      linkDisplay.textContent = 'Tap Generate to create a link'
-      linkDisplay.style.color = 'var(--text3)'
-      linkBtn.textContent = 'Generate'
-      linkActions.style.display = 'none'
+      if (generateBtn) { generateBtn.style.display = ''; generateBtn.disabled = false; generateBtn.textContent = 'Create link & share' }
+      if (linkActions) linkActions.style.display = 'none'
     }
     document.getElementById('share-modal').classList.add('open')
   }
@@ -6013,50 +6030,133 @@ function wireGlobals() {
     state.sharingRecipeId = null
   }
 
-  window.generateShareLink = async () => {
-    const btn = document.getElementById('share-link-btn')
-    btn.textContent = 'Generating...'
-    btn.disabled = true
+  // One-tap flow for recipes that haven't been shared yet: generate the
+  // token AND immediately invoke the native share sheet. Saves the user
+  // from a "generate → now tap share" two-step.
+  window.generateAndShareLink = async () => {
+    const btn = document.getElementById('share-generate-btn')
+    if (btn) { btn.disabled = true; btn.textContent = 'Creating link...' }
     try {
-      // generateShareToken is now a thin alias over enableRecipeSharing;
-      // both use is_shared=true in the DB and /api/recipe/[token] to read.
       const token = await generateShareToken(state.user.id, state.sharingRecipeId)
       const recipe = state.recipes.find(r => r.id === state.sharingRecipeId)
       if (recipe) { recipe.share_token = token; recipe.is_shared = true }
       state.sharingToken = token
+      // Swap the UI to the "already shared" view so subsequent taps see
+      // the real URL and the Share/Regenerate/Stop options
       const url = `${location.origin}/api/recipe/${token}`
       const linkDisplay = document.getElementById('share-link-display')
-      linkDisplay.textContent = url
-      linkDisplay.style.color = 'var(--text)'
-      document.getElementById('share-link-actions').style.display = 'flex'
-      btn.textContent = 'Regenerate'
-    } catch (err) { showToast('Error: ' + err.message, 'error') }
-    btn.disabled = false
+      if (linkDisplay) linkDisplay.textContent = url
+      if (btn) btn.style.display = 'none'
+      const linkActions = document.getElementById('share-link-actions')
+      if (linkActions) linkActions.style.display = ''
+      // Immediately fire the native share sheet — this is what the user
+      // actually wanted when they tapped the CTA.
+      await window._shareLink({ title: recipe?.name || 'Recipe', url })
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+      if (btn) { btn.disabled = false; btn.textContent = 'Create link & share' }
+    }
   }
 
-  window.copyShareLink = async () => {
-    const url = `${location.origin}/api/recipe/${state.sharingToken}`
+  // Rotate the share token. Old URL stops working. Useful if a user
+  // accidentally shared with the wrong person and wants to revoke access.
+  window.regenerateShareLink = async () => {
+    const recipeId = state.sharingRecipeId
+    if (!recipeId) return
+    if (!confirm('Create a new link? The current link will stop working.')) return
+    try {
+      const token = await generateShareToken(state.user.id, recipeId)
+      const recipe = state.recipes.find(r => r.id === recipeId)
+      if (recipe) { recipe.share_token = token; recipe.is_shared = true }
+      state.sharingToken = token
+      const url = `${location.origin}/api/recipe/${token}`
+      const linkDisplay = document.getElementById('share-link-display')
+      if (linkDisplay) linkDisplay.textContent = url
+      showToast('New link created', 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  // Stop sharing (from inside the modal). Updates UI to show the "Create
+  // link & share" button again, and flips the recipe card's share button
+  // back to its unshared state.
+  window.stopSharingRecipeFromModal = async () => {
+    const recipeId = state.sharingRecipeId
+    if (!recipeId) return
+    if (!confirm('Stop sharing this recipe? The link will stop working.')) return
+    try {
+      await disableRecipeSharing(state.user.id, recipeId)
+      const recipe = state.recipes.find(r => r.id === recipeId)
+      if (recipe) { recipe.is_shared = false }
+      state.sharingToken = null
+      // Reset the modal UI to the pre-share state
+      const generateBtn = document.getElementById('share-generate-btn')
+      const linkActions = document.getElementById('share-link-actions')
+      if (generateBtn) { generateBtn.style.display = ''; generateBtn.disabled = false; generateBtn.textContent = 'Create link & share' }
+      if (linkActions) linkActions.style.display = 'none'
+      // Reset the card button if it exists
+      const btn = document.getElementById('share-btn-' + recipeId)
+      if (btn) {
+        btn.textContent = '🔗 Share'
+        btn.style.background = ''
+        btn.style.color = ''
+        btn.style.borderColor = ''
+      }
+      showToast('Stopped sharing', 'success')
+    } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  // Kept as an alias — older code may still reference generateShareLink
+  window.generateShareLink = window.generateAndShareLink
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Unified share helper. Every "share a link" action in the app goes
+  // through this. Behavior:
+  //   1. If navigator.share is available (iOS, most modern mobile), open
+  //      the native share sheet. Single tap → user picks Messages, Mail,
+  //      AirDrop, Copy, etc from the system UI.
+  //   2. If the user cancels the sheet (AbortError), silently do nothing.
+  //   3. If navigator.share is missing (some desktop browsers, older
+  //      WebViews), fall back to clipboard + toast.
+  //   4. If clipboard ALSO fails (rare, usually perms), surface the URL
+  //      in a toast so the user can copy it manually.
+  //
+  // We deliberately pass ONLY { title, url } to navigator.share. Adding
+  // a `text` field causes the iOS share sheet's Copy action to copy the
+  // text instead of the URL — which breaks the single most common use
+  // case ("send me the link").
+  async function shareLink({ title, url }) {
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, url })
+        return
+      } catch (err) {
+        // User dismissed the sheet — that's not a failure, just stop
+        if (err?.name === 'AbortError') return
+        // Anything else: fall through to clipboard as a last resort
+      }
+    }
     try {
       await navigator.clipboard.writeText(url)
       showToast('Link copied!', 'success')
-    } catch { showToast('Copy: ' + url, '') }
+    } catch {
+      showToast('Copy: ' + url, '')
+    }
+  }
+  // Export for any window.* handler that needs it
+  window._shareLink = shareLink
+
+  window.copyShareLink = async () => {
+    // Kept for backward compat but routes through the unified helper now
+    await shareLink({
+      title: state.recipes.find(r => r.id === state.sharingRecipeId)?.name || 'Recipe',
+      url: `${location.origin}/api/recipe/${state.sharingToken}`,
+    })
   }
 
   window.nativeShareRecipe = async () => {
-    const recipe = state.recipes.find(r => r.id === state.sharingRecipeId)
-    const url = `${location.origin}/api/recipe/${state.sharingToken}`
-    if (navigator.share) {
-      // No `text` field on purpose — iOS share sheet's Copy action copies
-      // the text instead of the URL when both are provided, leaving users
-      // with a useless string instead of a link. { title, url } keeps
-      // Copy copying the URL while still giving preview-capable targets
-      // (Messages, Mail) a useful title. See shareCopyBroadcastLink for
-      // the full explanation.
-      try { await navigator.share({ title: recipe?.name || 'Recipe', url }) }
-      catch (err) { if (err?.name !== 'AbortError') copyShareLink() }
-    } else {
-      copyShareLink()
-    }
+    // Identical to copyShareLink now — kept as a separate name for any
+    // inline onclick= that still references it.
+    await window.copyShareLink()
   }
 
   window.sendRecipeToUser = async () => {
@@ -6112,60 +6212,40 @@ function wireGlobals() {
     if (!recipe) return
     const btn = document.getElementById('share-btn-' + recipeId)
 
-    // If already shared, show options: copy link or stop sharing
-    if (recipe.is_shared && recipe.share_token) {
-      const url = `${window.location.origin}/api/recipe/${recipe.share_token}`
-      // Show inline menu
-      const existing = document.getElementById('share-menu')
-      if (existing) { existing.remove(); return }
-      const menu = document.createElement('div')
-      menu.id = 'share-menu'
-      menu.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:16px;z-index:9999;width:280px;box-shadow:0 8px 32px rgba(0,0,0,0.5)'
-      menu.innerHTML = `
-        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">Share recipe</div>
-        <div style="font-size:12px;color:var(--text3);background:var(--bg3);padding:8px;border-radius:6px;margin-bottom:12px;word-break:break-all">${url}</div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <button onclick="navigator.clipboard.writeText('${url}').then(()=>showToast('Link copied!','success'));document.getElementById('share-menu').remove()"
-            style="padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
-            Copy link
-          </button>
-          <button onclick="stopSharingRecipe('${recipeId}');document.getElementById('share-menu').remove()"
-            style="padding:10px;background:var(--bg3);color:var(--red);border:1px solid var(--border2);border-radius:var(--r);font-size:13px;font-family:inherit;cursor:pointer">
-            Stop sharing
-          </button>
-          <button onclick="document.getElementById('share-menu').remove()"
-            style="padding:10px;background:none;color:var(--text3);border:none;font-size:13px;font-family:inherit;cursor:pointer">
-            Cancel
-          </button>
-        </div>`
-      document.body.appendChild(menu)
-      // Close on outside click
-      setTimeout(() => document.addEventListener('click', function h(e) {
-        if (!menu.contains(e.target) && e.target !== btn) { menu.remove(); document.removeEventListener('click', h) }
-      }), 100)
-      return
+    // Ensure the recipe has a share token. If already shared, reuse it.
+    // Otherwise, generate one now. Either way we end at "I have a URL."
+    let token = recipe.share_token
+    if (!recipe.is_shared || !token) {
+      try {
+        if (btn) { btn.textContent = '⏳'; btn.disabled = true }
+        token = await enableRecipeSharing(state.user.id, recipeId)
+        recipe.is_shared = true
+        recipe.share_token = token
+      } catch (err) {
+        showToast('Error: ' + err.message, 'error')
+        if (btn) { btn.textContent = '🔗 Share'; btn.disabled = false }
+        return
+      }
     }
 
-    // Not yet shared — enable sharing
-    try {
-      if (btn) { btn.textContent = '⏳'; btn.disabled = true }
-      const token = await enableRecipeSharing(state.user.id, recipeId)
-      recipe.is_shared = true
-      recipe.share_token = token
-      const url = `${window.location.origin}/api/recipe/${token}`
-      await navigator.clipboard.writeText(url)
-      showToast('Link copied to clipboard!', 'success')
-      if (btn) {
-        btn.textContent = '🔗 Shared'
-        btn.style.background = 'rgba(76,175,130,0.15)'
-        btn.style.color = 'var(--protein)'
-        btn.style.borderColor = 'var(--protein)'
-        btn.disabled = false
-      }
-    } catch (err) {
-      showToast('Error: ' + err.message, 'error')
-      if (btn) { btn.textContent = '🔗 Share'; btn.disabled = false }
+    // Flip the button to its "shared" visual state (does nothing on first
+    // render if already shared, but matches the previous UX where sharing
+    // a fresh recipe made the button turn green)
+    if (btn) {
+      btn.textContent = '🔗 Shared'
+      btn.style.background = 'rgba(76,175,130,0.15)'
+      btn.style.color = 'var(--protein)'
+      btn.style.borderColor = 'var(--protein)'
+      btn.disabled = false
     }
+
+    // Hand off to the unified share helper — native sheet on mobile,
+    // clipboard fallback on desktop. Single code path for every share
+    // action in the app.
+    await window._shareLink({
+      title: recipe.name || 'Recipe',
+      url: `${window.location.origin}/api/recipe/${token}`,
+    })
   }
 
   window.stopSharingRecipe = async (recipeId) => {
@@ -6913,38 +6993,10 @@ function wireGlobals() {
       showToast('This plan has no public link yet', 'error')
       return
     }
-    const url = `${window.location.origin}/api/plan/${broadcast.share_token}`
-    const title = broadcast.title || 'Meal plan'
-
-    // Try the native share sheet first — best UX on mobile, where most
-    // of our users live. navigator.share can reject if the user dismisses
-    // the sheet, which is NOT an error we want to surface as "share failed".
-    //
-    // Why no `text` field: iOS share sheet's "Copy" action copies the text
-    // when both text AND url are provided, which leaves the user with a
-    // string like "Check out this meal plan: Cut Week" and no actual link.
-    // Passing only { title, url } makes Copy do the right thing, and other
-    // share targets still get a good preview via og:title + og:description
-    // on the public page.
-    if (navigator.share) {
-      try {
-        await navigator.share({ title, url })
-        return
-      } catch (err) {
-        // AbortError = user tapped cancel. Everything else = actual failure,
-        // fall through to clipboard.
-        if (err?.name === 'AbortError') return
-      }
-    }
-
-    // Clipboard fallback for desktop / browsers without share API
-    try {
-      await navigator.clipboard.writeText(url)
-      showToast('Link copied!', 'success')
-    } catch {
-      // Ancient browser path — show the URL for manual copying
-      showToast('Copy: ' + url, '')
-    }
+    await window._shareLink({
+      title: broadcast.title || 'Meal plan',
+      url: `${window.location.origin}/api/plan/${broadcast.share_token}`,
+    })
   }
 
   window.toggleAllCopyMeals = (checked) => {
@@ -7630,14 +7682,17 @@ function wireGlobals() {
     }
   }
 
-  window.shareBroadcastLink = (token, btn) => {
-    const url = `${window.location.origin}/api/plan/${token}`
-    navigator.clipboard.writeText(url).then(() => {
-      if (btn) { btn.textContent = '✓ Copied!'; setTimeout(() => btn.textContent = '🔗 Share link', 2000) }
-    }).catch(() => {
-      // Fallback for browsers that block clipboard
-      prompt('Copy this link:', url)
+  window.shareBroadcastLink = async (token, btn) => {
+    // Route through the unified helper so behavior matches every other
+    // share action: native share sheet on mobile, clipboard fallback on
+    // desktop. The broadcast title is fetched from state so the share
+    // preview on Messages/Mail includes a meaningful name.
+    const broadcast = (state.myBroadcasts || []).find(b => b.share_token === token)
+    await window._shareLink({
+      title: broadcast?.title || 'Meal plan',
+      url: `${window.location.origin}/api/plan/${token}`,
     })
+    if (btn) { btn.textContent = '✓ Shared'; setTimeout(() => btn.textContent = '🔗 Share link', 2000) }
   }
 
   window.toggleBroadcastPublished = async (id, currentlyPublished) => {

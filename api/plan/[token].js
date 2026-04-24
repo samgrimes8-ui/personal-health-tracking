@@ -261,17 +261,27 @@ export default async function handler(req, res) {
   <div class="cta">
     <div class="cta-inner">
       <a href="${appUrl}" class="btn-primary">📲 Add to my meal plan</a>
-      <button class="btn-copy" onclick="copyLink()">🔗 Copy link</button>
+      <button class="btn-copy" onclick="sharePlan()">↗ Share</button>
     </div>
   </div>
 
   <script>
-    function copyLink() {
-      navigator.clipboard.writeText('${shareUrl}').then(() => {
+    // Native share sheet when available (iOS/Android), clipboard fallback
+    // otherwise. Title only — no text field, since iOS Copy action would
+    // grab the text instead of the URL.
+    async function sharePlan() {
+      const url = ${JSON.stringify(shareUrl)}
+      const title = ${JSON.stringify(broadcast.title || 'Meal plan')}
+      if (navigator.share) {
+        try { await navigator.share({ title, url }); return }
+        catch (err) { if (err && err.name === 'AbortError') return }
+      }
+      try {
+        await navigator.clipboard.writeText(url)
         const btn = document.querySelector('.btn-copy')
         btn.textContent = '✓ Copied!'
-        setTimeout(() => btn.textContent = '🔗 Copy link', 2000)
-      })
+        setTimeout(() => btn.textContent = '↗ Share', 2000)
+      } catch {}
     }
   </script>
 </body>
