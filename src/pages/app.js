@@ -8956,15 +8956,32 @@ function wireGlobals() {
     const btn = document.getElementById('import-link-btn')
     const status = document.getElementById('import-link-status')
     if (btn) { btn.disabled = true; btn.textContent = 'Importing...' }
-    if (status) status.textContent = 'Searching for recipe...'
+    if (status) { status.style.color = 'var(--text3)'; status.textContent = 'Searching for recipe...' }
     try {
       const result = await analyzeDishBySearch(dish || url, url)
-      if (!result) throw new Error('No recipe found')
+      if (!result) throw new Error('No recipe found in the response')
       state.editingRecipe = { ...state.editingRecipe, ...result, source_url: url || '' }
       document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
       showToast('Recipe imported — review and save', 'success')
     } catch (err) {
-      if (status) status.textContent = 'Could not import — try a different link or dish name'
+      // Surface the error everywhere so it's impossible to miss AND so we
+      // get log breadcrumbs. Previous version swallowed the error to an
+      // inline status line that was easy to miss, and didn't record
+      // anything to error_logs — which made "silent fail" reports
+      // impossible to debug.
+      const msg = err?.message || 'Unknown error'
+      console.error('[importRecipeFromLink] failed:', err)
+      logError(state.user?.id, err, {
+        context: 'import_recipe_from_link',
+        page: state.currentPage,
+        url: url || null,
+        dish: dish || null,
+      })
+      if (status) {
+        status.style.color = 'var(--red)'
+        status.textContent = 'Could not import: ' + msg
+      }
+      showToast('Could not import recipe: ' + msg, 'error')
       if (btn) { btn.disabled = false; btn.textContent = 'Import recipe' }
     }
   }
