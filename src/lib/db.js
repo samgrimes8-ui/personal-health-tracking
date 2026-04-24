@@ -963,12 +963,28 @@ export async function uploadProviderAvatar(userId, file) {
   return data.publicUrl + '?t=' + Date.now() // cache bust
 }
 
+// Roles considered "currently active as a provider". A user shows up
+// on the Providers page only if both conditions hold: they've been marked
+// is_provider=true AND their role is one that permits serving clients.
+//
+// Why the dual check: is_provider is a persistent flag (they set up a
+// provider profile) while role is a permission tier (admin/dietitian/
+// coach/premium get unlimited AI, free does not). A user can be demoted
+// from dietitian → free for billing or account reasons without us also
+// tearing down their provider profile, and vice versa.
+//
+// Shared broadcasts (meal plan links already distributed) are NOT gated
+// on this — they're keyed on share_token only. So demoting a provider
+// hides them from discovery but their existing links still work forever.
+const ACTIVE_PROVIDER_ROLES = ['admin', 'dietitian', 'coach', 'premium']
+
 export async function getProviders() {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('user_profiles')
     .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, provider_avatar_url, role, email')
     .eq('is_provider', true)
+    .in('role', ACTIVE_PROVIDER_ROLES)
     .order('provider_name')
   if (error) throw error
   return data ?? []
@@ -981,6 +997,7 @@ export async function getProviderBySlug(slug) {
     .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, role')
     .eq('provider_slug', slug)
     .eq('is_provider', true)
+    .in('role', ACTIVE_PROVIDER_ROLES)
     .maybeSingle()
   return data
 }
@@ -1058,10 +1075,17 @@ export async function getFollowedProviders(userId) {
     .eq('follower_id', userId)
   if (error || !data?.length) return []
   const ids = data.map(r => r.provider_id)
+  // Same filter as getProviders — if a provider is inactive (demoted role,
+  // or flipped is_provider=false), they shouldn't appear in the follower's
+  // Following list either. The provider_follows row itself stays so if
+  // they're re-promoted, the follow relationship auto-resurfaces with no
+  // data loss. Symmetric with how the directory works.
   const { data: profiles } = await supabase
     .from('user_profiles')
     .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, role')
     .in('user_id', ids)
+    .eq('is_provider', true)
+    .in('role', ACTIVE_PROVIDER_ROLES)
   return profiles ?? []
 }
 
