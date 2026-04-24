@@ -328,7 +328,7 @@ export async function getUsageSummary(userId) {
   // Map role → default monthly cap. Admin is unlimited (null). Everyone
   // else has a ceiling tied to their tier. Per-user override via
   // spending_limit_usd column is respected if set (null means "use default").
-  const ROLE_CAPS = { free: 0.30, premium: 10.00, provider: 50.00, admin: null }
+  const ROLE_CAPS = { free: 0.10, premium: 10.00, provider: 50.00, admin: null }
   const defaultCap = ROLE_CAPS[role] ?? ROLE_CAPS.free
   const overrideCap = profile.spending_limit_usd != null ? parseFloat(profile.spending_limit_usd) : null
   const limit = overrideCap ?? defaultCap
@@ -356,9 +356,7 @@ export async function getUsageSummary(userId) {
   const limitBucks = isUnlimited || limit == null ? null : usdToBucks(limit)
   const remainingBucks = isUnlimited || limit == null
     ? null
-    : Math.max(0, usdToBucks(limit) - spentBucks)
-
-  // Is the admin override currently active? Same logic mirroring the
+    : Math.max(0, usdToBucks(limit) - spentBucks)  // Is the admin override currently active? Same logic mirroring the
   // server-side check_spend_limit RPC so the UI can accurately show
   // "Custom allotment active" badges.
   const hasOverride = profile.spending_limit_usd != null

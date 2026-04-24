@@ -1235,13 +1235,43 @@ function renderShell(container) {
 // ─── Page Routing ─────────────────────────────────────────────────────────────
 // ─── Tier helpers ─────────────────────────────────────────────────────────────
 function userCanAccess(feature) {
-  // Anyone paid or elevated gets the full app. Free tier is restricted
-  // to the basics below.
+  // Anyone paid or elevated gets the full app.
   const role = state.usage?.role || 'free'
   if (role === 'admin' || role === 'premium' || role === 'provider') return true
-  // Free tier: core personal-use features only
-  const freeFeatures = ['log', 'history', 'account']
-  return freeFeatures.includes(feature)
+
+  // Free tier access rules (Nov 2025 rewrite):
+  //
+  // The old model gated entire pages (Recipes/Planner/Goals/Foods) behind
+  // Premium. That killed the demo — users never saw the gated features,
+  // so they never knew what they were paying for. The new model:
+  //
+  // 1. Free users can visit and browse almost everything. They can save
+  //    recipes manually, plan meals by dragging, set goals, etc.
+  // 2. The paywall kicks in at the POINT OF AI CONSUMPTION (photo scan,
+  //    URL import, barcode lookup) — when AI Bucks run out, the upgrade
+  //    modal appears. Storage/DB writes are always free.
+  // 3. A couple of features remain fully Premium-gated because they're
+  //    categorically AI-heavy: grocery list generation aggregates and
+  //    deduplicates ingredients across planned meals using an LLM.
+  //
+  // The `grocery` feature-tag is checked from within the Planner page's
+  // tab switcher (not here at the routing level), so it doesn't need to
+  // be listed in freeFeatures — Planner itself is accessible, grocery
+  // just isn't.
+  const premiumOnlyFeatures = ['upgrade'] // upgrade page is special-cased elsewhere
+  return !premiumOnlyFeatures.includes(feature)
+}
+
+// Specific feature-level gates that are premium-only even though their
+// parent page is accessible to free users. These are the AI-heaviest
+// flows where letting free users dip in would blow through the 100
+// AI Bucks allotment almost immediately.
+function isPremiumOnlyFeature(featureId) {
+  const PREMIUM_ONLY = new Set([
+    'grocery',  // Grocery list generation — full LLM pass over planned meals
+  ])
+  if (state.usage?.role === 'admin' || state.usage?.role === 'premium' || state.usage?.role === 'provider') return false
+  return PREMIUM_ONLY.has(featureId)
 }
 
 function renderUpgradePage(container, feature) {
@@ -1447,10 +1477,13 @@ function renderDashboard(container) {
 
     ${renderDashboardAnalyticsWidget()}
 
-    <!-- Quick log — above analyze -->
+    <!-- Quick log — above analyze. For free users, we highlight that
+         this is the AI-free path so they understand they can log meals
+         without burning through their 100 AI Bucks. Quick Log just
+         writes to the DB, no Anthropic call. -->
     <div class="log-card" style="margin-bottom:16px">
       <div class="log-header">
-        <span class="log-header-title">Quick log</span>
+        <span class="log-header-title">Quick log ${state.usage?.isFree ? '<span style="font-size:10px;margin-left:6px;padding:2px 8px;background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;font-weight:500;letter-spacing:0">⚡ Free · No AI</span>' : ''}</span>
         <span style="font-size:11px;color:var(--text3)">from recipes & history</span>
       </div>
       <div style="padding:12px 16px">
@@ -1463,7 +1496,10 @@ function renderDashboard(container) {
     <!-- Analyze food -->
     <div class="two-col">
       <div class="upload-card">
-        <div class="section-title">Analyze food</div>
+        <div class="section-title" style="display:flex;align-items:center;gap:8px">
+          <span>Analyze food</span>
+          ${state.usage?.isFree ? '<span style="font-size:10px;padding:2px 8px;background:rgba(232,197,71,0.12);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:999px;font-weight:500">⚡ Uses AI Bucks</span>' : ''}
+        </div>
         <!-- Top-level: just Food vs Recipe. Everything else is nested. -->
         <div class="mode-tabs">
           <button class="mode-tab ${state.currentMode === 'food' ? 'active' : ''}" data-mode="food" onclick="switchMode('food')">🍎 Food</button>
@@ -1861,7 +1897,7 @@ async function renderPlanner(container) {
     <!-- Planner / Grocery tabs -->
     <div style="display:flex;gap:4px;margin-bottom:20px;margin-top:16px">
       <button class="mode-tab ${state.plannerView !== 'grocery' ? 'active' : ''}" onclick="setPlannerView('meals')" style="flex:0 0 auto;padding:8px 18px">📅 Meal plan</button>
-      <button class="mode-tab ${state.plannerView === 'grocery' ? 'active' : ''}" onclick="setPlannerView('grocery')" style="flex:0 0 auto;padding:8px 18px">🛒 Grocery list</button>
+      <button class="mode-tab ${state.plannerView === 'grocery' ? 'active' : ''}" onclick="setPlannerView('grocery')" style="flex:0 0 auto;padding:8px 18px">🛒 Grocery list${isPremiumOnlyFeature('grocery') ? ' <span style=\"font-size:10px;opacity:0.7;margin-left:4px\">⭐</span>' : ''}</button>
     </div>
 
     ${state.plannerView === 'grocery' ? '<div id="grocery-placeholder"><div class="log-empty">Loading grocery list...</div></div>' : renderMealPlanView(planner)}
@@ -8002,8 +8038,37 @@ function wireGlobals() {
 
   // ── Planner view / week navigation ─────────────────────────────
   window.setPlannerView = (view) => {
+    // Grocery is premium-only. Free users tapping it get the upgrade
+    // modal instead of switching the view, since generating a grocery
+    // list triggers a full LLM pass to aggregate/deduplicate ingredients.
+    if (view === 'grocery' && isPremiumOnlyFeature('grocery')) {
+      if (typeof window.openLimitReachedModal === 'function') {
+        // Reuse the same modal but override the copy for a feature-gate
+        // (no AI Bucks spent — they just don't have access).
+        openFeatureGatedModal('Grocery list')
+      } else {
+        switchPage('upgrade')
+      }
+      return
+    }
     state.plannerView = view
     renderPage()
+  }
+
+  // Feature-gate modal (distinct from limit-reached). Used when a free
+  // user tries a premium-only feature — the grocery list generator is
+  // the first such example. Shares a lot of styling with openLimitReachedModal
+  // but different copy: 'this is a Premium feature' vs 'you ran out'.
+  window.openFeatureGatedModal = (featureName) => {
+    const modal = document.getElementById('limit-reached-modal')
+    if (!modal) { switchPage('upgrade'); return }
+    const subtitle = document.getElementById('limit-reached-subtitle')
+    const usage = document.getElementById('limit-reached-usage')
+    const titleEl = modal.querySelector('h3')
+    if (titleEl) titleEl.textContent = `${featureName} is a Premium feature`
+    if (subtitle) subtitle.textContent = `Upgrade to Premium to unlock ${featureName} and ${bucksCount(10.00)} AI Bucks every month.`
+    if (usage) usage.textContent = ''
+    modal.classList.add('open')
   }
 
   window.toggleCalendar = () => {
@@ -10680,7 +10745,7 @@ function wireGlobals() {
       // upgrade pitch, a premium user (who hit their higher cap) gets a
       // "your month reset is coming" message.
       if (state.usage?.isFree) {
-        subtitle.textContent = "You've used all your AI Bucks for the month. Upgrade to Premium for 10,000 AI Bucks every month."
+        subtitle.textContent = `You've used all your AI Bucks for the month. Upgrade to Premium for ${bucksCount(10.00)} AI Bucks every month — or keep logging meals with Quick Log (no AI needed).`
       } else {
         subtitle.textContent = "You've used all your AI Bucks for this month. Your allotment resets on the 1st."
       }
