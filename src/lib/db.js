@@ -334,10 +334,19 @@ export async function getUsageSummary(userId) {
   const limit = overrideCap ?? defaultCap
   const isUnlimited = limit == null
 
-  // Provider status is now purely role-based. 'provider' and 'admin' count
-  // as providers for discoverability / channel-ownership purposes. The
-  // standalone is_provider column is being deleted.
-  const isProvider = role === 'provider' || role === 'admin'
+  // Provider status is role + data. Just being role='admin' isn't enough
+  // to count as a "provider" for UI purposes — we also require a
+  // provider_name, meaning the user has actually set up a provider
+  // profile. This separates "I have admin powers" from "I run a channel".
+  //
+  // Matrix:
+  //   role='provider' + no name        → not yet discoverable; still needs setup
+  //   role='admin'    + no name        → admin without a channel (e.g. internal ops)
+  //   role='provider' + name           → active provider, discoverable
+  //   role='admin'    + name           → admin who also runs a channel
+  //   role='free'/'premium' + anything → not a provider
+  const hasProviderProfile = !!(profile.provider_name && profile.provider_name.trim())
+  const isProvider = hasProviderProfile && (role === 'provider' || role === 'admin')
 
   // Compute user-facing AI Bucks (1000x multiplier). We expose these as
   // *additional* fields alongside the raw dollar amounts — UI reads Bucks
@@ -1081,6 +1090,7 @@ export async function getProviderBySlug(slug) {
     .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, credentials, role')
     .eq('provider_slug', slug)
     .in('role', ACTIVE_PROVIDER_ROLES)
+    .not('provider_name', 'is', null)
     .maybeSingle()
   return data
 }
@@ -1168,6 +1178,7 @@ export async function getFollowedProviders(userId) {
     .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, credentials, role')
     .in('user_id', ids)
     .in('role', ACTIVE_PROVIDER_ROLES)
+    .not('provider_name', 'is', null)
   return profiles ?? []
 }
 

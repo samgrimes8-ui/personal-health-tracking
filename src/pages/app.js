@@ -61,6 +61,7 @@ let state = {
   recipeSearch: '',
   recipeActiveTag: '', // '' = all recipes; otherwise filter to that tag
   providerSearch: '',
+  providersTab: 'browse', // 'browse' | 'mychannel' — tabs shown only for users with a provider channel
   analyticsRange: 30, // default range for analytics page (days)
   planner: { meals: Array(7).fill(null).map(() => []) },
   usage: { spent: 0, limit: 10, remaining: 10, tokens: 0, requests: 0, isAdmin: false, isUnlimited: false, isProvider: false },
@@ -3910,13 +3911,19 @@ function renderProvidersPage(container) {
   const myProviders = myProvidersAll.filter(matchProvider)
   const allProviders = allProvidersAll.filter(matchProvider)
 
-  container.innerHTML = `
-    <div class="greeting">${isProvider ? 'My Channel' : 'Providers'}</div>
-    <div class="greeting-sub">${isProvider ? 'Manage your broadcasts and client plans.' : 'Follow dietitians and coaches — copy their meal plans to your week.'}</div>
+  // Tab state: providers can toggle between browsing the directory and
+  // managing their own channel. Non-providers don't see tabs — they just
+  // see the directory. Default tab is 'browse' (per product decision):
+  // a provider opening the Providers page probably wants to see peers.
+  const tab = state.providersTab || 'browse'
 
-    ${isProvider ? renderMyProviderChannel() : ''}
-
-    ${!isProvider ? `
+  // The directory view — shared between non-providers (the whole page)
+  // and providers-on-browse-tab (one of two tabs). Also filters out the
+  // current user's own provider row so you don't see yourself in the list.
+  const directoryHtml = (() => {
+    const mineFiltered = myProviders.filter(p => p.user_id !== state.user.id)
+    const allFiltered = allProviders.filter(p => p.user_id !== state.user.id)
+    return `
       ${allProvidersAll.length ? `
         <div style="margin-bottom:16px">
           <input class="planner-search" id="provider-search" placeholder="Search providers by name or specialty..."
@@ -3926,25 +3933,23 @@ function renderProvidersPage(container) {
         </div>
       ` : ''}
 
-      <!-- Followed providers -->
-      ${myProviders.length ? `
-        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Following (${myProviders.length}${q ? ` · filtered` : ''})</div>
+      ${mineFiltered.length ? `
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Following (${mineFiltered.length}${q ? ` · filtered` : ''})</div>
         <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:24px">
-          ${myProviders.map(p => renderProviderCard(p, true)).join('')}
+          ${mineFiltered.map(p => renderProviderCard(p, true)).join('')}
         </div>
       ` : ''}
 
-      <!-- Discover providers -->
       <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">
-        ${myProviders.length ? 'All providers' : 'Discover providers'}
+        ${mineFiltered.length ? 'All providers' : 'Discover providers'}
       </div>
       ${(() => {
-        const unfollowed = allProviders.filter(p => !myProvidersAll.some(f => f.user_id === p.user_id))
+        const unfollowed = allFiltered.filter(p => !myProvidersAll.some(f => f.user_id === p.user_id))
         return unfollowed.length ? `
           <div style="display:flex;flex-direction:column;gap:10px">
             ${unfollowed.map(p => renderProviderCard(p, false)).join('')}
           </div>
-        ` : myProviders.length ? (q && !unfollowed.length ? `
+        ` : mineFiltered.length ? (q ? `
           <div class="upload-card" style="text-align:center;padding:24px;color:var(--text3);font-size:13px">
             No other providers match "${esc(q)}"
           </div>
@@ -3956,11 +3961,40 @@ function renderProvidersPage(container) {
           </div>
         `
       })()}
+    `
+  })()
+
+  // Tab pill button factory. Used only when isProvider=true.
+  const tabPill = (id, label) => {
+    const active = tab === id
+    return `
+      <button onclick="switchProvidersTab('${id}')"
+        style="flex:1;padding:10px 14px;background:${active ? 'var(--bg3)' : 'transparent'};border:1px solid ${active ? 'var(--border2)' : 'transparent'};color:${active ? 'var(--text)' : 'var(--text3)'};border-radius:var(--r);font-size:13px;font-weight:${active ? '600' : '500'};font-family:inherit;cursor:pointer;transition:all 0.15s">
+        ${label}
+      </button>
+    `
+  }
+
+  container.innerHTML = `
+    <div class="greeting">Providers</div>
+    <div class="greeting-sub">${isProvider ? 'Browse other providers or manage your channel.' : 'Follow dietitians and coaches — copy their meal plans to your week.'}</div>
+
+    ${isProvider ? `
+      <!-- Tab switcher — only shown to users with a provider channel -->
+      <div style="display:flex;gap:6px;margin-bottom:20px;background:var(--bg2);border:1px solid var(--border);border-radius:calc(var(--r) + 2px);padding:4px">
+        ${tabPill('browse', '🔍 Browse')}
+        ${tabPill('mychannel', '📡 My Channel')}
+      </div>
     ` : ''}
+
+    ${isProvider && tab === 'mychannel' ? renderMyProviderChannel() : directoryHtml}
   `
 
-  // Load broadcasts for followed providers
-  if (!isProvider) loadFollowedBroadcasts()
+  // Load broadcasts for followed providers whenever we're showing the
+  // directory (non-providers always; providers on the Browse tab). This
+  // populates the 'No plans published yet' / '[Preview & copy]' buttons
+  // on each followed-provider card.
+  if (!isProvider || tab === 'browse') loadFollowedBroadcasts()
 }
 
 function renderProviderCard(p, isFollowing) {
@@ -6498,6 +6532,16 @@ function wireGlobals() {
         input.setSelectionRange(len, len)
       }
     }, 0)
+  }
+
+  // Tab switcher for the Providers page. Only wired up when the user has
+  // a provider channel (state.usage.isProvider) — free/premium users
+  // don't see the tabs at all. State lives on the global state object so
+  // it survives re-renders; defaults to 'browse' because a provider
+  // opening the Providers page usually wants to see peers.
+  window.switchProvidersTab = (tab) => {
+    state.providersTab = tab
+    renderProvidersPage(document.getElementById('main-content'))
   }
 
   document.getElementById('broadcast-modal')?.addEventListener('click', e => {
