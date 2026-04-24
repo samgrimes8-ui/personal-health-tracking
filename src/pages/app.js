@@ -10,7 +10,7 @@ import {
   saveRecipeInstructions, autoSaveFoodItem,
   logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs,
   getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, deleteCheckin, uploadScanFile, getScanUrl,
-  generateShareToken, shareRecipeWithUser, getIncomingShares, markShareRead, getUnreadShareCount,
+  generateShareToken,
   enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary, getRecipeByIdPublic,
   saveRecipeOgCache, setUserRole,
   getProviders, getProviderBroadcasts, saveBroadcast, deleteBroadcast,
@@ -51,7 +51,6 @@ let state = {
   followedProviders: [],
   myBroadcasts: [],
   recipeMode: 'write',    // 'write' | 'snap'  (link input merged into 'write')
-  incomingShares: [],
   units: null, // set on init from locale
   newUsersCount: 0,
   editingFoodItem: null,
@@ -191,7 +190,7 @@ export async function initApp(user, container) {
 async function loadAll() {
   const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
 
-  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner, bodyMetrics, checkins, incomingShares, providers, followedProviders] = await Promise.all([
+  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner, bodyMetrics, checkins, providers, followedProviders] = await Promise.all([
     safe(() => getGoals(state.user.id)),
     safe(() => getMealLog(state.user.id, { limit: 300 })),
     safe(() => getUsageSummary(state.user.id)),
@@ -201,7 +200,6 @@ async function loadAll() {
     safe(() => getPlannerWeek(state.user.id, getWeekStart())),
     safe(() => getBodyMetrics(state.user.id)),
     safe(() => getCheckins(state.user.id)),
-    safe(() => getIncomingShares(state.user.id)),
     safe(() => getProviders()),
     safe(() => getFollowedProviders(state.user.id)),
   ])
@@ -214,7 +212,6 @@ async function loadAll() {
   if (todayPlanner) state.planner = todayPlanner
   state.bodyMetrics = bodyMetrics
   state.checkins = checkins ?? []
-  state.incomingShares = incomingShares ?? []
   state.providers = providers ?? []
   state.followedProviders = followedProviders ?? []
   // If user is a provider, load their broadcasts
@@ -991,68 +988,6 @@ function renderShell(container) {
             Will also be added to <span id="leftover-day-label">Monday</span> as lunch
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- Recipe share modal -->
-    <div class="modal-overlay" id="share-modal">
-      <div class="modal-box" style="max-width:440px">
-        <button class="modal-close" onclick="closeShareModal()">×</button>
-        <h3>Share recipe</h3>
-        <div style="font-size:13px;color:var(--text3);margin-bottom:16px" id="share-recipe-name"></div>
-
-        <!-- Public link -->
-        <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:16px">
-          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">🔗 Public link</div>
-          <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Anyone with this link can view the recipe — no account needed.</div>
-
-          <!-- Before a link exists: prominent "Generate and share" CTA that
-               creates the token AND immediately opens the native share sheet,
-               rather than making the user tap twice. -->
-          <button id="share-generate-btn" onclick="generateAndShareLink()"
-            style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:12px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer">
-            Create link & share
-          </button>
-
-          <!-- After a link exists: show the URL + a single Share button that
-               triggers native sheet (iOS) or clipboard fallback. No separate
-               Copy vs Share — they do the same thing now. -->
-          <div id="share-link-actions" style="display:none">
-            <div id="share-link-display" style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:10px"></div>
-            <button onclick="nativeShareRecipe()"
-              style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:12px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:8px">
-              ↗ Share link
-            </button>
-            <div style="display:flex;gap:8px">
-              <button onclick="regenerateShareLink()"
-                style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px;font-size:12px;font-family:inherit;cursor:pointer;color:var(--text2)"
-                title="Creates a new link. The old one stops working.">
-                🔄 Regenerate
-              </button>
-              <button onclick="stopSharingRecipeFromModal()"
-                style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:8px;font-size:12px;font-family:inherit;cursor:pointer;color:var(--red)">
-                Stop sharing
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Send to user -->
-        <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:16px">
-          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">👤 Send to MacroLens user</div>
-          <div style="font-size:12px;color:var(--text3);margin-bottom:10px">Recipe will appear in their Recipes page.</div>
-          <div style="display:flex;gap:8px">
-            <input type="email" id="share-email-input" placeholder="their@email.com"
-              style="flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
-            <button onclick="sendRecipeToUser()"
-              style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:9px 14px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer">
-              Send
-            </button>
-          </div>
-          <div id="share-send-status" style="font-size:12px;color:var(--text3);margin-top:6px;min-height:18px"></div>
-        </div>
-
-        <button onclick="closeShareModal()" class="btn-cancel" style="width:100%">Done</button>
       </div>
     </div>
 
@@ -2895,9 +2830,6 @@ function renderRecipesPage(container) {
 
   const untaggedCount = allRecipes.filter(r => !(Array.isArray(r.tags) && r.tags.length)).length
 
-  const unreadShares = (state.incomingShares || []).filter(s => !s.is_read)
-  const allShares = state.incomingShares || []
-
   const pill = (label, tagValue, count, isActive) => `
     <button onclick="setRecipeTag('${tagValue.replace(/'/g,"\\'")}')"
       style="flex-shrink:0;padding:6px 14px;border-radius:999px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border2)'};background:${isActive ? 'rgba(234,203,87,0.15)' : 'var(--bg3)'};color:${isActive ? 'var(--accent)' : 'var(--text2)'};transition:all 0.15s;white-space:nowrap"
@@ -2910,29 +2842,6 @@ function renderRecipesPage(container) {
   container.innerHTML = `
     <div class="greeting">Recipes</div>
     <div class="greeting-sub">Saved recipes with ingredients and macros per serving.</div>
-
-    ${allShares.length ? `
-    <div class="log-card" style="margin-bottom:16px">
-      <div class="log-header">
-        <span class="log-header-title">📬 Shared with me ${unreadShares.length ? `<span style="background:var(--red);color:white;border-radius:999px;font-size:10px;padding:1px 6px;margin-left:6px">${unreadShares.length} new</span>` : ''}</span>
-      </div>
-      <div style="padding:4px 0">
-        ${allShares.map(s => {
-          const r = s.recipes
-          if (!r) return ''
-          return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);${!s.is_read ? 'background:rgba(232,197,71,0.04)' : ''}">
-            <div style="flex:1;min-width:0">
-              <div style="font-size:13px;font-weight:${s.is_read ? '400' : '600'};color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name || 'Recipe')}</div>
-              <div style="font-size:11px;color:var(--text3);margin-top:2px">${Math.round(r.calories||0)} kcal · ${Math.round(r.protein||0)}g P · shared ${new Date(s.created_at).toLocaleDateString()}</div>
-            </div>
-            <button onclick="saveSharedRecipe('${s.id}','${r.id}')"
-              style="margin-left:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:6px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
-              Save to mine
-            </button>
-          </div>`
-        }).join('')}
-      </div>
-    </div>` : ''}
 
     <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
       ${allRecipes.length ? `
@@ -5955,159 +5864,6 @@ function wireGlobals() {
     showToast('Targets applied — tap Save to confirm', 'success')
   }
 
-  // ── Recipe Sharing ──────────────────────────────────────────────────────
-  window.saveSharedRecipe = async (shareId, recipeId) => {
-    try {
-      // Fetch the shared recipe and copy it to user's recipes
-      const { data: orig } = await supabase
-        .from('recipes')
-        .select('*')
-        .eq('id', recipeId)
-        .single()
-      if (!orig) throw new Error('Recipe not found')
-
-      // Save as new recipe for this user
-      const { data: saved } = await supabase
-        .from('recipes')
-        .insert({
-          user_id: state.user.id,
-          name: orig.name,
-          description: orig.description,
-          servings: orig.servings,
-          calories: orig.calories,
-          protein: orig.protein,
-          carbs: orig.carbs,
-          fat: orig.fat,
-          fiber: orig.fiber,
-          sugar: orig.sugar,
-          ingredients: orig.ingredients,
-          instructions: orig.instructions,
-          source_url: orig.source_url,
-          notes: orig.notes,
-        })
-        .select()
-        .single()
-      if (saved) state.recipes.unshift(saved)
-
-      // Mark share as read
-      await markShareRead(shareId)
-      const share = state.incomingShares.find(s => s.id === shareId)
-      if (share) share.is_read = true
-
-      renderPage()
-      showToast(`"${orig.name}" saved to your recipes!`, 'success')
-    } catch (err) { showToast('Error: ' + err.message, 'error') }
-  }
-
-  window.openShareModal = (recipeId) => {
-    const recipe = state.recipes.find(r => r.id === recipeId)
-    if (!recipe) return
-    state.sharingRecipeId = recipeId
-    state.sharingToken = recipe.share_token || null
-    document.getElementById('share-recipe-name').textContent = recipe.name
-    document.getElementById('share-email-input').value = ''
-    document.getElementById('share-send-status').textContent = ''
-    // Two mutually exclusive UI states:
-    //   - no token yet → show the "Create link & share" CTA
-    //   - token exists → show the URL + Share/Regenerate/Stop sharing
-    const generateBtn = document.getElementById('share-generate-btn')
-    const linkActions = document.getElementById('share-link-actions')
-    const linkDisplay = document.getElementById('share-link-display')
-    if (recipe.share_token) {
-      const url = `${location.origin}/api/recipe/${recipe.share_token}`
-      if (linkDisplay) linkDisplay.textContent = url
-      if (generateBtn) generateBtn.style.display = 'none'
-      if (linkActions) linkActions.style.display = ''
-    } else {
-      if (generateBtn) { generateBtn.style.display = ''; generateBtn.disabled = false; generateBtn.textContent = 'Create link & share' }
-      if (linkActions) linkActions.style.display = 'none'
-    }
-    document.getElementById('share-modal').classList.add('open')
-  }
-
-  window.closeShareModal = () => {
-    document.getElementById('share-modal').classList.remove('open')
-    state.sharingRecipeId = null
-  }
-
-  // One-tap flow for recipes that haven't been shared yet: generate the
-  // token AND immediately invoke the native share sheet. Saves the user
-  // from a "generate → now tap share" two-step.
-  window.generateAndShareLink = async () => {
-    const btn = document.getElementById('share-generate-btn')
-    if (btn) { btn.disabled = true; btn.textContent = 'Creating link...' }
-    try {
-      const token = await generateShareToken(state.user.id, state.sharingRecipeId)
-      const recipe = state.recipes.find(r => r.id === state.sharingRecipeId)
-      if (recipe) { recipe.share_token = token; recipe.is_shared = true }
-      state.sharingToken = token
-      // Swap the UI to the "already shared" view so subsequent taps see
-      // the real URL and the Share/Regenerate/Stop options
-      const url = `${location.origin}/api/recipe/${token}`
-      const linkDisplay = document.getElementById('share-link-display')
-      if (linkDisplay) linkDisplay.textContent = url
-      if (btn) btn.style.display = 'none'
-      const linkActions = document.getElementById('share-link-actions')
-      if (linkActions) linkActions.style.display = ''
-      // Immediately fire the native share sheet — this is what the user
-      // actually wanted when they tapped the CTA.
-      await window._shareLink({ title: recipe?.name || 'Recipe', url })
-    } catch (err) {
-      showToast('Error: ' + err.message, 'error')
-      if (btn) { btn.disabled = false; btn.textContent = 'Create link & share' }
-    }
-  }
-
-  // Rotate the share token. Old URL stops working. Useful if a user
-  // accidentally shared with the wrong person and wants to revoke access.
-  window.regenerateShareLink = async () => {
-    const recipeId = state.sharingRecipeId
-    if (!recipeId) return
-    if (!confirm('Create a new link? The current link will stop working.')) return
-    try {
-      const token = await generateShareToken(state.user.id, recipeId)
-      const recipe = state.recipes.find(r => r.id === recipeId)
-      if (recipe) { recipe.share_token = token; recipe.is_shared = true }
-      state.sharingToken = token
-      const url = `${location.origin}/api/recipe/${token}`
-      const linkDisplay = document.getElementById('share-link-display')
-      if (linkDisplay) linkDisplay.textContent = url
-      showToast('New link created', 'success')
-    } catch (err) { showToast('Error: ' + err.message, 'error') }
-  }
-
-  // Stop sharing (from inside the modal). Updates UI to show the "Create
-  // link & share" button again, and flips the recipe card's share button
-  // back to its unshared state.
-  window.stopSharingRecipeFromModal = async () => {
-    const recipeId = state.sharingRecipeId
-    if (!recipeId) return
-    if (!confirm('Stop sharing this recipe? The link will stop working.')) return
-    try {
-      await disableRecipeSharing(state.user.id, recipeId)
-      const recipe = state.recipes.find(r => r.id === recipeId)
-      if (recipe) { recipe.is_shared = false }
-      state.sharingToken = null
-      // Reset the modal UI to the pre-share state
-      const generateBtn = document.getElementById('share-generate-btn')
-      const linkActions = document.getElementById('share-link-actions')
-      if (generateBtn) { generateBtn.style.display = ''; generateBtn.disabled = false; generateBtn.textContent = 'Create link & share' }
-      if (linkActions) linkActions.style.display = 'none'
-      // Reset the card button if it exists
-      const btn = document.getElementById('share-btn-' + recipeId)
-      if (btn) {
-        btn.textContent = '🔗 Share'
-        btn.style.background = ''
-        btn.style.color = ''
-        btn.style.borderColor = ''
-      }
-      showToast('Stopped sharing', 'success')
-    } catch (err) { showToast('Error: ' + err.message, 'error') }
-  }
-
-  // Kept as an alias — older code may still reference generateShareLink
-  window.generateShareLink = window.generateAndShareLink
-
   // ──────────────────────────────────────────────────────────────────────
   // Unified share helper. Every "share a link" action in the app goes
   // through this. Behavior:
@@ -6130,9 +5886,7 @@ function wireGlobals() {
         await navigator.share({ title, url })
         return
       } catch (err) {
-        // User dismissed the sheet — that's not a failure, just stop
         if (err?.name === 'AbortError') return
-        // Anything else: fall through to clipboard as a last resort
       }
     }
     try {
@@ -6142,78 +5896,26 @@ function wireGlobals() {
       showToast('Copy: ' + url, '')
     }
   }
-  // Export for any window.* handler that needs it
   window._shareLink = shareLink
 
-  window.copyShareLink = async () => {
-    // Kept for backward compat but routes through the unified helper now
-    await shareLink({
-      title: state.recipes.find(r => r.id === state.sharingRecipeId)?.name || 'Recipe',
-      url: `${location.origin}/api/recipe/${state.sharingToken}`,
-    })
-  }
-
-  window.nativeShareRecipe = async () => {
-    // Identical to copyShareLink now — kept as a separate name for any
-    // inline onclick= that still references it.
-    await window.copyShareLink()
-  }
-
-  window.sendRecipeToUser = async () => {
-    const email = document.getElementById('share-email-input').value.trim()
-    const status = document.getElementById('share-send-status')
-    if (!email) { status.textContent = 'Enter an email address'; return }
-    status.textContent = 'Sending...'
-    try {
-      await shareRecipeWithUser(state.user.id, state.sharingRecipeId, email)
-      status.style.color = 'var(--protein)'
-      status.textContent = `✓ Sent to ${email}`
-      document.getElementById('share-email-input').value = ''
-    } catch (err) {
-      status.style.color = 'var(--red)'
-      status.textContent = 'Error: ' + err.message
-    }
-  }
-
-  document.getElementById('share-modal')?.addEventListener('click', e => {
-    if (e.target.id === 'share-modal') closeShareModal()
-  })
-
-  // Check for incoming shared recipes and show notification
-  const unreadShares = (state.incomingShares || []).filter(s => !s.is_read)
-  if (unreadShares.length) {
-    setTimeout(() => {
-      showToast(`📬 ${unreadShares.length} recipe${unreadShares.length > 1 ? 's' : ''} shared with you — check Recipes!`, 'success')
-      // Show badge on Recipes nav item
-      const navRecipes = document.getElementById('nav-recipes')
-      if (navRecipes && !navRecipes.querySelector('.share-badge')) {
-        const badge = document.createElement('span')
-        badge.className = 'share-badge'
-        badge.textContent = unreadShares.length
-        badge.style.cssText = 'position:absolute;top:4px;right:4px;background:var(--red);color:white;border-radius:999px;font-size:9px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center'
-        navRecipes.style.position = 'relative'
-        navRecipes.appendChild(badge)
-      }
-    }, 2000)
-  }
-
-  window.showMethodologyModal = () => {
-    document.getElementById('methodology-modal')?.classList.add('open')
-  }
-  window.closeMethodologyModal = () => {
-    document.getElementById('methodology-modal')?.classList.remove('open')
-  }
-  document.getElementById('methodology-modal')?.addEventListener('click', e => {
-    if (e.target.id === 'methodology-modal') closeMethodologyModal()
-  })
-
-  window.shareRecipe = async (recipeId) => {
+  // Single share entry point for recipes. Ensures a share token exists
+  // (creating one on first call), then fires the native share sheet.
+  // The previous multi-section modal ("public link" vs "send to user"
+  // vs "regenerate" vs "stop sharing") was confusing and the in-app
+  // send-to-user path was broken, so we deleted the whole modal and
+  // collapsed everything to a one-tap action.
+  //
+  // Both window.shareRecipe and window.openShareModal resolve to this —
+  // the two names exist because different card templates wire to
+  // different handlers, and I'd rather keep them as aliases than hunt
+  // down every onclick="openShareModal(...)" in the HTML.
+  async function shareRecipeByLink(recipeId) {
     const recipe = state.recipes.find(r => r.id === recipeId)
     if (!recipe) return
     const btn = document.getElementById('share-btn-' + recipeId)
 
-    // Ensure the recipe has a share token. If already shared, reuse it.
-    // Otherwise, generate one now. Either way we end at "I have a URL."
+    // Make sure the recipe has a share_token. First-time sharers get one
+    // generated on the fly.
     let token = recipe.share_token
     if (!recipe.is_shared || !token) {
       try {
@@ -6228,9 +5930,7 @@ function wireGlobals() {
       }
     }
 
-    // Flip the button to its "shared" visual state (does nothing on first
-    // render if already shared, but matches the previous UX where sharing
-    // a fresh recipe made the button turn green)
+    // Visual feedback on the card button
     if (btn) {
       btn.textContent = '🔗 Shared'
       btn.style.background = 'rgba(76,175,130,0.15)'
@@ -6239,14 +5939,30 @@ function wireGlobals() {
       btn.disabled = false
     }
 
-    // Hand off to the unified share helper — native sheet on mobile,
-    // clipboard fallback on desktop. Single code path for every share
-    // action in the app.
-    await window._shareLink({
+    await shareLink({
       title: recipe.name || 'Recipe',
       url: `${window.location.origin}/api/recipe/${token}`,
     })
   }
+  window.shareRecipe = shareRecipeByLink
+  window.openShareModal = shareRecipeByLink
+
+  // Kept as thin aliases so any inline onclick="..." from older templates
+  // keeps working — all three do the same thing now.
+  window.nativeShareRecipe = () => {
+    if (state.sharingRecipeId) return shareRecipeByLink(state.sharingRecipeId)
+  }
+  window.copyShareLink = window.nativeShareRecipe
+
+  window.showMethodologyModal = () => {
+    document.getElementById('methodology-modal')?.classList.add('open')
+  }
+  window.closeMethodologyModal = () => {
+    document.getElementById('methodology-modal')?.classList.remove('open')
+  }
+  document.getElementById('methodology-modal')?.addEventListener('click', e => {
+    if (e.target.id === 'methodology-modal') closeMethodologyModal()
+  })
 
   window.stopSharingRecipe = async (recipeId) => {
     try {
