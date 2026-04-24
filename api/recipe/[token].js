@@ -30,9 +30,18 @@ function buildSourceCard(url, og) {
 
 import { createClient } from '@supabase/supabase-js'
 
+// CRITICAL: use SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY, not the VITE_*
+// prefixed versions. VITE_ env vars are only available at BUILD time in
+// the bundled client code; serverless functions run at REQUEST time where
+// VITE_* never gets populated. Previously this was `VITE_SUPABASE_URL`
+// and `VITE_SUPABASE_ANON_KEY` which were both undefined at runtime,
+// causing the Supabase client to be misconfigured and every query to
+// fail with FUNCTION_INVOCATION_FAILED. Using the service-role key (the
+// same one /api/recipe uses) also bypasses RLS so the public read works
+// regardless of the recipe owner's row-level policies.
 const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.VITE_SUPABASE_ANON_KEY
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
 function esc(str) {
@@ -301,24 +310,42 @@ function renderPage(recipe) {
 }
 
 export default async function handler(req, res) {
-  const { token } = req.query
-  if (!token) return res.status(400).send('Missing token')
+  try {
+    const { token } = req.query
+    if (!token) return sendNotFound(res, 'Missing share token')
 
-  const { data: recipe, error } = await supabase
-    .from('recipes').select('*')
-    .eq('share_token', token).eq('is_shared', true)
-    .maybeSingle()
+    const { data: recipe, error } = await supabase
+      .from('recipes').select('*')
+      .eq('share_token', token).eq('is_shared', true)
+      .maybeSingle()
 
-  if (error || !recipe) {
-    return res.status(404).send(`<!DOCTYPE html>
-<html><head><title>Recipe not found — MacroLens</title>
-<style>body{background:#141414;color:#E8E8E8;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}
-h1{color:#E8C547;margin-bottom:8px}.sub{color:#666;font-size:14px}a{color:#E8C547}</style></head>
-<body><div><h1>Recipe not found</h1><div class="sub">This link may have expired or been removed.</div>
-<br><a href="https://personal-health-tracking.vercel.app">Open MacroLens →</a></div></body></html>`)
+    if (error) {
+      console.error('[api/recipe/[token]] supabase error:', error)
+      return sendNotFound(res, 'Could not load recipe')
+    }
+    if (!recipe) return sendNotFound(res, 'Recipe not found or link has expired')
+
+    res.setHeader('Content-Type', 'text/html')
+    res.setHeader('Cache-Control', 'public, max-age=60')
+    return res.status(200).send(renderPage(recipe))
+  } catch (err) {
+    console.error('[api/recipe/[token]] unhandled error:', err)
+    return sendNotFound(res, 'Something went wrong')
   }
+}
 
+// Centralized 404 page. Previously this was an inline template literal
+// inside the handler, which is fine until the handler itself throws —
+// at which point no response gets sent and the user sees Vercel's
+// generic crash page.
+function sendNotFound(res, message) {
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recipe not found — MacroLens</title>
+<style>body{background:#141414;color:#E8E8E8;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;margin:0;padding:20px}
+h1{color:#E8C547;margin-bottom:8px}.sub{color:#888;font-size:14px;line-height:1.5}a{color:#E8C547;text-decoration:none}</style></head>
+<body><div><h1>Recipe unavailable</h1><div class="sub">${esc(message)}.<br>The link may have expired, been removed, or never existed.</div>
+<br><a href="https://personal-health-tracking.vercel.app">← Back to MacroLens</a></div></body></html>`
   res.setHeader('Content-Type', 'text/html')
-  res.setHeader('Cache-Control', 'public, max-age=60')
-  return res.status(200).send(renderPage(recipe))
+  return res.status(404).send(html)
 }
