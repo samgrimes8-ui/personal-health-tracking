@@ -2892,7 +2892,7 @@ function renderFoodItemModal(item, editingComponents) {
         <div id="comp-barcode-status" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
       </div>
       <div id="comp-panel-label" style="display:none">
-        <input type="file" id="comp-label-file" accept="image/*" capture="environment" style="display:none"
+        <input type="file" id="comp-label-file" accept="image/*" style="display:none"
           onchange="handleComponentLabel(this.files[0])" />
         <button onclick="document.getElementById('comp-label-file').click()"
           style="width:100%;padding:12px;background:var(--bg4);border:1.5px dashed var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;cursor:pointer;font-family:inherit">
@@ -3249,7 +3249,7 @@ function renderRecipeModalContent(recipe, mode = 'view') {
           </div>
           <span id="cookbook-spinner" style="display:none">⏳</span>
         </div>
-        <input type="file" id="cookbook-file-input" accept="image/*" capture="environment" style="display:none"
+        <input type="file" id="cookbook-file-input" accept="image/*" style="display:none"
           onchange="handleCookbookPhoto(this.files[0])" />
         <div id="cookbook-status" style="font-size:11px;color:var(--text3);padding:2px 16px;text-align:center;min-height:14px;background:rgba(232,197,71,0.04)"></div>
       ` : ''}
@@ -8865,18 +8865,22 @@ function wireGlobals() {
             <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
           </button>
 
-          <!-- Option 2: Photo -->
+          <!-- Option 2: Photo (camera OR library)
+               Omitting capture= lets iOS/Android show the full picker:
+               Take Photo, Photo Library, Choose File. Previous version
+               forced the camera, which was hostile to users who already
+               had a screenshot/saved image they wanted to use. -->
           <button onclick="document.getElementById('new-recipe-photo-input').click()"
             style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
             onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
             <div style="width:44px;height:44px;background:rgba(76,175,130,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">📸</div>
             <div>
-              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Take a photo</div>
-              <div style="font-size:12px;color:var(--text3)">Photograph a cookbook, recipe card, or screenshot</div>
+              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Upload a photo</div>
+              <div style="font-size:12px;color:var(--text3)">Take a new photo or pick a screenshot — cookbook, recipe card, anything</div>
             </div>
             <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
           </button>
-          <input type="file" id="new-recipe-photo-input" accept="image/*" capture="environment" style="display:none"
+          <input type="file" id="new-recipe-photo-input" accept="image/*" style="display:none"
             onchange="openNewRecipeFromPhoto(this.files[0])" />
 
           <!-- Option 3: Manual -->
