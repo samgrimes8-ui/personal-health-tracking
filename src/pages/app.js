@@ -5215,32 +5215,60 @@ function wireGlobals() {
     window.updateAnalyzeBtn()
   }
 
+  // Detect Instagram / TikTok URLs. Both are private platforms that block
+  // automated fetching (robots.txt, anti-scraping). Shared by the Write-it
+  // textarea hint and the "Paste a link" import modal.
+  //   Returns 'instagram' | 'tiktok' | null.
+  function detectPrivateRecipePlatform(text) {
+    const s = (text || '').toLowerCase()
+    if (/https?:\/\/(www\.|m\.)?(instagram\.com|instagr\.am)\//.test(s)) return 'instagram'
+    if (/https?:\/\/(www\.|vm\.|vt\.)?tiktok\.com\//.test(s)) return 'tiktok'
+    return null
+  }
+
+  // Toggle show/hide on a { hint, default, platformSpan } trio based on whether
+  // the given text contains a private-platform URL. Used by both the Write-it
+  // textarea and the Paste-a-link modal so the UX is consistent.
+  function togglePrivatePlatformHint({ hintId, defaultId, platformSpanId, value }) {
+    const hint = document.getElementById(hintId)
+    const defaultEl = defaultId ? document.getElementById(defaultId) : null
+    const platformSpan = platformSpanId ? document.getElementById(platformSpanId) : null
+    if (!hint) return
+    const platform = detectPrivateRecipePlatform(value)
+    if (platform) {
+      if (platformSpan) platformSpan.textContent = platform === 'instagram' ? 'Instagram' : 'TikTok'
+      hint.style.display = ''
+      if (defaultEl) defaultEl.style.display = 'none'
+    } else {
+      hint.style.display = 'none'
+      if (defaultEl) defaultEl.style.display = ''
+    }
+  }
+
   // Shows an actionable hint when the user pastes an Instagram or TikTok URL
   // into the Write-it textarea. These platforms block automated fetching,
   // so the "just paste a URL" flow silently falls back to dish-name search —
   // which fails if the user didn't also describe the dish. Better to tell
   // them up front what they need to do.
-  //
-  // Regex matches instagram.com, www.instagram.com, tiktok.com, www.tiktok.com,
-  // and the short vm.tiktok.com / t.instagram share domains. Case-insensitive.
   window.checkRecipeWriteHint = (value) => {
-    const hint = document.getElementById('recipe-write-private-hint')
-    const defaultNote = document.getElementById('recipe-write-note')
-    const platformSpan = document.getElementById('recipe-write-private-platform')
-    if (!hint || !defaultNote) return
+    togglePrivatePlatformHint({
+      hintId: 'recipe-write-private-hint',
+      defaultId: 'recipe-write-note',
+      platformSpanId: 'recipe-write-private-platform',
+      value,
+    })
+  }
 
-    const text = (value || '').toLowerCase()
-    const isInstagram = /https?:\/\/(www\.|m\.)?(instagram\.com|instagr\.am)\//.test(text)
-    const isTikTok = /https?:\/\/(www\.|vm\.|vt\.)?tiktok\.com\//.test(text)
-
-    if (isInstagram || isTikTok) {
-      if (platformSpan) platformSpan.textContent = isInstagram ? 'Instagram' : 'TikTok'
-      hint.style.display = ''
-      defaultNote.style.display = 'none'
-    } else {
-      hint.style.display = 'none'
-      defaultNote.style.display = ''
-    }
+  // Same pattern for the "+ New recipe → Paste a link" modal. No "default
+  // note" to hide — the modal's static copy already covers it — but we
+  // still flip the warning box on/off as the user types.
+  window.checkImportLinkHint = (value) => {
+    togglePrivatePlatformHint({
+      hintId: 'import-link-private-hint',
+      defaultId: null,
+      platformSpanId: 'import-link-private-platform',
+      value,
+    })
   }
 
   window.setFoodMode = (mode) => {
@@ -8761,7 +8789,7 @@ function wireGlobals() {
             <div style="width:44px;height:44px;background:rgba(232,197,71,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">🔗</div>
             <div>
               <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Paste a link</div>
-              <div style="font-size:12px;color:var(--text3)">Instagram, website, YouTube — AI extracts the recipe</div>
+              <div style="font-size:12px;color:var(--text3)">Recipe website, blog, or YouTube — AI extracts the recipe</div>
             </div>
             <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
           </button>
@@ -8818,10 +8846,24 @@ function wireGlobals() {
             ← Back
           </button>
           <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:6px">Paste a link</div>
-          <div style="font-size:13px;color:var(--text3);margin-bottom:20px">Works with recipe websites, Instagram, YouTube, TikTok and more</div>
+          <div style="font-size:13px;color:var(--text3);margin-bottom:20px">Recipe websites, blogs, and YouTube videos work. Instagram and TikTok links are private — use the dish name field below for those.</div>
           <input type="url" id="new-recipe-url" placeholder="https://..." autofocus
             style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:15px;font-family:inherit;outline:none;margin-bottom:10px"
+            oninput="checkImportLinkHint(this.value)"
             onkeydown="if(event.key==='Enter')importRecipeFromLink()" />
+
+          <!-- Dynamic warning box — appears only when user pastes an
+               Instagram or TikTok URL. Same behavior as the Write-it
+               textarea hint so users learn the pattern consistently. -->
+          <div id="import-link-private-hint" style="display:none;margin-bottom:16px;padding:10px 12px;border-radius:var(--r);background:rgba(234,203,87,0.08);border:1px solid rgba(234,203,87,0.25);font-size:12px;color:var(--text2);line-height:1.45">
+            <div style="font-weight:600;color:var(--accent);margin-bottom:4px">📱 <span id="import-link-private-platform">Instagram</span> links are private</div>
+            <div style="margin-bottom:4px">We can't read reel content directly. Instead:</div>
+            <ul style="margin:0;padding-left:18px">
+              <li>Type the dish name below (e.g. <em>"viral baked feta pasta"</em>) — leave the URL or clear it, either works</li>
+              <li>Or close this and use <strong>Take a photo</strong> to capture the ingredient list from a screenshot</li>
+            </ul>
+          </div>
+
           <div style="font-size:12px;color:var(--text3);margin-bottom:20px">Or describe the dish name to search for it</div>
           <input type="text" id="new-recipe-dish" placeholder="e.g. Chicken tikka masala..."
             style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:15px;font-family:inherit;outline:none;margin-bottom:20px"
