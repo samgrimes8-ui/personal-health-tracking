@@ -6046,7 +6046,14 @@ function wireGlobals() {
     const recipe = state.recipes.find(r => r.id === state.sharingRecipeId)
     const url = `${location.origin}/api/recipe/${state.sharingToken}`
     if (navigator.share) {
-      await navigator.share({ title: recipe?.name || 'Recipe', text: `Check out this recipe on MacroLens`, url })
+      // No `text` field on purpose — iOS share sheet's Copy action copies
+      // the text instead of the URL when both are provided, leaving users
+      // with a useless string instead of a link. { title, url } keeps
+      // Copy copying the URL while still giving preview-capable targets
+      // (Messages, Mail) a useful title. See shareCopyBroadcastLink for
+      // the full explanation.
+      try { await navigator.share({ title: recipe?.name || 'Recipe', url }) }
+      catch (err) { if (err?.name !== 'AbortError') copyShareLink() }
     } else {
       copyShareLink()
     }
@@ -6908,14 +6915,20 @@ function wireGlobals() {
     }
     const url = `${window.location.origin}/api/plan/${broadcast.share_token}`
     const title = broadcast.title || 'Meal plan'
-    const text = `Check out this meal plan: ${title}`
 
     // Try the native share sheet first — best UX on mobile, where most
     // of our users live. navigator.share can reject if the user dismisses
     // the sheet, which is NOT an error we want to surface as "share failed".
+    //
+    // Why no `text` field: iOS share sheet's "Copy" action copies the text
+    // when both text AND url are provided, which leaves the user with a
+    // string like "Check out this meal plan: Cut Week" and no actual link.
+    // Passing only { title, url } makes Copy do the right thing, and other
+    // share targets still get a good preview via og:title + og:description
+    // on the public page.
     if (navigator.share) {
       try {
-        await navigator.share({ title, text, url })
+        await navigator.share({ title, url })
         return
       } catch (err) {
         // AbortError = user tapped cancel. Everything else = actual failure,
