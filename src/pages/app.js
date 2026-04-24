@@ -12,7 +12,7 @@ import {
   getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, deleteCheckin, uploadScanFile, getScanUrl,
   generateShareToken,
   enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary, getRecipeByIdPublic,
-  saveRecipeOgCache, setUserRole, clearSpendingOverride,
+  saveRecipeOgCache, setUserRole, clearSpendingOverride, hideTagPreset, unhideTagPreset,
   getProviders, getProviderBroadcasts, saveBroadcast, deleteBroadcast,
   followProvider, unfollowProvider, getFollowedProviders, isFollowingProvider,
   getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar
@@ -44,6 +44,16 @@ const RECIPE_TAG_PRESETS = [
   'Breakfast', 'Lunch', 'Dinner', 'Snack',
   'Chicken', 'Beef', 'Fish', 'Vegetarian',
 ]
+
+// Returns the preset tags this user sees, after filtering out any
+// they've manually hidden via the Manage Tags modal. All tag-related
+// UI (picker chips, Manage Tags rows, etc) calls this rather than
+// reading RECIPE_TAG_PRESETS directly.
+function getVisiblePresets() {
+  const hidden = (state.usage?.hiddenTagPresets || []).map(s => s.toLowerCase())
+  if (!hidden.length) return RECIPE_TAG_PRESETS
+  return RECIPE_TAG_PRESETS.filter(p => !hidden.includes(p.toLowerCase()))
+}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let state = {
@@ -2957,12 +2967,15 @@ function renderRecipesPage(container) {
       tagCounts[key]++
     }
   }
-  // Merge presets (always shown, even if 0) with custom used tags
-  const presetSet = new Set(RECIPE_TAG_PRESETS.map(t => t.toLowerCase()))
+  // Merge presets (always shown, even if 0) with custom used tags.
+  // Use getVisiblePresets() so hidden-by-user presets don't appear in
+  // the filter bar.
+  const visiblePresets = getVisiblePresets()
+  const presetSet = new Set(visiblePresets.map(t => t.toLowerCase()))
   const customTags = Object.keys(tagCounts)
     .filter(t => !presetSet.has(t.toLowerCase()))
     .sort((a, b) => a.localeCompare(b))
-  const displayTags = [...RECIPE_TAG_PRESETS, ...customTags]
+  const displayTags = [...visiblePresets, ...customTags]
 
   // Apply tag filter BEFORE the search rank so search results are scoped to tag
   const tagFiltered = activeTag
@@ -3054,9 +3067,11 @@ function renderRecipeCard(r) {
   const tags = Array.isArray(r.tags) ? r.tags.filter(Boolean) : []
   return `
     <div class="upload-card" style="cursor:pointer;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="openRecipeModal('${r.id}')">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-        <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);flex:1;margin-right:12px">${esc(r.name)}</div>
-        <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+      <!-- Actions row on top — keeps the title from getting squeezed when
+           the name wraps across multiple lines. Servings pill on the right
+           stays as a compact label. -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           <button onclick="openQuickTagModal('${r.id}');event.stopPropagation()"
             title="Add or remove tags"
             style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
@@ -3072,9 +3087,11 @@ function renderRecipeCard(r) {
             style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
             onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'"
             onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text3)'">↗ Share</button>
-          <span style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:4px;padding:2px 7px;white-space:nowrap">${r.servings} serving${r.servings !== 1 ? 's' : ''}</span>
         </div>
+        <span style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:4px;padding:2px 7px;white-space:nowrap">${r.servings} serving${r.servings !== 1 ? 's' : ''}</span>
       </div>
+      <!-- Name gets the full card width, no competition from buttons. -->
+      <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);margin-bottom:8px;line-height:1.25">${esc(r.name)}</div>
       ${r.description ? `<div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.5">${esc(r.description)}</div>` : ''}
       <div class="macro-pills" style="margin-bottom:10px">
         <span class="macro-pill pill-cal">${Math.round(r.calories)} kcal</span>
@@ -3125,10 +3142,21 @@ function renderRecipeTagEditor(recipe, mode, isNew, isReadOnly) {
   const chip = (t, isOn) => `<button type="button" data-tag="${esc(t)}" onclick="toggleRecipeTag('${t.replace(/'/g,"\\'")}')"
       style="font-size:12px;padding:4px 12px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'rgba(122,180,232,0.18)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
 
-  // Collect all known tags for suggestions: presets ∪ other recipes' tags
-  const knownTags = new Set(RECIPE_TAG_PRESETS.map(t => t.toLowerCase()))
+  // Collect all known tags for suggestions: visible presets ∪ other recipes' tags
+  // ∪ in-memory staged customs. Hidden presets don't appear as suggestions,
+  // but if a recipe already has one it still shows up (that tag is rendered
+  // via r.tags directly, not presets).
+  const visiblePresets = getVisiblePresets()
+  const knownTags = new Set(visiblePresets.map(t => t.toLowerCase()))
   const displayMap = {}
-  RECIPE_TAG_PRESETS.forEach(t => { displayMap[t.toLowerCase()] = t })
+  visiblePresets.forEach(t => { displayMap[t.toLowerCase()] = t })
+  // Staged custom tags — created via Manage Tags but not yet attached to any
+  // recipe. Surface as suggestions so they're usable right away.
+  for (const t of (state._stagedCustomTags || [])) {
+    const k = String(t).toLowerCase()
+    if (!displayMap[k]) displayMap[k] = t
+    knownTags.add(k)
+  }
   for (const r of (state.recipes || [])) {
     if (!Array.isArray(r.tags)) continue
     for (const t of r.tags) {
@@ -6527,10 +6555,16 @@ function wireGlobals() {
   function rerenderRecipeTagChips() {
     const row = document.getElementById('recipe-tag-chips')
     if (!row) return
-    // Gather presets + all existing tags + currently selected custom tags
-    const knownTags = new Set(RECIPE_TAG_PRESETS.map(t => t.toLowerCase()))
+    // Gather visible presets + staged customs + all existing tags.
+    const visiblePresets = getVisiblePresets()
+    const knownTags = new Set(visiblePresets.map(t => t.toLowerCase()))
     const displayMap = {}
-    RECIPE_TAG_PRESETS.forEach(t => { displayMap[t.toLowerCase()] = t })
+    visiblePresets.forEach(t => { displayMap[t.toLowerCase()] = t })
+    for (const t of (state._stagedCustomTags || [])) {
+      const k = String(t).toLowerCase()
+      if (!displayMap[k]) displayMap[k] = t
+      knownTags.add(k)
+    }
     for (const r of (state.recipes || [])) {
       if (!Array.isArray(r.tags)) continue
       for (const t of r.tags) {
@@ -9391,13 +9425,18 @@ function wireGlobals() {
     const currentTags = Array.isArray(recipe.tags) ? recipe.tags.filter(Boolean) : []
     const currentKeys = new Set(currentTags.map(t => t.toLowerCase()))
 
-    // Build suggestion pool: presets + all other tags used across the user's
-    // library, so recently-invented custom tags show up as tappable chips.
+    // Build suggestion pool: visible presets + staged customs + all other
+    // tags used across the user's library, so recently-invented custom
+    // tags show up as tappable chips.
     const displayMap = {}
     const knownKeys = new Set()
-    for (const p of RECIPE_TAG_PRESETS) {
+    for (const p of getVisiblePresets()) {
       displayMap[p.toLowerCase()] = p
       knownKeys.add(p.toLowerCase())
+    }
+    for (const t of (state._stagedCustomTags || [])) {
+      const k = String(t).toLowerCase()
+      if (!displayMap[k]) { displayMap[k] = t; knownKeys.add(k) }
     }
     for (const r of (state.recipes || [])) {
       if (!Array.isArray(r.tags)) continue
@@ -9538,12 +9577,14 @@ function wireGlobals() {
 
   function renderManageTagsModal() {
     // Collect every tag in use across the user's recipes, with count +
-    // display casing. Presets are always shown even with count 0, so users
-    // can rename/delete them if they don't like our defaults.
-    const tagMap = new Map() // lowercase key → { display, count }
+    // display casing. Presets the user has hidden don't appear here — the
+    // whole point of hiding is to make them invisible.
+    const tagMap = new Map() // lowercase key → { display, count, isPreset }
+    const hiddenLc = new Set((state.usage?.hiddenTagPresets || []).map(s => s.toLowerCase()))
 
-    // Seed with presets (count=0 until we find uses below)
+    // Seed with visible presets (count=0 until we find uses below)
     for (const p of RECIPE_TAG_PRESETS) {
+      if (hiddenLc.has(p.toLowerCase())) continue
       tagMap.set(p.toLowerCase(), { display: p, count: 0, isPreset: true })
     }
 
@@ -9573,6 +9614,8 @@ function wireGlobals() {
       })
 
     const totalCustom = entries.filter(e => !e.isPreset).length
+    const visiblePresetCount = entries.filter(e => e.isPreset).length
+    const hiddenCount = hiddenLc.size
 
     const content = document.getElementById('manage-tags-content')
     if (!content) return
@@ -9580,16 +9623,36 @@ function wireGlobals() {
       <div style="position:sticky;top:0;background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;z-index:2">
         <div>
           <div style="font-size:16px;font-weight:600;color:var(--text)">Manage tags</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:2px">${totalCustom} custom tag${totalCustom === 1 ? '' : 's'} · ${RECIPE_TAG_PRESETS.length} presets</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">${totalCustom} custom · ${visiblePresetCount} preset${visiblePresetCount === 1 ? '' : 's'}${hiddenCount ? ` · ${hiddenCount} hidden` : ''}</div>
         </div>
         <button onclick="closeManageTagsModal()" aria-label="Close"
           style="background:transparent;border:none;color:var(--text3);font-size:22px;line-height:1;cursor:pointer;padding:4px 8px">×</button>
       </div>
 
       <div style="padding:14px 18px 18px">
-        <div style="font-size:12px;color:var(--text3);margin-bottom:12px;line-height:1.4">
-          Rename to update every recipe using it. Delete removes a tag from
-          the recipes that use it. Renaming to an existing tag merges them.
+        <!-- Quick-add row: type a new custom tag without going through a recipe.
+             Tags in the app are implicit (they exist because a recipe has them),
+             so a truly empty tag won't stick around. We add a placeholder recipe
+             tag to a brand-new entry, which means the first time you create a
+             tag here it needs at least one recipe to be applied to — easier to
+             just open a recipe and tag it. For now this input renames/merges
+             by fuzzy-typing an existing name, plus acts as a no-op for
+             brand-new strings (you'd have to tag a recipe to make it exist).
+             Keeping the input because it makes the intent of this modal clear:
+             this IS where you manage tags. -->
+        <div style="display:flex;gap:6px;margin-bottom:14px">
+          <input type="text" id="manage-tags-new-input"
+            placeholder="Add a custom tag..." maxlength="30"
+            onkeydown="if(event.key==='Enter')addCustomTagFromManage()"
+            style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
+          <button onclick="addCustomTagFromManage()"
+            style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:9px 14px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">
+            Add
+          </button>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:14px;line-height:1.4">
+          Delete removes a tag from every recipe that uses it. Hidden presets
+          stop appearing as suggestions.
         </div>
 
         ${entries.map(entry => `
@@ -9605,12 +9668,15 @@ function wireGlobals() {
               style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:11px;color:var(--text2);cursor:pointer;font-family:inherit;flex-shrink:0">
               Rename
             </button>
-            ${entry.count > 0 ? `
-              <button onclick="deleteRecipeTag('${entry.key.replace(/'/g,"\\'")}')"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:11px;color:var(--red);cursor:pointer;font-family:inherit;flex-shrink:0">
-                Delete
-              </button>
-            ` : ''}
+            <!-- Delete always shows now. For presets it hides+strips;
+                 for customs it only strips (custom tags vanish when no
+                 recipes use them). Click opens a preview confirm modal
+                 that lists affected recipes by name before actually doing
+                 anything. -->
+            <button onclick="confirmDeleteTag('${entry.key.replace(/'/g,"\\'")}', ${entry.isPreset})"
+              style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:11px;color:var(--red);cursor:pointer;font-family:inherit;flex-shrink:0">
+              Delete
+            </button>
           </div>
         `).join('')}
 
@@ -9619,8 +9685,163 @@ function wireGlobals() {
             No tags yet. Tag a recipe by opening it, tapping Edit, and adding tags in the Tags section.
           </div>
         ` : ''}
+
+        ${hiddenCount ? `
+          <!-- Restore any previously-hidden presets. Renders below the active
+               list so it doesn't compete for attention unless you actually
+               hid things. -->
+          <div style="margin-top:20px;padding-top:14px;border-top:1px solid var(--border)">
+            <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Hidden presets</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              ${[...hiddenLc].map(key => {
+                const preset = RECIPE_TAG_PRESETS.find(p => p.toLowerCase() === key) || key
+                return `<button onclick="unhidePreset('${key.replace(/'/g,"\\'")}')"
+                  style="font-size:11px;padding:4px 10px;border-radius:999px;background:var(--bg3);color:var(--text3);border:1px dashed var(--border2);cursor:pointer;font-family:inherit">
+                  ${esc(preset)} · restore</button>`
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
       </div>
     `
+  }
+
+  // ── Add custom tag from Manage Tags modal ───────────────────────────
+  // User flow note: a tag in this app only truly "exists" if a recipe
+  // has it (custom tags are inferred from the recipes table, not stored
+  // as standalone rows). Typing a brand-new name here stages it as a
+  // floating custom tag in memory so it shows up as a suggestion in the
+  // Tag picker until a recipe gets tagged with it. If the page reloads
+  // without the tag being used, it disappears — which mirrors how the
+  // rest of the app treats tags (derived, not owned).
+  window.addCustomTagFromManage = () => {
+    const input = document.getElementById('manage-tags-new-input')
+    const raw = input?.value.trim()
+    if (!raw) { showToast('Type a tag name first', 'error'); return }
+    if (raw.length > 30) { showToast('Tag name too long (max 30 chars)', 'error'); return }
+
+    const key = raw.toLowerCase()
+    // Already exists as a preset or in-use custom? just clear input
+    const existingPreset = RECIPE_TAG_PRESETS.some(p => p.toLowerCase() === key)
+    const existingCustom = (state.recipes || []).some(r =>
+      Array.isArray(r.tags) && r.tags.some(t => t && t.toLowerCase() === key)
+    )
+    if (existingPreset || existingCustom) {
+      input.value = ''
+      showToast(`"${raw}" already exists`, '')
+      return
+    }
+
+    // Stage the new tag — stored in-memory so the Tag picker suggests it.
+    // Once the user tags a recipe with it, it becomes "real" via recipes.tags.
+    state._stagedCustomTags = state._stagedCustomTags || []
+    if (!state._stagedCustomTags.some(t => t.toLowerCase() === key)) {
+      state._stagedCustomTags.push(raw)
+    }
+    input.value = ''
+    showToast(`Tag "${raw}" ready to use — open a recipe to apply it`, 'success')
+    renderManageTagsModal()
+  }
+
+  // ── Confirm-delete flow ─────────────────────────────────────────────
+  // Opens a small confirm prompt showing WHICH recipes would be
+  // affected before committing. For presets, also offers to hide the
+  // preset from suggestions going forward.
+  window.confirmDeleteTag = (tagKey, isPreset) => {
+    const lower = String(tagKey).toLowerCase()
+    // Find affected recipes
+    const affected = (state.recipes || []).filter(r =>
+      Array.isArray(r.tags) && r.tags.some(t => t && t.toLowerCase() === lower)
+    )
+    const currentDisplay = (() => {
+      for (const r of affected) {
+        for (const t of (r.tags || [])) if (t && t.toLowerCase() === lower) return t
+      }
+      const preset = RECIPE_TAG_PRESETS.find(p => p.toLowerCase() === lower)
+      return preset || tagKey
+    })()
+
+    // Build a preview string of affected recipe names (truncated if many)
+    const names = affected.map(r => r.name || 'Untitled recipe')
+    const MAX_SHOW = 8
+    const listPart = names.length === 0
+      ? '(not used on any recipe)'
+      : names.slice(0, MAX_SHOW).map(n => `  • ${n}`).join('\n')
+         + (names.length > MAX_SHOW ? `\n  …and ${names.length - MAX_SHOW} more` : '')
+
+    const msg = isPreset
+      ? (affected.length > 0
+          ? `Delete "${currentDisplay}" preset?\n\nThis will:\n  • Hide it from your tag suggestions\n  • Remove it from ${affected.length} recipe${affected.length === 1 ? '' : 's'}:\n\n${listPart}`
+          : `Hide "${currentDisplay}" preset from your tag suggestions?\n\nIt's not in use on any recipes, so nothing will change — it just stops appearing as a suggestion.`)
+      : `Delete "${currentDisplay}"?\n\nThis tag will be removed from ${affected.length} recipe${affected.length === 1 ? '' : 's'}:\n\n${listPart}`
+
+    if (!confirm(msg)) return
+
+    // All clear — run the actual delete.
+    executeTagDelete(lower, isPreset, affected, currentDisplay)
+  }
+
+  // Strips the tag from all affected recipes and optionally hides the
+  // preset from future suggestions. Called only after confirmDeleteTag
+  // has already got a 'yes' from the user.
+  async function executeTagDelete(lower, isPreset, affected, displayName) {
+    showToast(affected.length > 0
+      ? `Removing tag from ${affected.length} recipe${affected.length === 1 ? '' : 's'}...`
+      : `Hiding "${displayName}"...`, '')
+
+    let failed = 0
+    for (const r of affected) {
+      const updatedTags = (r.tags || []).filter(t => t && t.toLowerCase() !== lower)
+      try {
+        const saved = await upsertRecipe(state.user.id, { ...r, tags: updatedTags })
+        const idx = state.recipes.findIndex(x => x.id === saved.id)
+        if (idx !== -1) state.recipes[idx] = saved
+      } catch (err) {
+        console.error('[tags] delete failed for recipe', r.id, err)
+        failed++
+      }
+    }
+
+    // If it was a preset, also add to hidden_tag_presets so it stops
+    // appearing as a suggestion for this user going forward.
+    if (isPreset) {
+      try {
+        await hideTagPreset(state.user.id, lower)
+        state.usage = await getUsageSummary(state.user.id)
+      } catch (err) {
+        console.error('[tags] hideTagPreset failed:', err)
+      }
+    }
+
+    // Clear any active filter that matched the deleted tag
+    if (state.recipeActiveTag && state.recipeActiveTag.toLowerCase() === lower) {
+      state.recipeActiveTag = ''
+    }
+    // Clear any staged custom tag entry if we just deleted one
+    if (state._stagedCustomTags) {
+      state._stagedCustomTags = state._stagedCustomTags.filter(t => t.toLowerCase() !== lower)
+    }
+
+    if (failed > 0) {
+      showToast(`Deleted with ${failed} error${failed === 1 ? '' : 's'}`, 'error')
+    } else {
+      showToast(`"${displayName}" deleted`, 'success')
+    }
+    renderManageTagsModal()
+    renderPage()
+  }
+
+  // Reverse of hide — puts a preset back into the suggestion list.
+  window.unhidePreset = async (key) => {
+    try {
+      await unhideTagPreset(state.user.id, key)
+      state.usage = await getUsageSummary(state.user.id)
+      showToast('Preset restored', 'success')
+      renderManageTagsModal()
+      renderPage()
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+    }
   }
 
   // Rename every occurrence of a tag across the user's recipes. Matching is

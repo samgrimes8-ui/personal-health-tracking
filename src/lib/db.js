@@ -307,7 +307,7 @@ export async function getUsageSummary(userId) {
   startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
 
   const [profileRes, usageRes] = await Promise.all([
-    supabase.from('user_profiles').select('spending_limit_usd, spending_limit_expires_at, total_spent_usd, is_admin, account_status, role, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url, credentials').eq('user_id', userId).maybeSingle(),
+    supabase.from('user_profiles').select('spending_limit_usd, spending_limit_expires_at, total_spent_usd, is_admin, account_status, role, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url, credentials, hidden_tag_presets').eq('user_id', userId).maybeSingle(),
     supabase.from('token_usage').select('cost_usd, tokens_used, feature').eq('user_id', userId).gte('created_at', startOfMonth.toISOString())
   ])
 
@@ -391,6 +391,10 @@ export async function getUsageSummary(userId) {
     providerSpecialty: profile.provider_specialty || null,
     providerAvatarUrl: profile.provider_avatar_url || null,
     credentials: profile.credentials || null,
+    // Per-user preset hiding — array of preset tag names (lowercased)
+    // the user has chosen to delete from their suggestion list. UI
+    // reads this from state.usage.hiddenTagPresets.
+    hiddenTagPresets: Array.isArray(profile.hidden_tag_presets) ? profile.hidden_tag_presets : [],
     // Override visibility for admin UI. null when no override set.
     override: hasOverride ? {
       active: overrideActive,
@@ -464,6 +468,39 @@ export async function clearSpendingOverride(userId) {
   const { error } = await supabase.from('user_profiles')
     .update({ spending_limit_usd: null, spending_limit_expires_at: null })
     .eq('user_id', userId)
+  if (error) throw error
+}
+
+// Hide a preset tag for this user. Appends the lowercased name to the
+// hidden_tag_presets array if not already present. UI filters the preset
+// suggestion list by this, so the user stops seeing it.
+export async function hideTagPreset(userId, presetName) {
+  if (!supabase || !presetName) return
+  const key = String(presetName).toLowerCase().trim()
+  if (!key) return
+  // Read-modify-write. Safe for a single-user operation; no concurrent
+  // edits to the same profile's hidden_tag_presets expected.
+  const { data: profile } = await supabase.from('user_profiles')
+    .select('hidden_tag_presets').eq('user_id', userId).maybeSingle()
+  const current = Array.isArray(profile?.hidden_tag_presets) ? profile.hidden_tag_presets : []
+  if (current.map(s => s.toLowerCase()).includes(key)) return
+  const { error } = await supabase.from('user_profiles')
+    .update({ hidden_tag_presets: [...current, key] }).eq('user_id', userId)
+  if (error) throw error
+}
+
+// Unhide a preset — reverses hideTagPreset. Not currently wired to UI
+// but exists for symmetry and future "restore defaults" flows.
+export async function unhideTagPreset(userId, presetName) {
+  if (!supabase || !presetName) return
+  const key = String(presetName).toLowerCase().trim()
+  const { data: profile } = await supabase.from('user_profiles')
+    .select('hidden_tag_presets').eq('user_id', userId).maybeSingle()
+  const current = Array.isArray(profile?.hidden_tag_presets) ? profile.hidden_tag_presets : []
+  const filtered = current.filter(s => s.toLowerCase() !== key)
+  if (filtered.length === current.length) return
+  const { error } = await supabase.from('user_profiles')
+    .update({ hidden_tag_presets: filtered }).eq('user_id', userId)
   if (error) throw error
 }
 
