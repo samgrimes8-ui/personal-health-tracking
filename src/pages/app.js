@@ -67,6 +67,7 @@ let state = {
   currentPage: 'log',
   currentMode: 'food',
   foodMode: 'search',     // 'search' | 'photo'  (photo auto-detects barcode/label/meal)
+  foodPhotoStatus: 'idle', // 'idle' | 'processing' | 'ready-label' | 'ready-food' | 'done-barcode'
   imageBase64: null,
   labelImageBase64: null,
   recipeImageBase64: null, // photo of recipe card / cookbook page / screenshot
@@ -5133,7 +5134,35 @@ function wireGlobals() {
   window.updateAnalyzeBtn = function() {
     const btn = document.getElementById('analyze-btn')
     if (!btn) return
-    // Top-level is only 'food' or 'recipe'. Each has 2 sub-modes.
+    // Food > Photo is special: button state tracks the classification
+    // pipeline so the user isn't tempted to tap before we know what to do.
+    //  - idle        : no photo picked yet → disabled, prompt to upload
+    //  - processing  : downscaling / barcode decode / AI classifier running
+    //                  → disabled, shows what's happening
+    //  - ready-label : classifier said 'label' → enabled, 'Analyze label'
+    //  - ready-food  : classifier said 'food'  → enabled, 'Analyze meal'
+    //  - done-barcode: barcode already looked up → disabled (nothing to run)
+    if (state.currentMode === 'food' && state.foodMode === 'photo') {
+      const ps = state.foodPhotoStatus || 'idle'
+      btn.disabled = (ps === 'idle' || ps === 'processing' || ps === 'done-barcode')
+      btn.style.opacity = btn.disabled ? '0.5' : '1'
+      btn.style.cursor = btn.disabled ? 'not-allowed' : 'pointer'
+      const photoLabels = {
+        'idle':         '📸 Take or upload a photo',
+        'processing':   '⏳ Reading photo...',
+        'ready-label':  '✨ Analyze nutrition label',
+        'ready-food':   '✨ Analyze meal photo',
+        'done-barcode': '✓ Product found above',
+      }
+      btn.textContent = photoLabels[ps]
+      return
+    }
+
+    // All other modes use the simple static labels. Re-enable the button
+    // in case we're coming back from a disabled photo state.
+    btn.disabled = false
+    btn.style.opacity = '1'
+    btn.style.cursor = 'pointer'
     const labels = {
       food: {
         search: '✨ Analyze with AI',
@@ -5157,6 +5186,7 @@ function wireGlobals() {
       state.imageBase64 = null
       state.labelImageBase64 = null
       state._pendingFoodPhotoAction = null
+      state.foodPhotoStatus = 'idle'
     }
     if (mode !== 'recipe' || state.recipeMode !== 'snap') {
       state.recipeImageBase64 = null
@@ -5215,6 +5245,12 @@ function wireGlobals() {
 
   window.setFoodMode = (mode) => {
     state.foodMode = mode
+    // Fresh entry into Photo mode: reset the pipeline status so the
+    // button shows 'Take or upload a photo first' rather than reusing
+    // a stale 'ready-food' from a previous round.
+    if (mode === 'photo') {
+      state.foodPhotoStatus = state.foodPhotoStatus || 'idle'
+    }
     ;['search', 'photo'].forEach(m => {
       const panel = document.getElementById(`food-panel-${m}`)
       const btn = document.getElementById(`food-btn-${m}`)
@@ -5538,6 +5574,13 @@ function wireGlobals() {
       status.textContent = msg
       status.style.color = color || 'var(--text3)'
     }
+    // Set both the on-screen status line AND the state field that drives
+    // the main Analyze button's label and disabled state.
+    const setPhase = (phase, msg, color) => {
+      state.foodPhotoStatus = phase
+      if (msg) setStatus(msg, color)
+      window.updateAnalyzeBtn()
+    }
 
     // Reset any previously cached action so re-uploading a new photo
     // doesn't leave stale state around
@@ -5547,21 +5590,21 @@ function wireGlobals() {
 
     // Step 1: downscale and show preview immediately
     if (preview) preview.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Processing photo…</div>`
-    setStatus('Processing photo...')
+    setPhase('processing', 'Processing photo...')
 
     let scaled
     try {
       scaled = await downscaleImage(file, { maxDim: 1600, quality: 0.9 })
     } catch (err) {
       if (preview) preview.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);font-size:13px">Couldn't read photo: ${esc(err?.message || err)}</div>`
-      setStatus('Failed to load photo', 'var(--red)')
+      setPhase('idle', 'Failed to load photo', 'var(--red)')
       return
     }
 
     if (preview) preview.innerHTML = `<img src="${scaled.dataUrl}" style="max-height:220px;border-radius:var(--r);object-fit:contain" alt="photo">`
 
     // Step 2: try local barcode decoders (fast, zero cost)
-    setStatus('Checking for barcode...')
+    setPhase('processing', 'Checking for barcode...')
     let code = null
     try {
       code = await decodeBarcodeFromFile(file)
@@ -5570,47 +5613,44 @@ function wireGlobals() {
     }
 
     if (code) {
-      setStatus(`Barcode found: ${code} — looking up...`, 'var(--accent)')
+      setPhase('processing', `Barcode found: ${code} — looking up...`, 'var(--accent)')
       if (manual) manual.value = code
-      // Direct lookup now, since this is the cheapest/fastest path.
       try {
         await lookupBarcode(code)
-        // lookupBarcode sets state.currentEntry + shows result card on success
+        // Result card is now showing; button becomes 'already done' so the
+        // user isn't tempted to tap and re-run anything.
+        setPhase('done-barcode')
       } catch (err) {
-        setStatus(`Lookup failed: ${err?.message || err}`, 'var(--red)')
+        setPhase('idle', `Lookup failed: ${err?.message || err}`, 'var(--red)')
       }
       return
     }
 
     // Step 3: AI classifier to decide what kind of photo this is
-    setStatus('No barcode — detecting what this is...')
-    let kind = 'food' // safe default
+    setPhase('processing', 'No barcode — detecting what this is...')
+    let kind = 'food'
     try {
       kind = await classifyFoodPhoto(scaled.base64)
     } catch (err) {
       console.warn('[foodphoto] classifier failed:', err?.message || err)
-      // Fall through with default 'food' — best guess for a random photo
     }
 
     // Step 4: based on classification, cache the appropriate action.
-    // User taps the main Analyze button to execute it.
     if (kind === 'barcode') {
-      // Classifier thought it was a barcode but local decoders failed.
-      // Try the AI visual barcode reader as a last resort.
-      setStatus('Reading barcode digits from image...')
+      setPhase('processing', 'Reading barcode digits from image...')
       try {
         const aiCode = await readBarcodeFromImage(scaled.base64)
         if (aiCode) {
-          setStatus(`Read: ${aiCode} — looking up...`, 'var(--accent)')
+          setPhase('processing', `Read: ${aiCode} — looking up...`, 'var(--accent)')
           if (manual) manual.value = aiCode
           await lookupBarcode(aiCode)
+          setPhase('done-barcode')
           return
         }
       } catch (err) {
         console.warn('[foodphoto] AI barcode read failed:', err?.message || err)
       }
-      // Couldn't read the number — reveal manual input
-      setStatus("Couldn't read barcode — type the number below", 'var(--fat)')
+      setPhase('idle', "Couldn't read barcode — type the number below", 'var(--fat)')
       if (manual) { manual.style.display = ''; manual.focus(); manual.style.borderColor = 'var(--accent)' }
       return
     }
@@ -5622,18 +5662,18 @@ function wireGlobals() {
         if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Reading label...'
         return await analyzeNutritionLabel(state.labelImageBase64)
       }
-      setStatus('Nutrition label detected — tap Analyze photo', 'var(--accent)')
+      setPhase('ready-label', 'Nutrition label detected', 'var(--accent)')
       return
     }
 
-    // Default: it's a meal photo
+    // Default: meal photo
     state.imageBase64 = scaled.base64
     state._pendingFoodPhotoAction = async (mealHint) => {
       const btn = document.getElementById('analyze-btn')
       if (btn) btn.innerHTML = '<span class="analyzing-spinner"></span> Analyzing photo...'
       return await analyzePhoto(state.imageBase64, mealHint)
     }
-    setStatus('Meal photo detected — tap Analyze photo', 'var(--accent)')
+    setPhase('ready-food', 'Meal photo detected', 'var(--accent)')
   }
 
   // ── Recipe > Snap recipe (photograph a recipe card / cookbook page) ──
