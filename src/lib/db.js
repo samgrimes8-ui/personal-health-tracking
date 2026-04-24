@@ -1,4 +1,5 @@
 import { supabase } from './supabase.js'
+import { usdToBucks } from './pricing.js'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -306,7 +307,7 @@ export async function getUsageSummary(userId) {
   startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
 
   const [profileRes, usageRes] = await Promise.all([
-    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, account_status, role, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url, credentials').eq('user_id', userId).maybeSingle(),
+    supabase.from('user_profiles').select('spending_limit_usd, spending_limit_expires_at, total_spent_usd, is_admin, account_status, role, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url, credentials').eq('user_id', userId).maybeSingle(),
     supabase.from('token_usage').select('cost_usd, tokens_used, feature').eq('user_id', userId).gte('created_at', startOfMonth.toISOString())
   ])
 
@@ -338,10 +339,34 @@ export async function getUsageSummary(userId) {
   // standalone is_provider column is being deleted.
   const isProvider = role === 'provider' || role === 'admin'
 
+  // Compute user-facing AI Bucks (1000x multiplier). We expose these as
+  // *additional* fields alongside the raw dollar amounts — UI reads Bucks
+  // for display, internal logic (spend cap enforcement, pricing) stays in
+  // dollars. See src/lib/pricing.js for the conversion rationale.
+  const spentBucks = usdToBucks(monthSpent)
+  const limitBucks = isUnlimited || limit == null ? null : usdToBucks(limit)
+  const remainingBucks = isUnlimited || limit == null
+    ? null
+    : Math.max(0, usdToBucks(limit) - spentBucks)
+
+  // Is the admin override currently active? Same logic mirroring the
+  // server-side check_spend_limit RPC so the UI can accurately show
+  // "Custom allotment active" badges.
+  const hasOverride = profile.spending_limit_usd != null
+  const overrideExpiresAt = profile.spending_limit_expires_at
+    ? new Date(profile.spending_limit_expires_at)
+    : null
+  const overrideActive = hasOverride &&
+    (overrideExpiresAt == null || overrideExpiresAt > new Date())
+
   return {
     spent: Math.round(monthSpent * 10000) / 10000,
     limit: isUnlimited ? null : limit,
     remaining: isUnlimited ? null : Math.max(0, limit - monthSpent),
+    // User-facing display units. Prefer these in UI.
+    spentBucks,
+    limitBucks,
+    remainingBucks,
     totalSpent: profile.total_spent_usd ?? 0,
     tokens: monthTokens,
     requests: usage.length,
@@ -359,6 +384,13 @@ export async function getUsageSummary(userId) {
     providerSpecialty: profile.provider_specialty || null,
     providerAvatarUrl: profile.provider_avatar_url || null,
     credentials: profile.credentials || null,
+    // Override visibility for admin UI. null when no override set.
+    override: hasOverride ? {
+      active: overrideActive,
+      limitUsd: parseFloat(profile.spending_limit_usd),
+      limitBucks: usdToBucks(profile.spending_limit_usd),
+      expiresAt: overrideExpiresAt,  // Date object or null (permanent)
+    } : null,
     role,
     isUnlimited,
     accountStatus: profile.account_status ?? 'active',
@@ -398,14 +430,33 @@ export async function setUserRole(userId, role) {
 
 // Admin-facing: set per-user overrides. spending_limit_usd stays as an
 // escape hatch — null means 'use the role default', anything else pins
-// the cap regardless of role. account_status lets admins suspend users.
-// unlimited_access is gone — that concept is now 'set role to admin'.
-export async function setUserPrivileges(userId, { spendingLimitUsd, accountStatus }) {
+// the cap regardless of role. spending_limit_expires_at controls whether
+// the override is permanent (null) or auto-expires on a specific date.
+// account_status lets admins suspend users.
+export async function setUserPrivileges(userId, { spendingLimitUsd, spendingLimitExpiresAt, accountStatus }) {
   if (!supabase) return
   const updates = {}
   if (spendingLimitUsd !== undefined) updates.spending_limit_usd = spendingLimitUsd
+  if (spendingLimitExpiresAt !== undefined) {
+    // Accept Date, ISO string, or null. Normalize to ISO string or null.
+    updates.spending_limit_expires_at = spendingLimitExpiresAt instanceof Date
+      ? spendingLimitExpiresAt.toISOString()
+      : spendingLimitExpiresAt
+  }
   if (accountStatus !== undefined) updates.account_status = accountStatus
   const { error } = await supabase.from('user_profiles').update(updates).eq('user_id', userId)
+  if (error) throw error
+}
+
+// Clear the spending-limit override, reverting the user to their role
+// default cap. Called by the [Clear] button in the Account page override
+// info row. Both columns reset to null together so there's never a stale
+// expiration pointing at a missing amount.
+export async function clearSpendingOverride(userId) {
+  if (!supabase) return
+  const { error } = await supabase.from('user_profiles')
+    .update({ spending_limit_usd: null, spending_limit_expires_at: null })
+    .eq('user_id', userId)
   if (error) throw error
 }
 

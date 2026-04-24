@@ -103,6 +103,19 @@ async function callProxy(feature, messages, options = {}) {
     const data = await res.json().catch(() => ({ error: `Server returned ${res.status} with invalid JSON` }))
     if (!res.ok) {
       if (res.status === 413) throw new Error('Image too large for server. Try a smaller photo.')
+      // 429 with the spending_limit_exceeded code opens a full upgrade modal
+      // instead of just flashing a toast. We still throw after — callers
+      // abort their analysis flows normally, and the modal can be dismissed
+      // independently.
+      if (res.status === 429 && data.code === 'spending_limit_exceeded') {
+        if (typeof window !== 'undefined' && typeof window.openLimitReachedModal === 'function') {
+          window.openLimitReachedModal({
+            spentUsd: data.spent_usd,
+            limitUsd: data.limit_usd,
+          })
+        }
+        throw new Error("You've used all your AI Bucks this month")
+      }
       throw new Error(data.error ?? `Request failed (${res.status})`)
     }
     return data

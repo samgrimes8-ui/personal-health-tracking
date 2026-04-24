@@ -80,16 +80,20 @@ export default async function handler(req) {
   if (!limitCheck?.allowed) {
     const reason = limitCheck?.reason
     if (reason === 'spending_limit_exceeded') {
+      // Return structured error payload — the client intercepts this and
+      // renders a proper upgrade modal. Message string is a fallback for
+      // any older clients that haven't been updated to render the modal.
       return json({
-        error: `Monthly spending limit reached ($${Number(limitCheck.limit_usd).toFixed(2)}). ` +
-               `You've used $${Number(limitCheck.spent_usd).toFixed(4)} this month. ` +
-               `Resets on the 1st.`
+        error: "You've used all your AI Bucks for this month. Upgrade to keep going.",
+        code: 'spending_limit_exceeded',
+        spent_usd: Number(limitCheck.spent_usd) || 0,
+        limit_usd: Number(limitCheck.limit_usd) || 0,
       }, 429)
     }
     if (reason === 'account_suspended') {
-      return json({ error: 'Your account has been suspended.' }, 403)
+      return json({ error: 'Your account has been suspended.', code: 'account_suspended' }, 403)
     }
-    return json({ error: 'Request not allowed: ' + (reason ?? 'unknown') }, 403)
+    return json({ error: 'Request not allowed: ' + (reason ?? 'unknown'), code: reason }, 403)
   }
 
   // ── Call Anthropic ────────────────────────────────────────────────

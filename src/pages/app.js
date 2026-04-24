@@ -12,11 +12,12 @@ import {
   getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, deleteCheckin, uploadScanFile, getScanUrl,
   generateShareToken,
   enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary, getRecipeByIdPublic,
-  saveRecipeOgCache, setUserRole,
+  saveRecipeOgCache, setUserRole, clearSpendingOverride,
   getProviders, getProviderBroadcasts, saveBroadcast, deleteBroadcast,
   followProvider, unfollowProvider, getFollowedProviders, isFollowingProvider,
   getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar
 } from '../lib/db.js'
+import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeRecipePhoto, analyzeDishBySearch, analyzePlannerDescription,
   classifyFoodPhoto,
@@ -1064,8 +1065,47 @@ function renderShell(container) {
       </div>
     </div>
 
+    <!-- Limit reached modal — shown when the user hits their monthly AI
+         Bucks cap. Replaces the raw 429 toast with a conversion-optimized
+         experience: warm headline, full bar, one clear upgrade CTA. -->
+    <div class="modal-overlay" id="limit-reached-modal">
+      <div class="modal-box" style="max-width:440px">
+        <button class="modal-close" onclick="closeLimitReachedModal()">×</button>
+        <div style="text-align:center;padding:8px 0 4px">
+          <div style="font-size:38px;margin-bottom:12px">⚡</div>
+          <h3 style="margin:0 0 8px;font-family:'DM Serif Display',serif;font-size:22px">Out of AI Bucks</h3>
+          <div id="limit-reached-subtitle" style="font-size:13px;color:var(--text3);margin-bottom:20px;line-height:1.5">
+            You've used all your AI Bucks for this month.
+          </div>
+        </div>
+        <!-- Full-red progress bar visualizes the hit cap -->
+        <div class="bar-bg" style="height:10px;margin-bottom:6px">
+          <div style="background:var(--red);width:100%;height:100%;border-radius:999px"></div>
+        </div>
+        <div id="limit-reached-usage" style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">
+          All AI Bucks used
+        </div>
+
+        <!-- Loss-framed list of what they can't do right now -->
+        <div style="background:var(--bg3);border-radius:var(--r);padding:14px;margin-bottom:18px">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Upgrade to Premium to</div>
+          <div style="display:flex;flex-direction:column;gap:7px;font-size:13px;color:var(--text2)">
+            <div>📸 Analyze meal photos</div>
+            <div>📷 Scan barcodes</div>
+            <div>🔗 Import recipes from links</div>
+            <div>🗓️ Use the AI meal planner</div>
+          </div>
+        </div>
+
+        <button onclick="closeLimitReachedModal();switchPage('upgrade')"
+          style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:13px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:10px">
+          Upgrade to Premium
+        </button>
+        <div style="font-size:11px;color:var(--text3);text-align:center">Your free AI Bucks reset on the 1st of each month</div>
+      </div>
+    </div>
+
     <!-- Methodology modal -->
-    <!-- Check-in modal -->
     <div class="modal-overlay" id="checkin-modal">
       <div class="modal-box" style="max-width:480px">
         <button class="modal-close" onclick="closeCheckinModal()">×</button>
@@ -1204,35 +1244,92 @@ function userCanAccess(feature) {
 }
 
 function renderUpgradePage(container, feature) {
+  // The specific feature they were trying to access (if any) — shown in
+  // the headline so the upgrade nudge feels contextual, not abstract.
   const featureNames = {
     planner: 'Meal Planner',
     goals: 'Goals & Body Tracking',
     recipes: 'Recipes',
     foods: 'Saved Foods',
   }
+  const featureLabel = featureNames[feature] || null
+
+  // Pull the two user-facing tiers from the pricing module. We render
+  // them side-by-side on desktop, stacked on mobile. "Featured" tier
+  // (Premium) gets a gold border accent to draw the eye.
+  const tierCard = (tier) => {
+    const isFeatured = !!tier.featured
+    return `
+      <div style="flex:1;background:var(--bg3);border:2px solid ${isFeatured ? 'var(--accent)' : 'var(--border2)'};border-radius:16px;padding:24px;display:flex;flex-direction:column;min-width:0;position:relative">
+        ${isFeatured ? '<div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--accent);color:#1a1500;font-size:10px;font-weight:700;padding:3px 10px;border-radius:999px;letter-spacing:0.5px">RECOMMENDED</div>' : ''}
+        <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px">${tier.name}</div>
+        <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">
+          <span style="font-size:32px;font-weight:700;color:var(--text);font-family:'DM Serif Display',serif">${tier.priceLabel}</span>
+          ${tier.priceUsd > 0 ? '<span style="font-size:13px;color:var(--text3)">/month</span>' : ''}
+        </div>
+        <div style="font-size:13px;color:var(--text3);line-height:1.5;margin-bottom:18px;min-height:38px">${tier.description}</div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;flex:1">
+          ${tier.features.map(f => `
+            <div style="display:flex;gap:10px;align-items:start;font-size:13px;${f.included ? 'color:var(--text)' : 'color:var(--text3);text-decoration:line-through'}">
+              <span style="color:${f.included ? 'var(--protein)' : 'var(--text3)'};flex-shrink:0;width:14px;text-align:center">${f.included ? '✓' : '×'}</span>
+              <span style="flex:1;line-height:1.4">${esc(f.text)}</span>
+            </div>`).join('')}
+        </div>
+        ${tier.id === 'premium' ? `
+          <button onclick="handleUpgradeClick()"
+            style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:13px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;width:100%">
+            Upgrade to Premium
+          </button>
+        ` : `
+          <div style="text-align:center;padding:13px;font-size:13px;color:var(--text3)">Current plan</div>
+        `}
+      </div>
+    `
+  }
+
   container.innerHTML = `
-    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;padding:32px 20px;text-align:center">
-      <div style="font-size:48px;margin-bottom:16px">⭐</div>
-      <div style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:8px">Premium feature</div>
-      <div style="font-size:14px;color:var(--text3);margin-bottom:24px;max-width:280px;line-height:1.5">
-        ${featureNames[feature] || 'This feature'} is available on the Premium plan.
-        Upgrade to unlock unlimited AI analysis, meal planning, body tracking, and more.
+    <div style="max-width:720px;margin:0 auto;padding:24px 20px">
+      <div style="text-align:center;margin-bottom:32px">
+        <div style="font-size:32px;margin-bottom:12px">⚡</div>
+        ${featureLabel ? `
+          <div style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:6px;font-family:'DM Serif Display',serif">Unlock ${esc(featureLabel)}</div>
+          <div style="font-size:14px;color:var(--text3);max-width:440px;margin:0 auto;line-height:1.5">Upgrade to Premium to use all AI features and get ${bucksCount(10.00)} AI Bucks every month.</div>
+        ` : `
+          <div style="font-size:26px;font-weight:700;color:var(--text);margin-bottom:6px;font-family:'DM Serif Display',serif">Choose your plan</div>
+          <div style="font-size:14px;color:var(--text3);max-width:440px;margin:0 auto;line-height:1.5">Get more AI Bucks and unlock every feature.</div>
+        `}
       </div>
-      <div style="background:var(--bg3);border-radius:var(--r);padding:20px;margin-bottom:24px;width:100%;max-width:300px">
-        <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:12px">Premium includes:</div>
-        ${['Unlimited AI meal analysis','Meal planner & recipes','Body scan tracking','Weekly check-ins','Goals & macro calculator'].map(f =>
-          `<div style="font-size:13px;color:var(--text3);padding:4px 0;display:flex;gap:8px;text-align:left">
-            <span style="color:var(--protein)">✓</span>${f}
-          </div>`
-        ).join('')}
+
+      <!-- Two-tier grid. Flex-wraps to single column on narrow screens. -->
+      <div style="display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap" class="upgrade-grid">
+        ${TIERS.map(tierCard).join('')}
       </div>
-      <button onclick="window.open('https://personal-health-tracking.vercel.app/upgrade','_blank')"
-        style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px 32px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;width:100%;max-width:300px">
-        Upgrade to Premium
-      </button>
-      <div style="margin-top:12px;font-size:12px;color:var(--text3)">Already premium? <a onclick="location.reload()" style="color:var(--accent);cursor:pointer">Refresh your session</a></div>
+
+      <!-- What are AI Bucks? little explainer below — answers the obvious
+           question without forcing a user to click away. -->
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:16px;font-size:12px;color:var(--text3);line-height:1.5">
+        <div style="color:var(--text2);font-weight:600;margin-bottom:6px">What are AI Bucks?</div>
+        AI Bucks power every smart feature in the app — photo analysis, barcode scanning, recipe import, and the meal planner AI. Most actions cost just 1–3 AI Bucks, and your monthly allotment resets on the 1st.
+      </div>
+
+      <div style="text-align:center;margin-top:20px;font-size:12px;color:var(--text3)">
+        Are you a dietitian, coach, or nutrition pro? <a href="#" onclick="alert('Provider applications coming soon — reach out to the team for early access.');return false" style="color:var(--accent);text-decoration:none">Apply to be a provider →</a>
+      </div>
     </div>
+
+    <style>
+      @media (max-width: 560px) {
+        .upgrade-grid > * { flex: 1 1 100% !important }
+      }
+    </style>
   `
+}
+
+// Placeholder upgrade handler. Real payment wiring comes later; for now
+// we just let them know it's in development so they don't hit a dead
+// button. Collecting intent here would be the right next step.
+window.handleUpgradeClick = () => {
+  alert("Premium is coming soon. Reach out to the team for early access, or hit the thumbs-up button in the app to let us know you're interested.")
 }
 
 function renderPage() {
@@ -4534,58 +4631,61 @@ function renderAccount(container) {
     </div>
 
     <div class="upload-card" style="max-width:520px;margin-bottom:20px">
-      <div class="section-title">Usage this month</div>
+      <div class="section-title">AI Bucks this month</div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
         ${u.role === 'admin' ? `
           <span style="background:rgba(232,197,71,0.15);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">👑 Admin</span>
           <span style="font-size:12px;color:var(--text3)">Unlimited access · All features</span>
         ` : u.role === 'provider' ? `
           <span style="background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">🩺 Provider</span>
-          <span style="font-size:12px;color:var(--text3)">Professional access · $50/mo AI budget</span>
+          <span style="font-size:12px;color:var(--text3)">Professional access</span>
         ` : u.role === 'premium' ? `
           <span style="background:rgba(91,156,246,0.15);color:var(--carbs);border:1px solid rgba(91,156,246,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">⭐ Premium</span>
-          <span style="font-size:12px;color:var(--text3)">$10/mo AI budget · All features</span>
+          <span style="font-size:12px;color:var(--text3)">All AI features unlocked</span>
         ` : `
           <span style="background:var(--bg3);color:var(--text3);border:1px solid var(--border2);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:500">Free</span>
           <a href="#" onclick="switchPage('upgrade');return false" style="font-size:12px;color:var(--accent);text-decoration:none;font-weight:500">Upgrade to Premium →</a>
         `}
       </div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
-        <div class="stat-card" style="padding:12px">
-          <div class="stat-label">Spent</div>
-          <div class="stat-val" style="font-size:20px;color:${spentColor}">$${Number(u.spent ?? 0).toFixed(4)}</div>
-          ${!u.isUnlimited ? `<div class="stat-sub">of $${Number(u.limit ?? 10).toFixed(2)} limit</div>` : '<div class="stat-sub">unlimited</div>'}
-        </div>
-        <div class="stat-card" style="padding:12px">
-          <div class="stat-label">Requests</div>
-          <div class="stat-val" style="font-size:20px;color:var(--carbs)">${u.requests ?? 0}</div>
-          <div class="stat-sub">this month</div>
-        </div>
-        <div class="stat-card" style="padding:12px">
-          <div class="stat-label">Tokens</div>
-          <div class="stat-val" style="font-size:20px;color:var(--protein)">${((u.tokens ?? 0) / 1000).toFixed(1)}k</div>
-          <div class="stat-sub">this month</div>
-        </div>
-      </div>
+
       ${!u.isUnlimited ? `
-      <div>
-        <div class="bar-row-label" style="margin-bottom:6px">
-          <span class="bar-label">Monthly budget</span>
-          <span class="bar-val" style="color:${spentColor}">$${Number(u.spent ?? 0).toFixed(4)} / $${Number(u.limit ?? 10).toFixed(2)}</span>
+      <!-- Big numeric readout: remaining bucks front and center -->
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+        <span style="font-size:32px;font-weight:700;color:${spentColor};font-family:'DM Serif Display',serif">${bucksCount(u.remaining ?? 0)}</span>
+        <span style="font-size:13px;color:var(--text3)">AI Bucks remaining of ${bucksCount(u.limit ?? 0)}</span>
+      </div>
+      <div class="bar-bg" style="height:10px;margin-bottom:8px">
+        <div class="bar-fill" style="background:${spentColor};width:${spentPct}%;transition:width 0.3s"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:14px">Resets on the 1st of each month</div>
+
+      ${u.role === 'free' && spentPct >= 70 ? `
+      <!-- Upsell inline when they're approaching the cap -->
+      <button onclick="switchPage('upgrade')"
+        style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:12px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:8px">
+        ⚡ Upgrade for ${bucksCount(10.00)} AI Bucks/mo
+      </button>` : ''}
+      ` : `
+      <!-- Unlimited users see request count instead -->
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:14px">
+        <span style="font-size:32px;font-weight:700;color:var(--protein);font-family:'DM Serif Display',serif">${u.requests ?? 0}</span>
+        <span style="font-size:13px;color:var(--text3)">AI actions this month · unlimited</span>
+      </div>
+      `}
+
+      ${u.override ? `
+      <!-- Admin override indicator. Only shows if someone manually pinned
+           this user's cap via the spending_limit_usd column. Permanent
+           overrides have no expiration; time-limited ones show the date. -->
+      <div style="background:rgba(91,156,246,0.08);border:1px solid rgba(91,156,246,0.25);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div style="font-size:12px;color:var(--carbs);line-height:1.4">
+          <div style="font-weight:600">Custom allotment active${u.override.active ? '' : ' (expired)'}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">${u.override.expiresAt ? 'Expires ' + u.override.expiresAt.toLocaleDateString() : 'Permanent (no expiration)'}</div>
         </div>
-        <div class="bar-bg" style="height:10px">
-          <div class="bar-fill" style="background:${spentColor};width:${spentPct}%"></div>
-        </div>
-        <div style="font-size:11px;color:var(--text3);margin-top:6px">$${Number(u.remaining ?? 0).toFixed(4)} remaining · Resets 1st of each month</div>
-      </div>` : ''}
-      ${u.breakdown && Object.keys(u.breakdown).length ? `
-      <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
-        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">By feature</div>
-        ${Object.entries(u.breakdown).map(([feature, cost]) => `
-          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
-            <span style="color:var(--text2);text-transform:capitalize">${feature}</span>
-            <span style="color:var(--text)">$${Number(cost).toFixed(4)}</span>
-          </div>`).join('')}
+        <button onclick="clearOverrideHandler()"
+          style="background:transparent;border:1px solid var(--border2);color:var(--text2);border-radius:var(--r);padding:6px 10px;font-size:11px;font-family:inherit;cursor:pointer;flex-shrink:0">
+          Clear
+        </button>
       </div>` : ''}
     </div>
 
@@ -4594,7 +4694,7 @@ function renderAccount(container) {
       <div class="section-title">AI analysis</div>
       <p style="font-size:13px;color:var(--text2);line-height:1.6">
         Food analysis is powered by Claude AI and runs securely on our servers.
-        No API key needed — usage is tracked and billed against your monthly budget above.
+        No API key needed — each action uses a small number of AI Bucks from your monthly allotment above.
       </p>
     </div>
 
@@ -10523,6 +10623,49 @@ function wireGlobals() {
   }
 
   window.refreshAdminPanel = () => loadAdminPanel()
+
+  // Called from callProxy in ai.js when a 429 with spending_limit_exceeded
+  // comes back. Opens a full conversion-focused upgrade modal instead of
+  // just flashing a toast. Receives the raw USD numbers from the server;
+  // the modal itself is in AI Bucks units to match the rest of the UX.
+  window.openLimitReachedModal = ({ spentUsd, limitUsd } = {}) => {
+    const subtitle = document.getElementById('limit-reached-subtitle')
+    const usage = document.getElementById('limit-reached-usage')
+    if (subtitle) {
+      // Different copy based on role — a free user gets an aspirational
+      // upgrade pitch, a premium user (who hit their higher cap) gets a
+      // "your month reset is coming" message.
+      if (state.usage?.isFree) {
+        subtitle.textContent = "You've used all your AI Bucks for the month. Upgrade to Premium for 10,000 AI Bucks every month."
+      } else {
+        subtitle.textContent = "You've used all your AI Bucks for this month. Your allotment resets on the 1st."
+      }
+    }
+    if (usage && limitUsd) {
+      usage.textContent = `${bucksCount(limitUsd)} / ${bucksCount(limitUsd)} AI Bucks used`
+    }
+    document.getElementById('limit-reached-modal')?.classList.add('open')
+  }
+
+  window.closeLimitReachedModal = () => {
+    document.getElementById('limit-reached-modal')?.classList.remove('open')
+  }
+
+  // Clear the spending-limit override on the current user's account.
+  // Wired to the [Clear] button on the Account page override indicator.
+  // Asks for confirmation since there's no undo — the override amount
+  // and expiration both reset to null together.
+  window.clearOverrideHandler = async () => {
+    if (!confirm('Clear your custom AI Bucks allotment and revert to your role default?')) return
+    try {
+      await clearSpendingOverride(state.user.id)
+      state.usage = await getUsageSummary(state.user.id)
+      renderPage()
+      showToast('Custom allotment cleared', 'success')
+    } catch (err) {
+      showToast('Error: ' + err.message, 'error')
+    }
+  }
 
   window.loadErrorLogs = async () => {
     const el = document.getElementById('error-log-content')
