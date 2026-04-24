@@ -31,12 +31,18 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 // Preset recipe tags shown as suggestions in the editor + always visible
 // in the filter pills on the recipes page. Users can also create custom
 // tags on top of these.
+// Tag presets shown as quick-suggestions when tagging a new recipe.
+// Deliberately short and opinion-light: meal categories + the three
+// most-cooked proteins + a single veg option. Anything else users want
+// (Crockpot, Gluten-Free, Summer, High-Protein, etc) they can type as
+// a custom tag — those still work, they're just not suggested up front.
+//
+// Kept short because the previous 19-item list was clutter: it tried to
+// cover every possible cooking equipment, season, and diet, which meant
+// most users saw a wall of suggestions they'd never use.
 const RECIPE_TAG_PRESETS = [
   'Breakfast', 'Lunch', 'Dinner', 'Snack',
-  'Crockpot', 'Instant Pot', 'Air Fryer', 'Grill',
-  'Winter', 'Summer', 'Fall', 'Spring',
-  'Quick', 'Meal Prep', 'High-Protein', 'Low-Carb',
-  'Vegetarian', 'Vegan', 'Gluten-Free',
+  'Chicken', 'Beef', 'Fish', 'Vegetarian',
 ]
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -3056,6 +3062,11 @@ function renderRecipeCard(r) {
             style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
             onmouseover="this.style.borderColor='var(--carbs)';this.style.color='var(--carbs)'"
             onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text3)'">🏷️ Tag</button>
+          <button onclick="openPlanRecipeModal('${r.id}');event.stopPropagation()"
+            title="Plan this recipe for a day"
+            style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
+            onmouseover="this.style.borderColor='var(--protein)';this.style.color='var(--protein)'"
+            onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text3)'">📅 Plan</button>
           <button onclick="openShareModal('${r.id}');event.stopPropagation()"
             title="Share recipe"
             style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:3px 8px;font-size:11px;color:var(--text3);cursor:pointer;font-family:inherit"
@@ -9577,8 +9588,8 @@ function wireGlobals() {
 
       <div style="padding:14px 18px 18px">
         <div style="font-size:12px;color:var(--text3);margin-bottom:12px;line-height:1.4">
-          Rename a tag to update every recipe using it. Delete removes it everywhere.
-          Renaming to an existing tag merges them.
+          Rename to update every recipe using it. Delete removes a tag from
+          the recipes that use it. Renaming to an existing tag merges them.
         </div>
 
         ${entries.map(entry => `
@@ -9594,11 +9605,12 @@ function wireGlobals() {
               style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:11px;color:var(--text2);cursor:pointer;font-family:inherit;flex-shrink:0">
               Rename
             </button>
-            <button onclick="deleteRecipeTag('${entry.key.replace(/'/g,"\\'")}')"
-              ${entry.count === 0 ? 'disabled title="Not in use on any recipe"' : ''}
-              style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:11px;color:${entry.count === 0 ? 'var(--text3)' : 'var(--red)'};cursor:${entry.count === 0 ? 'not-allowed' : 'pointer'};font-family:inherit;flex-shrink:0;opacity:${entry.count === 0 ? '0.5' : '1'}">
-              Delete
-            </button>
+            ${entry.count > 0 ? `
+              <button onclick="deleteRecipeTag('${entry.key.replace(/'/g,"\\'")}')"
+                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:11px;color:var(--red);cursor:pointer;font-family:inherit;flex-shrink:0">
+                Delete
+              </button>
+            ` : ''}
           </div>
         `).join('')}
 
