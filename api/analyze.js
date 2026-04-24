@@ -63,7 +63,7 @@ export default async function handler(req) {
     return json({ error: 'Invalid JSON body' }, 400)
   }
 
-  const { feature, messages, tools, max_tokens = 2000 } = body
+  const { feature, messages, tools, max_tokens = 2000, action, input_type } = body
   const clampedTokens = Math.min(max_tokens, 4000)
 
   if (!feature || !messages) {
@@ -100,6 +100,11 @@ export default async function handler(req) {
     ...(tools ? { tools } : {})
   }
 
+  // Wall-clock time tracking, so we can later diagnose slow/stuck calls
+  // (e.g. tool-use loops that silently retry). Measured around the fetch
+  // only, not the usage-recording step below — that's not what the user
+  // actually waits for.
+  const startedAt = Date.now()
   const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -109,6 +114,7 @@ export default async function handler(req) {
     },
     body: JSON.stringify(anthropicBody)
   })
+  const durationMs = Date.now() - startedAt
 
   const anthropicData = await anthropicRes.json()
 
@@ -120,13 +126,37 @@ export default async function handler(req) {
   const inputTokens = anthropicData.usage?.input_tokens ?? 0
   const outputTokens = anthropicData.usage?.output_tokens ?? 0
 
-  await supabase.rpc('record_usage', {
-    p_user_id: user.id,
-    p_model: ANTHROPIC_MODEL,
-    p_feature: feature,
-    p_input_tokens: inputTokens,
-    p_output_tokens: outputTokens
-  })
+  // Extract which tools were actually invoked by the model during this
+  // request. Anthropic returns tool use blocks in `content` with type
+  // 'tool_use'. web_search in particular is a big cost driver because
+  // it expands into multiple under-the-hood requests.
+  const toolsUsed = Array.isArray(anthropicData.content)
+    ? [...new Set(
+        anthropicData.content
+          .filter(b => b?.type === 'tool_use' && b.name)
+          .map(b => b.name)
+      )]
+    : []
+
+  // Fire-and-forget. Failing to record usage is a non-fatal annoyance
+  // (we lose visibility on one call) but should never fail the whole
+  // user request. Previously this was awaited; keeping await but catching
+  // so a DB hiccup doesn't surface as an API error.
+  try {
+    await supabase.rpc('record_usage', {
+      p_user_id: user.id,
+      p_model: ANTHROPIC_MODEL,
+      p_feature: feature,
+      p_input_tokens: inputTokens,
+      p_output_tokens: outputTokens,
+      p_action: action ?? null,
+      p_input_type: input_type ?? null,
+      p_tools_used: toolsUsed.length ? toolsUsed : null,
+      p_duration_ms: durationMs
+    })
+  } catch (err) {
+    console.error('[analyze] record_usage failed:', err?.message || err)
+  }
 
   // ── Return result ─────────────────────────────────────────────────
   return json(anthropicData)

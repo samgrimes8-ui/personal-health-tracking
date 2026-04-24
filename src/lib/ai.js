@@ -47,22 +47,28 @@ async function callProxy(feature, messages, options = {}) {
   try {
     // Compute approximate payload size so we can give a helpful error if
     // it's likely to exceed Vercel's 4.5MB edge function body limit.
+    // Also auto-derive input_type for token_usage tracking: if any message
+    // has an image, we call it 'image'; if any has text AND any has image,
+    // 'mixed'; otherwise 'text'. Saves every call site from having to pass
+    // this by hand.
     let approxSize = 0
+    let hasImage = false
+    let hasText = false
     try {
-      // Fast size estimation — no need to fully stringify if we find a big image
       for (const m of messages) {
         if (Array.isArray(m.content)) {
           for (const c of m.content) {
-            if (c.type === 'image' && c.source?.data) approxSize += c.source.data.length
-            if (c.text) approxSize += c.text.length
+            if (c.type === 'image' && c.source?.data) { approxSize += c.source.data.length; hasImage = true }
+            if (c.text) { approxSize += c.text.length; hasText = true }
           }
-        } else if (typeof m.content === 'string') approxSize += m.content.length
+        } else if (typeof m.content === 'string') { approxSize += m.content.length; hasText = true }
       }
     } catch {}
     const approxMB = approxSize / 1024 / 1024
     if (approxMB > 4.2) {
       throw new Error(`Image too large (~${approxMB.toFixed(1)}MB). Try a smaller photo or tighter crop.`)
     }
+    const inputType = hasImage && hasText ? 'mixed' : hasImage ? 'image' : 'text'
 
     let res
     try {
@@ -76,7 +82,12 @@ async function callProxy(feature, messages, options = {}) {
           feature,
           messages,
           max_tokens: options.max_tokens ?? 2000,
-          ...(options.tools ? { tools: options.tools } : {})
+          ...(options.tools ? { tools: options.tools } : {}),
+          // Telemetry fields — used by token_usage to track per-operation
+          // cost and input shape. Server-side /api/analyze passes these
+          // into record_usage(). Unknown to the model itself.
+          ...(options.action ? { action: options.action } : {}),
+          input_type: inputType,
         })
       })
     } catch (networkErr) {
@@ -184,7 +195,7 @@ export async function analyzePhoto(imageBase64, mealHint) {
       { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
       { type: 'text', text: `Analyze this image. It may be a food photo, a recipe page, a recipe card, or a screenshot of a recipe. Extract the recipe name, estimate macros per serving, and list all ingredients. ${FULL_ANALYSIS_PROMPT}` + (mealHint ? `\n\nMeal name hint: ${mealHint}` : '') }
     ]
-  }], { max_tokens: 3000 })
+  }], { max_tokens: 3000, action: 'analyze_photo' })
   return parseJSON(data)
 }
 
@@ -205,7 +216,7 @@ If servings aren't stated explicitly, infer a reasonable number from the ingredi
 
 ${FULL_ANALYSIS_PROMPT}` + (mealHint ? `\n\nMeal name hint: ${mealHint}` : '') }
     ]
-  }], { max_tokens: 3000 })
+  }], { max_tokens: 3000, action: 'analyze_recipe_photo' })
   return parseJSON(data)
 }
 
@@ -213,7 +224,7 @@ export async function analyzeRecipe(recipe, mealHint) {
   const data = await callProxy('recipe', [{
     role: 'user',
     content: `Analyze this recipe and estimate macros + list all ingredients needed per serving:\n\n${recipe}${mealHint ? `\n\nMeal name: ${mealHint}` : ''}\n\n${FULL_ANALYSIS_PROMPT}`
-  }], { max_tokens: 2000 })
+  }], { max_tokens: 2000, action: 'analyze_recipe' })
   return parseJSON(data)
 }
 
@@ -227,7 +238,8 @@ export async function analyzeDishBySearch(dishName, link) {
     content: `${query}\n\nAfter searching, return ONLY a JSON object with the macros per serving and full ingredient list. ${FULL_ANALYSIS_PROMPT}`
   }], {
     max_tokens: 4000,
-    tools: [{ type: 'web_search_20250305', name: 'web_search' }]
+    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    action: 'analyze_dish_by_search',
   })
 
   // Web search responses mix tool_use and text blocks — grab all text
@@ -251,7 +263,7 @@ export async function analyzePlannerDescription(description) {
   const data = await callProxy('planner', [{
     role: 'user',
     content: `Analyze this meal/recipe and estimate macros per serving:\n\n${description}\n\n${MACROS_ONLY_PROMPT}`
-  }], { max_tokens: 600 })
+  }], { max_tokens: 600, action: 'analyze_planner_description' })
   return parseJSON(data)
 }
 
@@ -275,7 +287,7 @@ Respond ONLY with a JSON object, no markdown:
   ],
   "notes": "any prep notes"
 }`
-  }], { max_tokens: 1500 })
+  }], { max_tokens: 1500, action: 'extract_ingredients' })
   return parseJSON(data)
 }
 
@@ -293,7 +305,7 @@ ${ingredientList}
 
 Respond ONLY with a JSON object, no markdown:
 {"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"confidence":"low|medium|high","notes":"any caveats"}`
-  }], { max_tokens: 800 })
+  }], { max_tokens: 800, action: 'recalculate_macros' })
   return parseJSON(data)
 }
 
@@ -321,7 +333,7 @@ Respond ONLY with a JSON object, no markdown:
   "confidence": "low|medium|high",
   "notes": "any caveats or empty string"
 }`
-  }], { max_tokens: 600 })
+  }], { max_tokens: 600, action: 'analyze_food_item' })
   return parseJSON(data)
 }
 
@@ -348,7 +360,7 @@ If no ingredients are provided, estimate based on the recipe name.
 
 Return ONLY the steps as a JSON array:
 {"steps": ["Step 1 text", "Step 2 text", ...], "prep_time": "X mins", "cook_time": "X mins", "tips": ["optional tip 1", ...]}`
-  }], { max_tokens: 1500 })
+  }], { max_tokens: 1500, action: 'generate_recipe_instructions' })
 
   return parseJSON(data)
 }
@@ -412,7 +424,7 @@ Return ONLY this JSON object, no markdown, no extra text:
   "vat_area_cm2": null
 }` }
     ]
-  }], { max_tokens: 800 })
+  }], { max_tokens: 800, action: 'extract_body_scan' })
   return parseJSON(data)
 }
 export async function fetchOgMetadata(url) {
@@ -541,7 +553,7 @@ Respond ONLY with a JSON object, no markdown:
   "notes": "any values that were unclear"
 }` }
     ]
-  }], { max_tokens: 600 })
+  }], { max_tokens: 600, action: 'analyze_nutrition_label' })
   return parseJSON(data)
 }
 
@@ -566,7 +578,7 @@ export async function classifyFoodPhoto(imageBase64) {
 
 Respond with ONLY one word: barcode, label, or food.` }
     ]
-  }], { max_tokens: 20 })
+  }], { max_tokens: 20, action: 'classify_food_photo' })
 
   const raw = (data?.content || [])
     .map(b => b.text || '')
@@ -598,7 +610,7 @@ Examples of good responses:
 0123456789012
 UNREADABLE` }
     ]
-  }], { max_tokens: 50 })
+  }], { max_tokens: 50, action: 'read_barcode_from_image' })
 
   // Anthropic responses come back as { content: [{type: 'text', text: '...'}] }
   const raw = (data?.content || [])
@@ -637,7 +649,7 @@ Return ONLY this JSON (no markdown):
 If ingredient has no unit (e.g. "2 eggs"), set unit to "".
 Extract every ingredient and every step exactly as written.` }
     ]
-  }], { max_tokens: 2000 })
+  }], { max_tokens: 2000, action: 'extract_recipe_from_photo' })
   return parseJSON(data)
 }
 
@@ -665,6 +677,6 @@ Return ONLY this JSON (no markdown):
   "instructions": {"steps":["Step 1","Step 2"],"prep_time":"X mins","cook_time":"X mins","tips":["optional tip"]},
   "notes": "any notes about substitutions or variations"
 }`
-  }], { max_tokens: 2000 })
+  }], { max_tokens: 2000, action: 'generate_recipe_from_mood' })
   return parseJSON(data)
 }
