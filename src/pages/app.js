@@ -6893,6 +6893,47 @@ function wireGlobals() {
     closeCopyCalendar()
   }
 
+  // Share the public plan URL for the broadcast currently being previewed.
+  // Tries navigator.share first (native iOS/Android share sheet) so the user
+  // can pick any destination — Messages, Mail, Airdrop, social, etc. Falls
+  // back to plain clipboard copy on desktop browsers where share isn't
+  // available. Token sanity-checked because drafts without a token shouldn't
+  // surface this button at all, but defense-in-depth is cheap.
+  window.shareCopyBroadcastLink = async (event) => {
+    event?.stopPropagation?.()
+    const broadcast = window._pendingCopyBroadcast
+    if (!broadcast?.share_token) {
+      showToast('This plan has no public link yet', 'error')
+      return
+    }
+    const url = `${window.location.origin}/api/plan/${broadcast.share_token}`
+    const title = broadcast.title || 'Meal plan'
+    const text = `Check out this meal plan: ${title}`
+
+    // Try the native share sheet first — best UX on mobile, where most
+    // of our users live. navigator.share can reject if the user dismisses
+    // the sheet, which is NOT an error we want to surface as "share failed".
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, text, url })
+        return
+      } catch (err) {
+        // AbortError = user tapped cancel. Everything else = actual failure,
+        // fall through to clipboard.
+        if (err?.name === 'AbortError') return
+      }
+    }
+
+    // Clipboard fallback for desktop / browsers without share API
+    try {
+      await navigator.clipboard.writeText(url)
+      showToast('Link copied!', 'success')
+    } catch {
+      // Ancient browser path — show the URL for manual copying
+      showToast('Copy: ' + url, '')
+    }
+  }
+
   window.toggleAllCopyMeals = (checked) => {
     if (!window._copySelection) window._copySelection = new Set()
     const checks = document.querySelectorAll('.copy-meal-check')
@@ -7366,7 +7407,16 @@ function wireGlobals() {
             <div style="font-family:'DM Serif Display',serif;font-size:20px;color:var(--text);line-height:1.2">${esc(broadcast.title || 'Meal plan')}</div>
             ${broadcast.description ? `<div style="font-size:12px;color:var(--text2);margin-top:4px">${esc(broadcast.description)}</div>` : ''}
           </div>
-          <button onclick="closeCopyBroadcastModal()" style="background:transparent;border:none;color:var(--text3);font-size:20px;cursor:pointer;padding:0 4px;line-height:1">×</button>
+          <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+            ${broadcast.share_token ? `
+              <button onclick="shareCopyBroadcastLink(event)"
+                title="Copy or share public link"
+                style="background:transparent;border:1px solid var(--border2);color:var(--text2);font-size:12px;cursor:pointer;padding:6px 10px;border-radius:var(--r);font-family:inherit;display:inline-flex;align-items:center;gap:4px;white-space:nowrap">
+                🔗 <span>Share</span>
+              </button>
+            ` : ''}
+            <button onclick="closeCopyBroadcastModal()" style="background:transparent;border:none;color:var(--text3);font-size:20px;cursor:pointer;padding:0 4px;line-height:1">×</button>
+          </div>
         </div>
         <div style="font-size:11px;color:var(--text3)">Preview the meals, uncheck any you don't want, then pick a start date.</div>
       </div>
