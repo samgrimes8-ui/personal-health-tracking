@@ -214,8 +214,10 @@ async function loadAll() {
   state.checkins = checkins ?? []
   state.providers = providers ?? []
   state.followedProviders = followedProviders ?? []
-  // If user is a provider, load their broadcasts
-  if (usage?.role === 'admin' || usage?.role === 'dietitian' || usage?.isProvider) {
+  // If user is a provider, load their broadcasts. Provider status now
+  // derived purely from role — isProvider is true for 'provider' and
+  // 'admin' roles, false for everyone else.
+  if (usage?.isProvider) {
     safe(() => getProviderBroadcasts(state.user.id, false)).then(b => { state.myBroadcasts = b ?? [] })
   }
   // Auto-detect units from locale (US = imperial, rest = metric)
@@ -1192,9 +1194,11 @@ function renderShell(container) {
 // ─── Page Routing ─────────────────────────────────────────────────────────────
 // ─── Tier helpers ─────────────────────────────────────────────────────────────
 function userCanAccess(feature) {
-  const role = state.usage?.role || 'premium'
-  if (role === 'admin' || role === 'premium' || role === 'dietitian') return true
-  // Free tier limits
+  // Anyone paid or elevated gets the full app. Free tier is restricted
+  // to the basics below.
+  const role = state.usage?.role || 'free'
+  if (role === 'admin' || role === 'premium' || role === 'provider') return true
+  // Free tier: core personal-use features only
   const freeFeatures = ['log', 'history', 'account']
   return freeFeatures.includes(feature)
 }
@@ -3863,17 +3867,32 @@ function renderProvidersPage(container) {
 }
 
 function renderProviderCard(p, isFollowing) {
-  const roleLabel = p.role === 'dietitian' ? '🩺 Dietitian' : p.role === 'admin' ? '👑' : '🏋️ Coach'
   const avatar = p.provider_avatar_url
     ? `<img src="${esc(p.provider_avatar_url)}" alt="${esc(p.provider_name)}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div style="display:none;width:44px;height:44px;background:rgba(76,175,130,0.15);border-radius:50%;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>`
     : `<div style="width:44px;height:44px;background:rgba(76,175,130,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>`
+
+  // Credentials render as small accent-colored chips (think "RD · LD · CSCS").
+  // We parse a comma-separated string and split on common separators. If the
+  // provider hasn't filled this in yet, we fall back to showing the specialty
+  // inline like before so their card still has a subtitle.
+  const credentialChips = (p.credentials || '')
+    .split(/[,|]/)
+    .map(s => s.trim())
+    .filter(Boolean)
+  const chipsHtml = credentialChips.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin:3px 0 2px">${credentialChips.map(c =>
+        `<span style="font-size:10px;padding:2px 7px;border-radius:999px;background:rgba(76,175,130,0.12);color:var(--protein);border:1px solid rgba(76,175,130,0.3);white-space:nowrap">${esc(c)}</span>`
+      ).join('')}</div>`
+    : ''
+
   return `
     <div class="upload-card" style="padding:0;overflow:hidden">
       <div style="padding:14px 16px;display:flex;align-items:start;gap:12px">
         ${avatar}
         <div style="flex:1;min-width:0">
           <div style="font-size:15px;font-weight:600;color:var(--text)">${esc(p.provider_name || p.email || 'Provider')}</div>
-          <div style="font-size:11px;color:var(--protein);margin-bottom:2px">${roleLabel}${p.provider_specialty ? ' · ' + esc(p.provider_specialty) : ''}</div>
+          ${chipsHtml}
+          ${p.provider_specialty ? `<div style="font-size:11px;color:var(--text2);margin-bottom:2px">${esc(p.provider_specialty)}</div>` : ''}
           ${p.provider_bio ? `<div style="font-size:12px;color:var(--text3);line-height:1.4">${esc(p.provider_bio)}</div>` : ''}
         </div>
         <button onclick="${isFollowing ? `unfollowProviderHandler('${p.user_id}')` : `followProviderHandler('${p.user_id}')`}"
@@ -3921,7 +3940,12 @@ function renderMyProviderChannel() {
         </div>
         <div class="modal-field">
           <label>Specialty</label>
-          <input type="text" id="provider-specialty-input" value="${esc(u.providerSpecialty || '')}" placeholder="e.g. Registered Dietitian, Sports Nutritionist" />
+          <input type="text" id="provider-specialty-input" value="${esc(u.providerSpecialty || '')}" placeholder="e.g. Sports nutrition, weight loss, pediatric" />
+        </div>
+        <div class="modal-field">
+          <label>Credentials</label>
+          <input type="text" id="provider-credentials-input" value="${esc(u.credentials || '')}" placeholder="e.g. RD, LD, MS, CSCS" />
+          <div style="font-size:11px;color:var(--text3);margin-top:4px">Comma-separated. Shown as chips on your provider card.</div>
         </div>
         <div class="modal-field">
           <label>Bio</label>
@@ -4515,12 +4539,12 @@ function renderAccount(container) {
         ${u.role === 'admin' ? `
           <span style="background:rgba(232,197,71,0.15);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">👑 Admin</span>
           <span style="font-size:12px;color:var(--text3)">Unlimited access · All features</span>
-        ` : u.role === 'dietitian' ? `
-          <span style="background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">🩺 Dietitian</span>
-          <span style="font-size:12px;color:var(--text3)">Professional access</span>
-        ` : u.isPremium ? `
+        ` : u.role === 'provider' ? `
+          <span style="background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">🩺 Provider</span>
+          <span style="font-size:12px;color:var(--text3)">Professional access · $50/mo AI budget</span>
+        ` : u.role === 'premium' ? `
           <span style="background:rgba(91,156,246,0.15);color:var(--carbs);border:1px solid rgba(91,156,246,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">⭐ Premium</span>
-          <span style="font-size:12px;color:var(--text3)">Unlimited access · All features</span>
+          <span style="font-size:12px;color:var(--text3)">$10/mo AI budget · All features</span>
         ` : `
           <span style="background:var(--bg3);color:var(--text3);border:1px solid var(--border2);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:500">Free</span>
           <a href="#" onclick="switchPage('upgrade');return false" style="font-size:12px;color:var(--accent);text-decoration:none;font-weight:500">Upgrade to Premium →</a>
@@ -7345,15 +7369,17 @@ function wireGlobals() {
     const name = document.getElementById('provider-name-input')?.value.trim()
     const specialty = document.getElementById('provider-specialty-input')?.value.trim()
     const bio = document.getElementById('provider-bio-input')?.value.trim()
+    const credentials = document.getElementById('provider-credentials-input')?.value.trim()
     if (!name) { showToast('Display name is required', 'error'); return }
     try {
       await saveProviderProfile(state.user.id, {
         provider_name: name,
         provider_specialty: specialty,
         provider_bio: bio,
+        credentials: credentials,
         provider_slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
       })
-      // Refresh usage so name/bio/specialty update everywhere
+      // Refresh usage so name/bio/specialty/credentials update everywhere
       state.usage = await getUsageSummary(state.user.id)
       // Also update providers list so cards refresh
       state.providers = await getProviders()

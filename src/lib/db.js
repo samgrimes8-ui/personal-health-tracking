@@ -306,7 +306,7 @@ export async function getUsageSummary(userId) {
   startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
 
   const [profileRes, usageRes] = await Promise.all([
-    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, unlimited_access, account_status, role, is_provider, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url').eq('user_id', userId).maybeSingle(),
+    supabase.from('user_profiles').select('spending_limit_usd, total_spent_usd, is_admin, account_status, role, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url, credentials').eq('user_id', userId).maybeSingle(),
     supabase.from('token_usage').select('cost_usd, tokens_used, feature').eq('user_id', userId).gte('created_at', startOfMonth.toISOString())
   ])
 
@@ -314,9 +314,29 @@ export async function getUsageSummary(userId) {
   const usage = usageRes.data ?? []
   const monthSpent = usage.reduce((s, r) => s + (parseFloat(r.cost_usd) || 0), 0)
   const monthTokens = usage.reduce((s, r) => s + (r.tokens_used || 0), 0)
-  const limit = profile.spending_limit_usd ?? 10
-  const role = profile.role || (profile.is_admin ? 'admin' : profile.unlimited_access ? 'premium' : 'free')
-  const isUnlimited = role === 'admin' || role === 'premium' || role === 'dietitian' || profile.unlimited_access
+
+  // Role is the single source of truth for spend caps and provider status.
+  // Fallbacks:
+  //   - Old records with is_admin=true but no role get 'admin'
+  //   - Everything else defaults to 'free' (safest — cap applies)
+  // Note: is_provider and unlimited_access columns are being dropped in
+  // the migration, so we don't read them here anymore. If somehow they
+  // still exist on old rows, they're ignored.
+  const role = profile.role || (profile.is_admin ? 'admin' : 'free')
+
+  // Map role → default monthly cap. Admin is unlimited (null). Everyone
+  // else has a ceiling tied to their tier. Per-user override via
+  // spending_limit_usd column is respected if set (null means "use default").
+  const ROLE_CAPS = { free: 0.30, premium: 10.00, provider: 50.00, admin: null }
+  const defaultCap = ROLE_CAPS[role] ?? ROLE_CAPS.free
+  const overrideCap = profile.spending_limit_usd != null ? parseFloat(profile.spending_limit_usd) : null
+  const limit = overrideCap ?? defaultCap
+  const isUnlimited = limit == null
+
+  // Provider status is now purely role-based. 'provider' and 'admin' count
+  // as providers for discoverability / channel-ownership purposes. The
+  // standalone is_provider column is being deleted.
+  const isProvider = role === 'provider' || role === 'admin'
 
   return {
     spent: Math.round(monthSpent * 10000) / 10000,
@@ -325,16 +345,20 @@ export async function getUsageSummary(userId) {
     totalSpent: profile.total_spent_usd ?? 0,
     tokens: monthTokens,
     requests: usage.length,
-    isAdmin: role === 'admin' || profile.is_admin || false,
-    isDietitian: role === 'dietitian',
-    isPremium: isUnlimited,
-    isFree: role === 'free' && !isUnlimited,
-    isProvider: profile.is_provider || false,
+    isAdmin: role === 'admin',
+    isProvider,
+    isPremium: role === 'premium' || role === 'admin',
+    isFree: role === 'free',
+    // Legacy alias — some UI still reads isDietitian. Treat 'provider' as
+    // its closest semantic equivalent so nothing breaks during the transition.
+    // Will delete once all references are swept out of app.js.
+    isDietitian: isProvider,
     providerName: profile.provider_name || null,
     providerSlug: profile.provider_slug || null,
     providerBio: profile.provider_bio || null,
     providerSpecialty: profile.provider_specialty || null,
     providerAvatarUrl: profile.provider_avatar_url || null,
+    credentials: profile.credentials || null,
     role,
     isUnlimited,
     accountStatus: profile.account_status ?? 'active',
@@ -353,21 +377,32 @@ export async function getAdminUserOverview() {
   return data ?? []
 }
 
+// Valid roles in the new model. Setting anything outside this list throws
+// — much easier to catch typos at the edge than to debug why half the app
+// thinks you're a provider and half doesn't.
+const VALID_ROLES = new Set(['free', 'premium', 'provider', 'admin'])
+
 export async function setUserRole(userId, role) {
   if (!supabase) return
+  if (!VALID_ROLES.has(role)) {
+    throw new Error(`Invalid role '${role}' — must be one of: ${[...VALID_ROLES].join(', ')}`)
+  }
+  // is_admin kept in sync with role for backwards compat with anything still
+  // reading that column directly. Will remove once that audit is complete.
   const isAdmin = role === 'admin'
-  const unlimitedAccess = role !== 'free'
   const { error } = await supabase.from('user_profiles')
-    .update({ role, is_admin: isAdmin, unlimited_access: unlimitedAccess })
+    .update({ role, is_admin: isAdmin })
     .eq('user_id', userId)
   if (error) throw error
 }
 
-export async function setUserPrivileges(userId, { isAdmin, unlimitedAccess, spendingLimitUsd, accountStatus }) {
+// Admin-facing: set per-user overrides. spending_limit_usd stays as an
+// escape hatch — null means 'use the role default', anything else pins
+// the cap regardless of role. account_status lets admins suspend users.
+// unlimited_access is gone — that concept is now 'set role to admin'.
+export async function setUserPrivileges(userId, { spendingLimitUsd, accountStatus }) {
   if (!supabase) return
   const updates = {}
-  if (isAdmin !== undefined) updates.is_admin = isAdmin
-  if (unlimitedAccess !== undefined) updates.unlimited_access = unlimitedAccess
   if (spendingLimitUsd !== undefined) updates.spending_limit_usd = spendingLimitUsd
   if (accountStatus !== undefined) updates.account_status = accountStatus
   const { error } = await supabase.from('user_profiles').update(updates).eq('user_id', userId)
@@ -936,7 +971,7 @@ export async function saveRecipeOgCache(userId, recipeId, ogData) {
 
 // ─── Provider / Broadcast ──────────────────────────────────────────────────────
 
-export async function saveProviderProfile(userId, { provider_name, provider_bio, provider_specialty, provider_slug, provider_avatar_url }) {
+export async function saveProviderProfile(userId, { provider_name, provider_bio, provider_specialty, provider_slug, provider_avatar_url, credentials }) {
   if (!supabase) return
   const updates = {}
   if (provider_name !== undefined) updates.provider_name = provider_name
@@ -944,6 +979,9 @@ export async function saveProviderProfile(userId, { provider_name, provider_bio,
   if (provider_specialty !== undefined) updates.provider_specialty = provider_specialty
   if (provider_slug !== undefined) updates.provider_slug = provider_slug
   if (provider_avatar_url !== undefined) updates.provider_avatar_url = provider_avatar_url
+  // Free-text credentials string like "RD, LD, CSCS". No validation — we
+  // trust the provider to describe themselves honestly.
+  if (credentials !== undefined) updates.credentials = credentials
   const { error } = await supabase.from('user_profiles').update(updates).eq('user_id', userId)
   if (error) throw error
 }
@@ -963,28 +1001,23 @@ export async function uploadProviderAvatar(userId, file) {
   return data.publicUrl + '?t=' + Date.now() // cache bust
 }
 
-// Roles considered "currently active as a provider". A user shows up
-// on the Providers page only if both conditions hold: they've been marked
-// is_provider=true AND their role is one that permits serving clients.
-//
-// Why the dual check: is_provider is a persistent flag (they set up a
-// provider profile) while role is a permission tier (admin/dietitian/
-// coach/premium get unlimited AI, free does not). A user can be demoted
-// from dietitian → free for billing or account reasons without us also
-// tearing down their provider profile, and vice versa.
+// Roles considered "currently active as a provider" — shown in the
+// Providers directory and allowed to own broadcasts. Under the new
+// role model, this is simply the 'provider' role (plus admin for
+// internal testing).
 //
 // Shared broadcasts (meal plan links already distributed) are NOT gated
-// on this — they're keyed on share_token only. So demoting a provider
-// hides them from discovery but their existing links still work forever.
-const ACTIVE_PROVIDER_ROLES = ['admin', 'dietitian', 'coach', 'premium']
+// on this — they're keyed on share_token only. Demoting a provider
+// hides them from discovery but existing links keep resolving.
+const ACTIVE_PROVIDER_ROLES = ['provider', 'admin']
 
 export async function getProviders() {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, provider_avatar_url, role, email')
-    .eq('is_provider', true)
+    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, provider_avatar_url, credentials, role, email')
     .in('role', ACTIVE_PROVIDER_ROLES)
+    .not('provider_name', 'is', null)
     .order('provider_name')
   if (error) throw error
   return data ?? []
@@ -994,9 +1027,8 @@ export async function getProviderBySlug(slug) {
   if (!supabase) return null
   const { data } = await supabase
     .from('user_profiles')
-    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, role')
+    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, credentials, role')
     .eq('provider_slug', slug)
-    .eq('is_provider', true)
     .in('role', ACTIVE_PROVIDER_ROLES)
     .maybeSingle()
   return data
@@ -1082,9 +1114,8 @@ export async function getFollowedProviders(userId) {
   // data loss. Symmetric with how the directory works.
   const { data: profiles } = await supabase
     .from('user_profiles')
-    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, role')
+    .select('user_id, provider_name, provider_bio, provider_slug, provider_specialty, credentials, role')
     .in('user_id', ids)
-    .eq('is_provider', true)
     .in('role', ACTIVE_PROVIDER_ROLES)
   return profiles ?? []
 }
