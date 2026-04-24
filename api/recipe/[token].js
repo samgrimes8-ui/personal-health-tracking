@@ -30,19 +30,30 @@ function buildSourceCard(url, og) {
 
 import { createClient } from '@supabase/supabase-js'
 
-// CRITICAL: use SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY, not the VITE_*
-// prefixed versions. VITE_ env vars are only available at BUILD time in
-// the bundled client code; serverless functions run at REQUEST time where
-// VITE_* never gets populated. Previously this was `VITE_SUPABASE_URL`
-// and `VITE_SUPABASE_ANON_KEY` which were both undefined at runtime,
-// causing the Supabase client to be misconfigured and every query to
-// fail with FUNCTION_INVOCATION_FAILED. Using the service-role key (the
-// same one /api/recipe uses) also bypasses RLS so the public read works
-// regardless of the recipe owner's row-level policies.
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-)
+// Lazy Supabase client. Previously we called createClient() at module
+// top-level, which throws synchronously ('supabaseUrl is required') if
+// the env var isn't populated — and that synchronous throw escapes the
+// handler's try/catch because it happens at module load, BEFORE the
+// handler is even invoked. Result: every request returns a raw
+// FUNCTION_INVOCATION_FAILED instead of our branded 404 page, with no
+// clue in the response about what went wrong.
+//
+// Deferring the client construction to inside the handler means any
+// env var issue falls into the handler's catch block, where we can log
+// it to Vercel function logs AND return a diagnostic message to the
+// user (instead of a generic Vercel crash page).
+let _supabase = null
+function getSupabase() {
+  if (_supabase) return _supabase
+  const url = process.env.SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) {
+    const missing = [!url && 'SUPABASE_URL', !key && 'SUPABASE_SERVICE_ROLE_KEY'].filter(Boolean).join(', ')
+    throw new Error(`Supabase not configured — missing env var(s): ${missing}. Check Vercel project settings.`)
+  }
+  _supabase = createClient(url, key)
+  return _supabase
+}
 
 function esc(str) {
   return String(str || '')
@@ -314,6 +325,8 @@ export default async function handler(req, res) {
     const { token } = req.query
     if (!token) return sendNotFound(res, 'Missing share token')
 
+    const supabase = getSupabase() // throws into catch if env vars missing
+
     const { data: recipe, error } = await supabase
       .from('recipes').select('*')
       .eq('share_token', token).eq('is_shared', true)
@@ -329,8 +342,16 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 'public, max-age=60')
     return res.status(200).send(renderPage(recipe))
   } catch (err) {
-    console.error('[api/recipe/[token]] unhandled error:', err)
-    return sendNotFound(res, 'Something went wrong')
+    // Log the full error to Vercel function logs so we can see what actually
+    // went wrong (env vars, network, etc). Then return a clean 404 to the
+    // user — no raw Vercel crash page.
+    console.error('[api/recipe/[token]] unhandled error:', err?.message, err?.stack)
+    // If we can't build a Supabase client, say so explicitly — this is
+    // actionable (check Vercel env vars) rather than mysterious.
+    const userMsg = /Supabase not configured/.test(err?.message || '')
+      ? 'Server is temporarily misconfigured'
+      : 'Something went wrong'
+    return sendNotFound(res, userMsg)
   }
 }
 
