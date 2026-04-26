@@ -9965,25 +9965,121 @@ function wireGlobals() {
   // State lives on state.cookingMode = { recipeId, stepIndex } so
   // re-renders during the session don't lose place.
 
+  // ─── Voice selection (kitchen-mode TTS quality) ────────────────────
+  // iOS Safari quirk: getVoices() returns an empty list on first call.
+  // Voices load asynchronously and the 'voiceschanged' event fires
+  // when the full list is ready. We pre-load on app boot so the first
+  // tap of Read aloud doesn't get the bargain-bin Hawking-bot voice.
+  //
+  // Quality ranking heuristic, since the API has no quality field:
+  //   +500  name matches an Apple high-quality voice (Samantha, Ava,
+  //         Allison, Karen, Moira, Tessa, Susan, Victoria, Serena, Kate)
+  //   +200  name contains "Enhanced" / "Premium" / "Neural" (markers
+  //         that distinguish iOS Premium voices from default ones)
+  //   +100  localService:true (on-device — usually higher quality and
+  //         no network jitter)
+  //   +50   en-US specifically (matches our recipe content best)
+  //   +20   any English (en-GB, en-AU, en-CA, etc.)
+  //   -200  name in the known-bad list (Daniel, Fred, Albert, etc —
+  //         the legacy robot voices we want to avoid)
+  //
+  // Net result: on a typical iPhone we should pick Samantha (Enhanced)
+  // or similar without the user touching anything.
+
+  const KNOWN_GOOD_VOICES = [
+    'samantha', 'ava', 'allison', 'karen', 'moira', 'tessa',
+    'susan', 'victoria', 'serena', 'kate', 'fiona', 'nicky',
+    'siri', // some platforms expose Siri directly
+  ]
+  const KNOWN_BAD_VOICES = [
+    'daniel', 'fred', 'albert', 'bahh', 'bells', 'boing',
+    'bubbles', 'cellos', 'deranged', 'good news', 'hysterical',
+    'pipe organ', 'trinoids', 'whisper', 'zarvox',
+  ]
+
+  function scoreVoice(v) {
+    if (!v) return -Infinity
+    const name = (v.name || '').toLowerCase()
+    let score = 0
+    // Name-based signals first — these are the strongest quality indicators
+    if (KNOWN_GOOD_VOICES.some(g => name.includes(g))) score += 500
+    if (KNOWN_BAD_VOICES.some(b => name.includes(b))) score -= 200
+    if (/enhanced|premium|neural/.test(name)) score += 200
+    // Locality bonus — on-device voices tend to be Apple's tier-1
+    if (v.localService) score += 100
+    // Language match — recipes are in en-US
+    if (v.lang === 'en-US') score += 50
+    else if (v.lang?.startsWith('en')) score += 20
+    return score
+  }
+
+  // Cache the picked voice so we don't recompute on every speak() call.
+  // Reset when voiceschanged fires (list grew) or user picks manually.
+  let _cachedVoice = null
+  let _cachedVoiceList = []
+
+  function getAvailableVoices() {
+    if (!('speechSynthesis' in window)) return []
+    return window.speechSynthesis.getVoices() || []
+  }
+
+  function pickBestVoice() {
+    const voices = getAvailableVoices()
+    if (!voices.length) return null
+    // Filter to English voices first — we don't want to accidentally
+    // pick a high-quality Spanish voice for English text.
+    const english = voices.filter(v => v.lang?.startsWith('en'))
+    const pool = english.length ? english : voices
+    // Sort by score descending and return the winner.
+    const sorted = [...pool].sort((a, b) => scoreVoice(b) - scoreVoice(a))
+    return sorted[0] || null
+  }
+
+  function getActiveVoice() {
+    // Honor user override if they picked one explicitly.
+    const overrideName = localStorage.getItem('macrolens_voice_name')
+    if (overrideName) {
+      const voices = getAvailableVoices()
+      const match = voices.find(v => v.name === overrideName)
+      if (match) return match
+      // Override no longer available (different device, etc) — ignore it
+    }
+    // Otherwise auto-pick. Cache to avoid recomputing every speak().
+    if (!_cachedVoice || _cachedVoiceList.length !== getAvailableVoices().length) {
+      _cachedVoice = pickBestVoice()
+      _cachedVoiceList = getAvailableVoices()
+    }
+    return _cachedVoice
+  }
+
+  // Boot-time voice preloader. Triggers the async voice list load so
+  // by the time the user opens cooking mode, the good voices are ready.
+  // Also wired to the voiceschanged event for browsers that load mid-
+  // session.
+  function initSpeechSynthesis() {
+    if (!('speechSynthesis' in window)) return
+    // Trigger initial load
+    window.speechSynthesis.getVoices()
+    // Wire the voiceschanged event so we re-pick when the list grows.
+    // iOS sometimes fires this multiple times during boot.
+    if (typeof window.speechSynthesis.addEventListener === 'function') {
+      window.speechSynthesis.addEventListener('voiceschanged', () => {
+        _cachedVoice = null  // invalidate cache; next speak picks fresh
+      })
+    }
+  }
+  initSpeechSynthesis()
+
   function speakStep(text) {
     if (!('speechSynthesis' in window)) return
-    // Cancel any in-flight speech before starting a new one.
-    // Otherwise tapping Next mid-utterance queues them up.
     window.speechSynthesis.cancel()
     if (!text) return
     const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = 0.95   // Slightly slower than default — easier to follow while cooking
+    utterance.rate = 0.95
     utterance.pitch = 1.0
     utterance.volume = 1.0
-    // Pick a reasonable English voice if multiple are available.
-    // Prefer a US English voice; fall back to any English; else default.
-    const voices = window.speechSynthesis.getVoices()
-    if (voices.length) {
-      const us = voices.find(v => v.lang === 'en-US' && v.default)
-        || voices.find(v => v.lang === 'en-US')
-        || voices.find(v => v.lang?.startsWith('en'))
-      if (us) utterance.voice = us
-    }
+    const voice = getActiveVoice()
+    if (voice) utterance.voice = voice
     window.speechSynthesis.speak(utterance)
   }
 
@@ -10029,13 +10125,32 @@ function wireGlobals() {
     modal.style.cssText = 'position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;padding:20px;overflow-y:auto'
     modal.innerHTML = `
       <!-- Header: recipe name, step counter, close -->
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:32px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap">
         <div style="flex:1;min-width:0">
           <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px">Cooking</div>
           <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);overflow-wrap:break-word">${esc(recipe.name)}</div>
         </div>
         <button onclick="closeCookingMode()" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);width:36px;height:36px;border-radius:50%;cursor:pointer;font-family:inherit;font-size:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0">×</button>
       </div>
+
+      <!-- Voice indicator chip — shows the currently-active voice and
+           lets the user pick a different one. Subtle since this is a
+           secondary control; the cooking flow is the primary action. -->
+      ${(() => {
+        const active = getActiveVoice()
+        const label = active ? active.name : 'Default voice'
+        return `
+          <div style="display:flex;justify-content:center;margin-bottom:20px">
+            <button onclick="openVoicePicker()"
+              title="Change the read-aloud voice"
+              style="background:var(--bg3);border:1px solid var(--border);color:var(--text3);padding:6px 12px;border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px">
+              <span style="font-size:13px">🗣️</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px">${esc(label)}</span>
+              <span style="opacity:0.5">⌄</span>
+            </button>
+          </div>
+        `
+      })()}
 
       <!-- Progress: dots showing position. Tappable. -->
       <div style="display:flex;gap:6px;justify-content:center;margin-bottom:24px;flex-wrap:wrap">
@@ -10131,6 +10246,92 @@ function wireGlobals() {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel()
     state.cookingMode = null
     document.getElementById('cooking-mode-modal')?.remove()
+  }
+
+  // Voice picker — small modal listing all English voices on the
+  // device, sorted by quality score so the best ones are at the top.
+  // User picks → we save to localStorage → next speak() uses it.
+  // Tap any voice to preview it before committing.
+  window.openVoicePicker = () => {
+    const all = getAvailableVoices()
+    const english = all.filter(v => v.lang?.startsWith('en'))
+    const pool = english.length ? english : all
+    if (!pool.length) {
+      showToast('No voices available on this device', 'error')
+      return
+    }
+    // Sort by score so the picks at the top are the best quality
+    const sorted = [...pool].sort((a, b) => scoreVoice(b) - scoreVoice(a))
+    const currentName = (getActiveVoice() || {}).name
+
+    const modal = document.createElement('div')
+    modal.id = 'voice-picker-modal'
+    modal.className = 'modal-overlay open'
+    modal.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:16px;z-index:10000'
+    modal.innerHTML = `
+      <div class="modal-box" style="max-width:400px;width:100%;max-height:80vh;display:flex;flex-direction:column">
+        <button class="modal-close" onclick="document.getElementById('voice-picker-modal')?.remove()">×</button>
+        <h3 style="margin:0 0 4px;font-family:'DM Serif Display',serif;font-size:18px">Choose a voice</h3>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Tap any voice to preview. Best quality at the top.</div>
+
+        <div style="overflow-y:auto;flex:1;margin-bottom:12px">
+          ${sorted.map(v => {
+            const isActive = v.name === currentName
+            const score = scoreVoice(v)
+            // Visual quality indicator — purely cosmetic but helps the
+            // user understand why some voices ranked higher than others.
+            const tier = score >= 700 ? '★★★' : score >= 400 ? '★★' : score >= 100 ? '★' : ''
+            return `
+              <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:${isActive ? 'rgba(212,165,116,0.12)' : 'var(--bg3)'};border:1px solid ${isActive ? 'rgba(212,165,116,0.4)' : 'var(--border)'};border-radius:8px;margin-bottom:6px;cursor:pointer"
+                onclick="previewVoice('${esc(v.name).replace(/'/g, "\\'")}')">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:14px;color:var(--text);font-weight:${isActive ? '600' : '500'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(v.name)}${isActive ? ' ✓' : ''}</div>
+                  <div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(v.lang || '')}${v.localService ? ' · on-device' : ''}</div>
+                </div>
+                ${tier ? `<div style="font-size:11px;color:var(--accent);letter-spacing:1px;flex-shrink:0">${tier}</div>` : ''}
+              </div>
+            `
+          }).join('')}
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:space-between;align-items:center">
+          <button onclick="resetVoiceToAuto()"
+            style="background:none;border:1px solid var(--border2);color:var(--text3);padding:8px 12px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12px">
+            Reset to auto
+          </button>
+          <button onclick="document.getElementById('voice-picker-modal')?.remove()"
+            style="background:var(--accent);border:none;color:var(--bg);padding:8px 16px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600">
+            Done
+          </button>
+        </div>
+      </div>
+    `
+    document.body.appendChild(modal)
+  }
+
+  window.previewVoice = (voiceName) => {
+    // Persist the choice and read the current step in the new voice
+    // so the user can hear the difference immediately.
+    localStorage.setItem('macrolens_voice_name', voiceName)
+    _cachedVoice = null  // invalidate cache so getActiveVoice picks fresh
+    const cm = state.cookingMode
+    const recipe = cm ? state.recipes.find(r => r.id === cm.recipeId) : null
+    const sample = recipe?.instructions?.steps?.[cm?.stepIndex ?? 0]
+      || 'This is a sample of the selected voice.'
+    speakStep(sample)
+    // Re-render the picker so the active checkmark moves
+    document.getElementById('voice-picker-modal')?.remove()
+    window.openVoicePicker()
+    // Also update the chip in the cooking modal header
+    if (state.cookingMode) renderCookingMode()
+  }
+
+  window.resetVoiceToAuto = () => {
+    localStorage.removeItem('macrolens_voice_name')
+    _cachedVoice = null
+    document.getElementById('voice-picker-modal')?.remove()
+    if (state.cookingMode) renderCookingMode()
+    showToast('Voice reset — using best available', 'success')
   }
 
   window.openRecipeModal = (id, mode = 'view') => {
