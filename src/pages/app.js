@@ -2229,6 +2229,7 @@ async function renderGroceryList(allMeals, planner) {
     <div class="log-header">
       <span class="log-header-title">🛒 Grocery list</span>
       <div style="display:flex;gap:8px;align-items:center">
+        <button class="clear-btn" onclick="copyGroceryList()" style="color:var(--protein)" id="grocery-copy-btn">📋 Copy</button>
         <button class="clear-btn" onclick="addGroceryItem()" style="color:var(--accent)">+ Add item</button>
         <button class="clear-btn" onclick="resetExclusions()" style="color:var(--text3)">Reset</button>
       </div>
@@ -8217,6 +8218,128 @@ function wireGlobals() {
       const last = inputs[inputs.length - 1]
       if (last) last.focus()
     }, 50)
+  }
+
+  // Build a plaintext version of the grocery list and copy to clipboard.
+  // Format is optimized for pasting into Notes / Reminders / a text message:
+  //
+  //   Grocery list
+  //
+  //   Produce
+  //   - 2 lbs chicken breast
+  //   - 1 head garlic
+  //
+  //   Pantry
+  //   - 1 cup rice
+  //
+  //   Other
+  //   - paper towels
+  //
+  // Plain hyphens (not • bullets) because some apps don't render them
+  // consistently. Categories preserved so the list still feels organized.
+  // Reads from the same state the view renders from, so what you see is
+  // what gets copied — including custom items and exclusions.
+  window.copyGroceryList = async () => {
+    const btn = document.getElementById('grocery-copy-btn')
+    try {
+      // Pull the same data the renderer just produced.
+      const planner = state.planner || { meals: [] }
+      let rangeMeals = []
+      try {
+        const today = localDateStr(new Date())
+        const fromDate = state.groceryFromDate || today
+        const toDate = state.groceryToDate || (() => {
+          const weeks = state.weeksWithMeals?.length
+            ? [...state.weeksWithMeals].sort()
+            : [state.weekStart]
+          const lastWeek = weeks[weeks.length - 1]
+          const [yr, mo, dy] = lastWeek.split('-').map(Number)
+          const d = new Date(yr, mo - 1, dy + 6)
+          return localDateStr(d)
+        })()
+        const result = await getPlannerRange(state.user.id, fromDate, toDate)
+        rangeMeals = result.meals
+      } catch {
+        rangeMeals = (planner.meals || []).flat()
+      }
+
+      const allItems = collectAllIngredients(planner, rangeMeals)
+      const active = allItems.filter(i => !i.excluded)
+      const summed = sumIngredients(active)
+
+      // Group by category, mirroring the rendered list ordering.
+      const byCategory = {}
+      summed.forEach(item => {
+        const cat = item.category || 'other'
+        if (!byCategory[cat]) byCategory[cat] = []
+        byCategory[cat].push(item)
+      })
+
+      const customItems = (state.groceryCustomItems || [])
+        .map(c => (c.text || '').trim())
+        .filter(Boolean)
+
+      // Build the text. Empty list still produces a header so the user
+      // knows the copy worked rather than thinking nothing happened.
+      const lines = ['Grocery list', '']
+      for (const cat of CATEGORY_ORDER) {
+        const items = byCategory[cat]
+        if (!items?.length) continue
+        const cfg = CATEGORIES[cat]
+        lines.push(cfg?.label || cat)
+        for (const item of items) {
+          // "2 lbs chicken breast" or "— chicken breast" if amount unknown
+          const amount = item.totalAmount
+            ? `${item.totalAmount % 1 === 0 ? item.totalAmount : +item.totalAmount.toFixed(2)} ${item.unit || ''}`.trim()
+            : ''
+          lines.push(amount ? `- ${amount} ${item.name}` : `- ${item.name}`)
+        }
+        lines.push('')
+      }
+      if (customItems.length) {
+        lines.push('Other')
+        for (const t of customItems) lines.push(`- ${t}`)
+        lines.push('')
+      }
+      const text = lines.join('\n').trimEnd()
+
+      // Hand it to the system clipboard. navigator.clipboard.writeText is
+      // the modern path; falls back to a textarea+execCommand trick for
+      // older Safari WebKit if needed (some iOS versions are picky).
+      let copied = false
+      try {
+        await navigator.clipboard.writeText(text)
+        copied = true
+      } catch {
+        try {
+          const ta = document.createElement('textarea')
+          ta.value = text
+          ta.style.position = 'fixed'
+          ta.style.opacity = '0'
+          document.body.appendChild(ta)
+          ta.select()
+          copied = document.execCommand('copy')
+          document.body.removeChild(ta)
+        } catch {
+          copied = false
+        }
+      }
+
+      if (copied) {
+        showToast('Grocery list copied — paste in Notes', 'success')
+        // Brief visual confirmation on the button itself.
+        if (btn) {
+          const original = btn.textContent
+          btn.textContent = '✓ Copied'
+          setTimeout(() => { if (btn) btn.textContent = original }, 1500)
+        }
+      } else {
+        showToast('Could not copy — try long-pressing the list to select', 'error')
+      }
+    } catch (err) {
+      console.error('[copyGroceryList] failed:', err)
+      showToast('Error copying list: ' + (err?.message || 'unknown'), 'error')
+    }
   }
 
   window.editCustomGroceryItem = (idx, val) => {
