@@ -2656,26 +2656,32 @@ function renderGroceryFull(planner, rangeMeals) {
                 ? `data-merge-info="${btoa(unescape(encodeURIComponent(JSON.stringify({ canonical: item.name, total: item.totalAmount, unit: item.unit, sources }))))}"`
                 : ''
               return `
-              <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)" ${mergeAttr}>
-                <span style="font-weight:600;color:${cfg.color};min-width:80px;font-size:13px">
+              <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)" ${mergeAttr}>
+                <span style="font-weight:600;color:${cfg.color};width:80px;flex-shrink:0;font-size:13px;padding-top:2px">
                   ${item.totalAmount ? `${item.totalAmount % 1 === 0 ? item.totalAmount : +item.totalAmount.toFixed(2)} ${item.unit}` : '—'}
                 </span>
-                <span style="flex:1;font-size:14px;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
-                  <!-- overflow-wrap:break-word is the standards-compliant
-                       version; word-break:break-word was non-standard
-                       and Safari mobile interpreted it as 'break every
-                       letter' for some flex children, producing one-letter-
-                       per-line stacking. Sticking with overflow-wrap. -->
-                  <span style="overflow-wrap:break-word;word-break:normal;hyphens:auto;min-width:0">${esc(item.name)}</span>
-                  ${merged.length ? `
-                    <button onclick="showMergeDetails(this);event.stopPropagation()"
-                      title="Tap to view what got merged into this row"
-                      style="background:rgba(122,180,232,0.12);border:1px solid rgba(122,180,232,0.3);border-radius:999px;padding:2px 9px;font-size:10px;color:var(--carbs);cursor:pointer;font-family:inherit;white-space:nowrap;line-height:1.4;flex-shrink:0">
-                      ✨ +${merged.length} variant${merged.length === 1 ? '' : 's'}
-                    </button>
+                <!-- Right-side column stacks the name + (optional badge)
+                     on top, and the source-meal label below. This avoids
+                     the prior horizontal flex layout where a long meal
+                     name would push the name column to ~30px wide and
+                     force per-character wrapping (Safari behavior).
+                     min-width:0 prevents the column from claiming
+                     intrinsic content width and overflowing the row. -->
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                  <div style="font-size:14px;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
+                    <span style="overflow-wrap:anywhere;word-break:normal;min-width:0">${esc(item.name)}</span>
+                    ${merged.length ? `
+                      <button onclick="showMergeDetails(this);event.stopPropagation()"
+                        title="Tap to view what got merged into this row"
+                        style="background:rgba(122,180,232,0.12);border:1px solid rgba(122,180,232,0.3);border-radius:999px;padding:2px 9px;font-size:10px;color:var(--carbs);cursor:pointer;font-family:inherit;white-space:nowrap;line-height:1.4;flex-shrink:0">
+                        ✨ +${merged.length} variant${merged.length === 1 ? '' : 's'}
+                      </button>
+                    ` : ''}
+                  </div>
+                  ${item.meals?.length ? `
+                    <div style="font-size:11px;color:var(--text3);overflow-wrap:anywhere;word-break:normal;min-width:0">${esc(item.meals.join(', '))}</div>
                   ` : ''}
-                </span>
-                <span style="font-size:11px;color:var(--text3)">${item.meals?.join(', ') || ''}</span>
+                </div>
               </div>`
             }).join('')}
           </div>`
