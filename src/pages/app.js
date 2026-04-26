@@ -4902,12 +4902,16 @@ async function loadAdminPanel() {
                 </div>
               </div>
               <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-                <!-- Role selector -->
+                <!-- Role selector. Uses the canonical 4-role set from the
+                     refactor: free / premium / provider / admin. Anything
+                     in u.role outside this set falls back to 'free' for
+                     the dropdown's selected value (those rows shouldn't
+                     exist after the refactor migration, but defensive). -->
                 <select onchange="changeUserRole('${u.user_id}', this.value)"
                   style="background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--text);font-family:inherit;cursor:pointer">
-                  ${['admin','dietitian','premium','free'].map(r =>
-                    '<option value="' + r + '" ' + ((u.role||'premium') === r ? 'selected' : '') + '>' +
-                    {admin:'👑 Admin',dietitian:'🩺 Dietitian',premium:'⭐ Premium',free:'Free'}[r] + '</option>'
+                  ${['admin','provider','premium','free'].map(r =>
+                    '<option value="' + r + '" ' + ((u.role||'free') === r ? 'selected' : '') + '>' +
+                    {admin:'👑 Admin',provider:'🩺 Provider',premium:'⭐ Premium',free:'Free'}[r] + '</option>'
                   ).join('')}
                 </select>
                 <button class="td-act" title="${u.account_status === 'active' ? 'Suspend' : 'Activate'}"
