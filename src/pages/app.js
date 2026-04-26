@@ -2200,6 +2200,11 @@ async function renderGroceryList(allMeals, planner) {
   } catch {
     rangeMeals = planner.meals.flat()
   }
+  // Cache for synchronous reads (copyGroceryList in particular — it can't
+  // await without losing the iOS user-gesture token needed for clipboard
+  // access). Refreshed every time the grocery view renders so it stays
+  // in sync with the visible list.
+  state._groceryRangeMeals = rangeMeals
 
   // Detect orphaned leftovers: leftovers whose source cook is outside the
   // shopping window. We fetch a broader pool (current week + a couple around
@@ -8242,53 +8247,31 @@ function wireGlobals() {
   }
 
   // Build a plaintext version of the grocery list and copy to clipboard.
-  // Format is optimized for pasting into Notes / Reminders / a text message:
+  // Format is optimized for pasting into Notes / Reminders / a text message.
   //
-  //   Grocery list
+  // CRITICAL iOS quirk: navigator.clipboard.writeText requires an active
+  // user gesture. Once you `await` a network call before the clipboard
+  // write, iOS Safari considers the gesture expired and silently denies.
+  // execCommand('copy') used to be a fallback but is deprecated and
+  // doesn't reliably work on modern iOS either.
   //
-  //   Produce
-  //   - 2 lbs chicken breast
-  //   - 1 head garlic
-  //
-  //   Pantry
-  //   - 1 cup rice
-  //
-  //   Other
-  //   - paper towels
-  //
-  // Plain hyphens (not • bullets) because some apps don't render them
-  // consistently. Categories preserved so the list still feels organized.
-  // Reads from the same state the view renders from, so what you see is
-  // what gets copied — including custom items and exclusions.
-  window.copyGroceryList = async () => {
+  // Solution: use only data ALREADY in state.recipes / state.planner /
+  // state.groceryCustomItems — no awaits before the clipboard write.
+  // The grocery view has already loaded that data; we just re-derive
+  // the same view synchronously.
+  window.copyGroceryList = () => {
     const btn = document.getElementById('grocery-copy-btn')
     try {
-      // Pull the same data the renderer just produced.
+      // Use the same data the visible list is rendered from. The grocery
+      // list view stores fetched range meals in a state field so we don't
+      // need to re-fetch — see renderGroceryList.
       const planner = state.planner || { meals: [] }
-      let rangeMeals = []
-      try {
-        const today = localDateStr(new Date())
-        const fromDate = state.groceryFromDate || today
-        const toDate = state.groceryToDate || (() => {
-          const weeks = state.weeksWithMeals?.length
-            ? [...state.weeksWithMeals].sort()
-            : [state.weekStart]
-          const lastWeek = weeks[weeks.length - 1]
-          const [yr, mo, dy] = lastWeek.split('-').map(Number)
-          const d = new Date(yr, mo - 1, dy + 6)
-          return localDateStr(d)
-        })()
-        const result = await getPlannerRange(state.user.id, fromDate, toDate)
-        rangeMeals = result.meals
-      } catch {
-        rangeMeals = (planner.meals || []).flat()
-      }
+      const rangeMeals = state._groceryRangeMeals || (planner.meals || []).flat()
 
       const allItems = collectAllIngredients(planner, rangeMeals)
       const active = allItems.filter(i => !i.excluded)
       const summed = sumIngredients(active)
 
-      // Group by category, mirroring the rendered list ordering.
       const byCategory = {}
       summed.forEach(item => {
         const cat = item.category || 'other'
@@ -8300,8 +8283,6 @@ function wireGlobals() {
         .map(c => (c.text || '').trim())
         .filter(Boolean)
 
-      // Build the text. Empty list still produces a header so the user
-      // knows the copy worked rather than thinking nothing happened.
       const lines = ['Grocery list', '']
       for (const cat of CATEGORY_ORDER) {
         const items = byCategory[cat]
@@ -8309,7 +8290,6 @@ function wireGlobals() {
         const cfg = CATEGORIES[cat]
         lines.push(cfg?.label || cat)
         for (const item of items) {
-          // "2 lbs chicken breast" or "— chicken breast" if amount unknown
           const amount = item.totalAmount
             ? `${item.totalAmount % 1 === 0 ? item.totalAmount : +item.totalAmount.toFixed(2)} ${item.unit || ''}`.trim()
             : ''
@@ -8324,42 +8304,64 @@ function wireGlobals() {
       }
       const text = lines.join('\n').trimEnd()
 
-      // Hand it to the system clipboard. navigator.clipboard.writeText is
-      // the modern path; falls back to a textarea+execCommand trick for
-      // older Safari WebKit if needed (some iOS versions are picky).
-      let copied = false
-      try {
-        await navigator.clipboard.writeText(text)
-        copied = true
-      } catch {
-        try {
-          const ta = document.createElement('textarea')
-          ta.value = text
-          ta.style.position = 'fixed'
-          ta.style.opacity = '0'
-          document.body.appendChild(ta)
-          ta.select()
-          copied = document.execCommand('copy')
-          document.body.removeChild(ta)
-        } catch {
-          copied = false
-        }
-      }
-
-      if (copied) {
-        showToast('Grocery list copied — paste in Notes', 'success')
-        // Brief visual confirmation on the button itself.
-        if (btn) {
-          const original = btn.textContent
-          btn.textContent = '✓ Copied'
-          setTimeout(() => { if (btn) btn.textContent = original }, 1500)
-        }
+      // Sync clipboard write (gesture still active). navigator.clipboard
+      // returns a promise but we don't await — we kick it off and trust
+      // the gesture is preserved. Failures fall through to the .catch.
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text)
+          .then(() => {
+            showToast('Grocery list copied — paste in Notes', 'success')
+            if (btn) {
+              const original = btn.textContent
+              btn.textContent = '✓ Copied'
+              setTimeout(() => { if (btn) btn.textContent = original }, 1500)
+            }
+          })
+          .catch(err => {
+            console.warn('[copyGroceryList] clipboard write rejected:', err)
+            // Fallback: show the text in a textarea modal the user can
+            // manually copy from. Better than silent failure.
+            showCopyableTextModal(text)
+          })
       } else {
-        showToast('Could not copy — try long-pressing the list to select', 'error')
+        // Very old browsers — show the modal directly
+        showCopyableTextModal(text)
       }
     } catch (err) {
       console.error('[copyGroceryList] failed:', err)
-      showToast('Error copying list: ' + (err?.message || 'unknown'), 'error')
+      showToast('Error: ' + (err?.message || 'unknown'), 'error')
+    }
+  }
+
+  // Fallback when navigator.clipboard fails: show the text in a modal
+  // with a pre-selected textarea. iOS lets you tap "Copy" in the system
+  // selection menu after a long press, which works even when the API
+  // path doesn't.
+  function showCopyableTextModal(text) {
+    let modal = document.getElementById('copyable-text-modal')
+    if (!modal) {
+      modal = document.createElement('div')
+      modal.id = 'copyable-text-modal'
+      modal.className = 'modal-overlay open'
+      modal.style.cssText = 'display:flex;align-items:center;justify-content:center'
+      modal.innerHTML = `
+        <div class="modal-box" style="max-width:480px;width:90%">
+          <button class="modal-close" onclick="document.getElementById('copyable-text-modal').remove()">×</button>
+          <h3 style="margin:0 0 8px;font-family:'DM Serif Display',serif">Copy your grocery list</h3>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Tap inside the box, Select All, then Copy.</div>
+          <textarea id="copyable-text-textarea" readonly
+            style="width:100%;height:300px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px;color:var(--text);font-size:13px;font-family:ui-monospace,monospace;resize:none;outline:none"></textarea>
+        </div>
+      `
+      document.body.appendChild(modal)
+    } else {
+      modal.classList.add('open')
+    }
+    const ta = modal.querySelector('#copyable-text-textarea')
+    if (ta) {
+      ta.value = text
+      // Try to auto-select for one-tap copy on devices that support it
+      setTimeout(() => { try { ta.focus(); ta.select() } catch {} }, 50)
     }
   }
 
