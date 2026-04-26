@@ -739,12 +739,13 @@ Return ONLY this JSON (no markdown):
 export async function dedupGroceryNames(ingredients) {
   if (!ingredients || ingredients.length < 2) return { synonyms: [] }
 
-  // Send name+unit pairs as a compact JSON array. Unit included because
-  // it disambiguates: "rice" 2 cups vs "rice" 1 lb might be the same
-  // dry rice or different (cooked vs uncooked). The model can use unit
-  // context to decide whether to merge.
   const list = ingredients.map(i => ({ name: i.name, unit: i.unit || '' }))
 
+  // Important: the model sometimes returns prose ('No duplicates were
+  // found.') instead of valid JSON when it thinks the answer is empty.
+  // We defend against that with: (1) explicit instruction to ALWAYS
+  // return JSON, (2) showing the empty-case shape, (3) a try/catch in
+  // the caller that treats parse failures as 'no merges'.
   const prompt = `You are reviewing a grocery list and finding duplicate ingredients written with different names. Look for items that are the same shopping item even if worded differently.
 
 Ingredients:
@@ -764,18 +765,21 @@ Examples of pairs that are NOT duplicates:
 - "garlic" and "garlic powder" → fresh vs dried, different
 - "lemon" and "lemon juice" → whole fruit vs juice, different
 
-Respond ONLY with a JSON object, no markdown, no explanation:
+ALWAYS respond with a valid JSON object — never plain text, never markdown. Use this exact shape:
 {
   "synonyms": [
     {"from": "name as it appears in the input", "to": "canonical name to merge under"}
   ]
 }
 
+If nothing should be merged, return EXACTLY:
+{"synonyms": []}
+
 Rules:
 - Only include genuine duplicates. When in doubt, leave them separate.
 - 'to' should be the cleaner, more common form (e.g. "green onions" not "scallion greens")
 - 'from' must match an ingredient name from the input list exactly (case-insensitive ok)
-- If nothing should be merged, return {"synonyms": []}.`
+- Do NOT include any prose, explanation, or markdown — just the JSON object.`
 
   const data = await callProxy('grocery', [{
     role: 'user',
@@ -784,5 +788,13 @@ Rules:
     max_tokens: 800,
     action: 'dedup_grocery_names',
   })
-  return parseJSON(data)
+  // If parseJSON fails (model returned prose instead of JSON), treat
+  // it as 'no merges' rather than an error. This is the safest fallback
+  // — a working button that does nothing is better than a scary toast.
+  try {
+    return parseJSON(data)
+  } catch (err) {
+    console.warn('[dedupGroceryNames] AI returned non-JSON, treating as empty:', err.message)
+    return { synonyms: [] }
+  }
 }
