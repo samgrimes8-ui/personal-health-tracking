@@ -504,6 +504,61 @@ export async function unhideTagPreset(userId, presetName) {
   if (error) throw error
 }
 
+// ─── Ingredient synonyms (grocery smart-merge persistence) ────────────────
+// Stores user-specific name mappings learned via the AI smart-merge.
+// E.g. {from: "scallion greens", to: "green onions"}. Read on app boot
+// into state.aiSynonyms; consulted by sumIngredients to collapse rows.
+
+export async function getIngredientSynonyms(userId) {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('ingredient_synonyms')
+    .select('from_name, to_name')
+    .eq('user_id', userId)
+  if (error) {
+    // Table might not exist yet (pre-migration). Fail soft — synonyms
+    // are an enhancement, not a critical feature.
+    console.warn('[getIngredientSynonyms] failed (table may not exist yet):', error.message)
+    return []
+  }
+  return data ?? []
+}
+
+// Batch upsert. Used after the AI smart-merge call returns synonym
+// pairs — we save them all at once. Conflict-on-PK does an UPDATE so
+// the same 'from' getting a new 'to' is allowed (later AI call wins).
+export async function saveIngredientSynonyms(userId, pairs) {
+  if (!supabase || !pairs?.length) return
+  const rows = pairs
+    .filter(p => p.from && p.to)
+    .map(p => ({
+      user_id: userId,
+      from_name: String(p.from).toLowerCase().trim(),
+      to_name: String(p.to).toLowerCase().trim(),
+    }))
+    .filter(r => r.from_name && r.to_name && r.from_name !== r.to_name)
+  if (!rows.length) return
+  const { error } = await supabase
+    .from('ingredient_synonyms')
+    .upsert(rows, { onConflict: 'user_id,from_name' })
+  if (error) throw error
+}
+
+// Delete one or more synonyms by from_name. Used by the per-row unmerge
+// button — when the user clicks × on a merged row, we look up which
+// from_names mapped to that row's canonical name and delete each.
+export async function deleteIngredientSynonyms(userId, fromNames) {
+  if (!supabase || !fromNames?.length) return
+  const lowered = fromNames.map(n => String(n).toLowerCase().trim()).filter(Boolean)
+  if (!lowered.length) return
+  const { error } = await supabase
+    .from('ingredient_synonyms')
+    .delete()
+    .eq('user_id', userId)
+    .in('from_name', lowered)
+  if (error) throw error
+}
+
 // ─── Recipes ──────────────────────────────────────────────────────────────────
 
 export async function getRecipes(userId) {

@@ -13,6 +13,7 @@ import {
   generateShareToken,
   enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary, getRecipeByIdPublic,
   saveRecipeOgCache, setUserRole, clearSpendingOverride, hideTagPreset, unhideTagPreset,
+  getIngredientSynonyms, saveIngredientSynonyms, deleteIngredientSynonyms,
   getProviders, getProviderBroadcasts, saveBroadcast, deleteBroadcast,
   followProvider, unfollowProvider, getFollowedProviders, isFollowingProvider,
   getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar
@@ -209,7 +210,7 @@ export async function initApp(user, container) {
 async function loadAll() {
   const safe = (fn) => fn().catch(err => { console.warn('loadAll partial failure:', err.message); return null })
 
-  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner, bodyMetrics, checkins, providers, followedProviders] = await Promise.all([
+  const [goals, log, usage, recipes, weeksWithMeals, foodItems, todayPlanner, bodyMetrics, checkins, providers, followedProviders, synonyms] = await Promise.all([
     safe(() => getGoals(state.user.id)),
     safe(() => getMealLog(state.user.id, { limit: 300 })),
     safe(() => getUsageSummary(state.user.id)),
@@ -221,6 +222,7 @@ async function loadAll() {
     safe(() => getCheckins(state.user.id)),
     safe(() => getProviders()),
     safe(() => getFollowedProviders(state.user.id)),
+    safe(() => getIngredientSynonyms(state.user.id)),
   ])
   state.goals = { calories: goals?.calories ?? 2000, protein: goals?.protein ?? 150, carbs: goals?.carbs ?? 200, fat: goals?.fat ?? 65 }
   state.log = log ?? []
@@ -233,6 +235,15 @@ async function loadAll() {
   state.checkins = checkins ?? []
   state.providers = providers ?? []
   state.followedProviders = followedProviders ?? []
+  // Build synonyms lookup map: { from_name → to_name } for sumIngredients.
+  // Renamed from session-only state._aiSynonyms to state.aiSynonyms (no
+  // underscore) since it's now persistent and a first-class state field.
+  state.aiSynonyms = {}
+  for (const row of (synonyms || [])) {
+    if (row?.from_name && row?.to_name) {
+      state.aiSynonyms[row.from_name.toLowerCase()] = row.to_name.toLowerCase()
+    }
+  }
   // If user is a provider, load their broadcasts. Provider status now
   // derived purely from role — isProvider is true for 'provider' and
   // 'admin' roles, false for everyone else.
@@ -2386,26 +2397,49 @@ function sumIngredients(items) {
   // items: [{name, amount (number), unit, category, excluded, mealName}]
   // Group by name+unit where possible, summing amounts.
   // Two-pass dedup:
-  //   Pass 2 (AI synonyms, on-demand): if state._aiSynonyms has an
-  //     entry for this name, swap it in first.
+  //   Pass 2 (AI synonyms, persistent across sessions): if state.aiSynonyms
+  //     has an entry for this name, swap it in first.
   //   Pass 1 (regex canonicalizer, free): runs on either the original
   //     name or the AI-swapped name to handle variants the AI didn't
   //     touch. Most rows get caught here.
   // Display name on the merged row uses the final canonical form.
-  const aiSyn = state._aiSynonyms || {}
+  //
+  // We also track aiMergedFrom on each grouped row — the list of
+  // ORIGINAL ingredient names that got pulled into this canonical row
+  // via the AI synonym map. This drives the "✨ +N variants" badge UI
+  // and the per-row unmerge button.
+  const aiSyn = state.aiSynonyms || {}
   const grouped = {}
   items.forEach(item => {
     if (item.excluded) return
     const lowered = (item.name || '').toLowerCase().trim()
-    // Apply AI synonym if one exists for this exact name
-    const afterAi = aiSyn[lowered] || lowered
+    // Apply AI synonym if one exists for this exact name.
+    // We track whether AI participated in this row's merge so we
+    // can show the badge only when AI actually contributed (not when
+    // it was just regex canonicalization).
+    const aiHit = aiSyn[lowered]
+    const afterAi = aiHit || lowered
     const canonical = canonicalizeName(afterAi) || afterAi || (item.name || '').toLowerCase().trim()
     const key = canonical
     const amt = parseAmount(item.amount)
     if (!grouped[key]) {
-      grouped[key] = { ...item, name: canonical, totalAmount: amt, meals: [item.mealName] }
+      grouped[key] = {
+        ...item,
+        name: canonical,
+        totalAmount: amt,
+        meals: [item.mealName],
+        // Track AI-merged sources only — regex-merged rows don't get a
+        // badge (those collapses are deterministic and uninteresting).
+        aiMergedFrom: aiHit ? [item.name] : [],
+      }
     } else {
       const existing = grouped[key]
+      // Track newly merged source even if we found this canonical key
+      // via a different path. Dedup the array — same source shouldn't
+      // be listed twice if the same recipe has it duplicated.
+      if (aiHit && !existing.aiMergedFrom.includes(item.name)) {
+        existing.aiMergedFrom.push(item.name)
+      }
       // Try to convert to oz for summing
       const existOz = toOz(existing.totalAmount, existing.unit)
       const newOz = toOz(amt, item.unit)
@@ -2422,8 +2456,21 @@ function sumIngredients(items) {
         // "8 oz chicken" merge if oz-convertible, but "1 lb chicken"
         // and "1 cup chicken" stay separate.
         const altKey = `${canonical}_${item.unit}`
-        if (!grouped[altKey]) grouped[altKey] = { ...item, name: canonical, totalAmount: amt, meals: [item.mealName] }
-        else { grouped[altKey].totalAmount += amt; grouped[altKey].meals.push(item.mealName) }
+        if (!grouped[altKey]) {
+          grouped[altKey] = {
+            ...item,
+            name: canonical,
+            totalAmount: amt,
+            meals: [item.mealName],
+            aiMergedFrom: aiHit ? [item.name] : [],
+          }
+        } else {
+          grouped[altKey].totalAmount += amt
+          grouped[altKey].meals.push(item.mealName)
+          if (aiHit && !grouped[altKey].aiMergedFrom.includes(item.name)) {
+            grouped[altKey].aiMergedFrom.push(item.name)
+          }
+        }
         return
       }
       if (!existing.meals.includes(item.mealName)) existing.meals.push(item.mealName)
@@ -2533,13 +2580,31 @@ function renderGroceryFull(planner, rangeMeals) {
             <div style="padding:10px 20px 6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:${cfg.color};background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px">
               <span>${cfg.emoji}</span><span>${cfg.label}</span><span style="color:var(--text3);font-weight:400">(${items.length})</span>
             </div>
-            ${items.map(item => `
-              <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)">
+            ${items.map(item => {
+              const merged = item.aiMergedFrom || []
+              const mergeAttr = merged.length ? `data-merged-from="${esc(merged.join('|'))}"` : ''
+              return `
+              <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)" ${mergeAttr}>
                 <span style="font-weight:600;color:${cfg.color};min-width:80px;font-size:13px">
                   ${item.totalAmount ? `${item.totalAmount % 1 === 0 ? item.totalAmount : +item.totalAmount.toFixed(2)} ${item.unit}` : '—'}
                 </span>
-                <span style="flex:1;font-size:14px;color:var(--text)">${esc(item.name)}</span>
-                <span style="font-size:11px;color:var(--text3)">${item.meals?.join(', ') || ''}</span>              </div>`).join('')}
+                <span style="flex:1;font-size:14px;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                  ${esc(item.name)}
+                  ${merged.length ? `
+                    <!-- Badge for AI-merged rows. Tap to unmerge. The
+                         from-names are encoded as a pipe-separated list
+                         on the data attribute so the handler can look
+                         them up without ferrying objects through onclick. -->
+                    <button onclick="showMergeDetails(this);event.stopPropagation()"
+                      title="Tap to view or undo this merge"
+                      style="background:rgba(122,180,232,0.12);border:1px solid rgba(122,180,232,0.3);border-radius:999px;padding:1px 8px;font-size:10px;color:var(--carbs);cursor:pointer;font-family:inherit">
+                      ✨ +${merged.length} variant${merged.length === 1 ? '' : 's'}
+                    </button>
+                  ` : ''}
+                </span>
+                <span style="font-size:11px;color:var(--text3)">${item.meals?.join(', ') || ''}</span>
+              </div>`
+            }).join('')}
           </div>`
       }).join('')}
 
@@ -8391,9 +8456,8 @@ function wireGlobals() {
 
   // ── AI smart-merge for grocery list (Pass 2 of hybrid dedup) ──────
   // Sends the current post-Pass-1 ingredient names to Claude and asks
-  // for a synonym map. Applied client-side via state._aiSynonyms which
-  // canonicalizeName consults before its regex rules. Session-scoped:
-  // synonyms reset on page reload.
+  // for a synonym map. Persisted to ingredient_synonyms table so they
+  // apply on future loads without re-paying AI Bucks.
   //
   // On-demand only — costs AI Bucks, so it doesn't run silently.
   window.smartMergeGrocery = async () => {
@@ -8425,30 +8489,42 @@ function wireGlobals() {
         return
       }
 
-      // Merge new synonyms into the session map. AI returns 'from' as
-      // the variant name and 'to' as the canonical. Store lowercased
-      // for case-insensitive lookup.
-      if (!state._aiSynonyms) state._aiSynonyms = {}
-      let added = 0
+      // Filter to actually-new pairs we don't already know about. The
+      // table will silently upsert duplicates anyway, but skipping
+      // them client-side gives us an accurate "added N" count.
+      if (!state.aiSynonyms) state.aiSynonyms = {}
+      const newPairs = []
       for (const pair of synonyms) {
         if (!pair?.from || !pair?.to) continue
         const fromKey = String(pair.from).toLowerCase().trim()
         const toCanon = String(pair.to).toLowerCase().trim()
         if (!fromKey || !toCanon || fromKey === toCanon) continue
-        // Don't overwrite existing entries silently — AI calls are
-        // additive across multiple taps if user wants to refine.
-        if (!state._aiSynonyms[fromKey]) {
-          state._aiSynonyms[fromKey] = toCanon
-          added++
+        if (state.aiSynonyms[fromKey] !== toCanon) {
+          newPairs.push({ from: fromKey, to: toCanon })
         }
       }
 
-      if (added === 0) {
+      if (newPairs.length === 0) {
         showToast('Already optimized — no new merges found', 'success')
-      } else {
-        showToast(`Merged ${added} similar item${added === 1 ? '' : 's'}`, 'success')
-        renderPage()
+        return
       }
+
+      // Persist to DB. If this fails (e.g. table doesn't exist yet), we
+      // still apply the synonyms in-memory for this session — graceful
+      // degradation.
+      try {
+        await saveIngredientSynonyms(state.user.id, newPairs)
+      } catch (saveErr) {
+        console.warn('[smartMergeGrocery] DB save failed (synonyms applied in-memory):', saveErr.message)
+      }
+
+      // Apply to in-memory map
+      for (const p of newPairs) {
+        state.aiSynonyms[p.from] = p.to
+      }
+
+      showToast(`Merged ${newPairs.length} similar item${newPairs.length === 1 ? '' : 's'}`, 'success')
+      renderPage()
     } catch (err) {
       console.error('[smartMergeGrocery] failed:', err)
       // 429 / spend-limit errors will have already shown the upgrade
@@ -8459,6 +8535,63 @@ function wireGlobals() {
     } finally {
       btn.disabled = false
       btn.textContent = originalText
+    }
+  }
+
+  // ── Show merge details + unmerge UI ───────────────────────────────
+  // Triggered by tapping the '✨ +N variants' badge on a merged row.
+  // Renders a small confirm() with the list of variants + an Undo
+  // button that splits them back into separate rows.
+  //
+  // The badge button has data-merged-from="name1|name2|name3" — we
+  // pull that off the parent row's dataset rather than passing strings
+  // through onclick (escaping nightmare with apostrophes etc).
+  window.showMergeDetails = (btn) => {
+    if (!btn) return
+    const row = btn.closest('[data-merged-from]')
+    if (!row) return
+    const mergedFromRaw = row.dataset.mergedFrom || ''
+    const variants = mergedFromRaw.split('|').map(s => s.trim()).filter(Boolean)
+    if (!variants.length) return
+
+    // confirm() dialog showing the variants + asking if the user wants
+    // to unmerge them. Browsers truncate long messages so we cap.
+    const SHOW_MAX = 6
+    const list = variants.length <= SHOW_MAX
+      ? variants.map(v => `  • ${v}`).join('\n')
+      : variants.slice(0, SHOW_MAX).map(v => `  • ${v}`).join('\n') + `\n  …and ${variants.length - SHOW_MAX} more`
+
+    const msg = `These ingredients were merged into this row:\n\n${list}\n\nUndo and split them back out?`
+    if (!confirm(msg)) return
+    unmergeIngredients(variants)
+  }
+
+  // Removes synonyms from both the DB and the in-memory map, then
+  // re-renders so the rows split back out. fromNames are the ORIGINAL
+  // ingredient names (not the canonical), since that's what the
+  // synonyms table is keyed on.
+  async function unmergeIngredients(fromNames) {
+    if (!fromNames?.length) return
+    const lowered = fromNames.map(n => String(n).toLowerCase().trim()).filter(Boolean)
+    if (!lowered.length) return
+    try {
+      // Remove from in-memory first so the UI updates fast
+      if (state.aiSynonyms) {
+        for (const k of lowered) delete state.aiSynonyms[k]
+      }
+      // Then delete from DB. If this fails (offline, table missing),
+      // the in-memory removal still lets the user see the unmerge
+      // until next reload.
+      try {
+        await deleteIngredientSynonyms(state.user.id, lowered)
+      } catch (err) {
+        console.warn('[unmergeIngredients] DB delete failed:', err.message)
+      }
+      showToast(`Unmerged ${lowered.length} ingredient${lowered.length === 1 ? '' : 's'}`, 'success')
+      renderPage()
+    } catch (err) {
+      console.error('[unmergeIngredients] failed:', err)
+      showToast('Unmerge failed: ' + (err?.message || 'unknown'), 'error')
     }
   }
 
