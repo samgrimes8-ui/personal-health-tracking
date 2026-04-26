@@ -24,11 +24,14 @@ with month_usage as (
    group by user_id
 ),
 log_counts as (
-  -- Per-user meal log counts (all-time and current month)
+  -- Per-user meal log counts (all-time and current month).
+  -- meal_log uses logged_at (the date food was eaten) rather than
+  -- created_at. logged_at is also a better signal for last-activity:
+  -- it reflects when the food was eaten, including backdated entries.
   select user_id,
-         count(*) filter (where created_at >= date_trunc('month', now())) as log_entries_this_month,
+         count(*) filter (where logged_at >= date_trunc('month', now())) as log_entries_this_month,
          count(*)                                                          as log_entries_total,
-         max(created_at)                                                   as last_log_at
+         max(logged_at)                                                    as last_log_at
     from public.meal_log
    group by user_id
 ),
