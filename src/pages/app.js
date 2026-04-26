@@ -2450,53 +2450,48 @@ function sumIngredients(items) {
     if (item.excluded) return
     const lowered = (item.name || '').toLowerCase().trim()
     // Apply AI synonym if one exists for this exact name.
-    // We track whether AI participated in this row's merge so we
-    // can show the badge only when AI actually contributed (not when
-    // it was just regex canonicalization).
     const aiHit = aiSyn[lowered]
     const afterAi = aiHit || lowered
     const canonical = canonicalizeName(afterAi) || afterAi || (item.name || '').toLowerCase().trim()
     const key = canonical
     const amt = parseAmount(item.amount)
-    // Source record for the merge-details modal — shows users WHAT got
-    // merged + WHERE it came from + HOW MUCH was contributed.
-    const sourceRecord = aiHit ? {
+    // Source record — captures every contribution to a grouped row,
+    // with viaAi flagging whether the AI synonym map was responsible
+    // (those are the only ones removed if the user unmerges).
+    // Tracking ALL sources lets the merge-details modal show the full
+    // composition of a row, not just the AI-merged subset — so the
+    // user can see what stays vs. what splits out on unmerge.
+    const sourceRecord = {
       name: item.name,
       amount: amt,
       unit: item.unit || '',
       mealName: item.mealName,
-    } : null
+      viaAi: !!aiHit,
+    }
     if (!grouped[key]) {
       grouped[key] = {
         ...item,
         name: canonical,
         totalAmount: amt,
         meals: [item.mealName],
-        // aiMergedFrom is now an array of {name, amount, unit, mealName}
-        // records (rich source info) instead of bare strings, so the
-        // unmerge modal can show contribution details.
-        aiMergedFrom: sourceRecord ? [sourceRecord] : [],
+        // sources is the full contribution list. aiMergedFrom (computed
+        // from sources at render time) stays available as an alias for
+        // the badge count and the unmerge variant-names.
+        sources: [sourceRecord],
       }
     } else {
       const existing = grouped[key]
-      // Track newly merged source — different recipes contributing
-      // different variant names should each get their own entry. We
-      // dedupe on (name + mealName) combo so a recipe with the same
-      // ingredient duplicated doesn't list it twice.
-      if (sourceRecord) {
-        const dupe = existing.aiMergedFrom.find(s =>
-          s.name.toLowerCase() === sourceRecord.name.toLowerCase()
-          && s.mealName === sourceRecord.mealName
-        )
-        if (!dupe) existing.aiMergedFrom.push(sourceRecord)
-      }
+      // Dedupe on (name + mealName + unit) so a recipe listing the
+      // same ingredient multiple times doesn't show as multiple sources.
+      const dupe = existing.sources.find(s =>
+        s.name.toLowerCase() === sourceRecord.name.toLowerCase()
+        && s.mealName === sourceRecord.mealName
+        && s.unit === sourceRecord.unit
+      )
+      if (!dupe) existing.sources.push(sourceRecord)
       // Try to convert through one of two dimensions:
       //   1. WEIGHT — oz/lbs/g/kg can sum together
       //   2. VOLUME — cups/tbsp/tsp/ml/L can sum together
-      // We try weight first (covers meat/cheese), then volume (covers
-      // herbs, oils, sauces). If both fail or they're in different
-      // dimensions (1 lb chicken + 1 cup chicken), drop to the
-      // same-unit / different-unit branch below.
       const existOz = toOz(existing.totalAmount, existing.unit)
       const newOz = toOz(amt, item.unit)
       const existTbsp = toTbsp(existing.totalAmount, existing.unit)
@@ -2515,10 +2510,7 @@ function sumIngredients(items) {
       } else if (existing.unit === item.unit) {
         existing.totalAmount += amt
       } else {
-        // Different units that can't convert — keep separate. The altKey
-        // still uses the canonical name so e.g. "1 lb chicken" and
-        // "8 oz chicken" merge if oz-convertible, but "1 lb chicken"
-        // and "1 cup chicken" stay separate.
+        // Different units that can't convert — keep separate.
         const altKey = `${canonical}_${item.unit}`
         if (!grouped[altKey]) {
           grouped[altKey] = {
@@ -2526,24 +2518,28 @@ function sumIngredients(items) {
             name: canonical,
             totalAmount: amt,
             meals: [item.mealName],
-            aiMergedFrom: sourceRecord ? [sourceRecord] : [],
+            sources: [sourceRecord],
           }
         } else {
           grouped[altKey].totalAmount += amt
           grouped[altKey].meals.push(item.mealName)
-          if (sourceRecord) {
-            const dupe = grouped[altKey].aiMergedFrom.find(s =>
-              s.name.toLowerCase() === sourceRecord.name.toLowerCase()
-              && s.mealName === sourceRecord.mealName
-            )
-            if (!dupe) grouped[altKey].aiMergedFrom.push(sourceRecord)
-          }
+          const altDupe = grouped[altKey].sources.find(s =>
+            s.name.toLowerCase() === sourceRecord.name.toLowerCase()
+            && s.mealName === sourceRecord.mealName
+            && s.unit === sourceRecord.unit
+          )
+          if (!altDupe) grouped[altKey].sources.push(sourceRecord)
         }
         return
       }
       if (!existing.meals.includes(item.mealName)) existing.meals.push(item.mealName)
     }
   })
+  // Compute aiMergedFrom from sources for compatibility with the badge
+  // render path. It's just the AI-via subset of sources.
+  for (const row of Object.values(grouped)) {
+    row.aiMergedFrom = (row.sources || []).filter(s => s.viaAi)
+  }
   return Object.values(grouped)
 }
 
@@ -2650,13 +2646,14 @@ function renderGroceryFull(planner, rangeMeals) {
             </div>
             ${items.map(item => {
               const merged = item.aiMergedFrom || []
-              // Encode merge sources as base64-encoded JSON on the data
-              // attribute. JSON because we're carrying rich {name, amount,
-              // unit, mealName} records now; base64 because raw JSON in
-              // an HTML attribute breaks on quotes/apostrophes/newlines
-              // and escaping is fragile across nested templates.
+              const sources = item.sources || []
+              // Encode the full row state (canonical name, total, sources
+              // with viaAi flags) as base64 JSON. The modal needs ALL
+              // sources to show the user the complete row composition,
+              // not just the AI-merged subset — otherwise the canonical
+              // contribution is invisible and the math doesn't add up.
               const mergeAttr = merged.length
-                ? `data-merge-info="${btoa(unescape(encodeURIComponent(JSON.stringify({ canonical: item.name, total: item.totalAmount, unit: item.unit, sources: merged }))))}"`
+                ? `data-merge-info="${btoa(unescape(encodeURIComponent(JSON.stringify({ canonical: item.name, total: item.totalAmount, unit: item.unit, sources }))))}"`
                 : ''
               return `
               <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)" ${mergeAttr}>
@@ -8639,7 +8636,6 @@ function wireGlobals() {
     if (!row) return
     let info
     try {
-      // Reverse of the encoding in the row render — base64 → utf8 → JSON
       info = JSON.parse(decodeURIComponent(escape(atob(row.dataset.mergeInfo))))
     } catch (err) {
       console.error('[showMergeDetails] decode failed:', err)
@@ -8647,8 +8643,7 @@ function wireGlobals() {
     }
     if (!info?.sources?.length) return
 
-    // Format an amount + unit for display ("0.25 cups", "2 tbsp",
-    // or "—" if amount is missing).
+    // Format an amount + unit for display.
     const fmt = (amt, unit) => {
       if (!amt && amt !== 0) return '—'
       const rounded = amt % 1 === 0 ? amt : +amt.toFixed(2)
@@ -8658,22 +8653,47 @@ function wireGlobals() {
     const totalLabel = fmt(info.total, info.unit)
     const sources = info.sources
 
-    // Source rows — each one tells the user the original variant name,
-    // how much was contributed, and which recipe it came from.
-    const sourceListHtml = sources.map(s => `
-      <div style="padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
-        <div style="font-size:13px;color:var(--text);font-weight:500;margin-bottom:2px">${esc(s.name)}</div>
-        <div style="font-size:11px;color:var(--text3);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
-          <span>${fmt(s.amount, s.unit)}</span>
-          <span style="text-align:right;flex:1;min-width:0;overflow-wrap:break-word">${esc(s.mealName || '')}</span>
-        </div>
-      </div>
-    `).join('')
+    // Split sources by what happens on unmerge:
+    //   viaAi=true  → AI synonym pulled it in; it splits back into its own row
+    //   viaAi=false → was already canonical (or regex-canonicalized); it stays
+    const removed = sources.filter(s => s.viaAi)
+    const kept = sources.filter(s => !s.viaAi)
 
-    // Build the modal. Stash the variant names on the unmerge button
-    // so the click handler can read them without re-parsing the JSON.
-    const variantNames = sources.map(s => s.name).filter(Boolean)
-    const variantsAttr = btoa(unescape(encodeURIComponent(JSON.stringify(variantNames))))
+    // After unmerge we'll have:
+    //   1 row for the canonical (the kept sources sum into it)  +
+    //   N rows for each removed source (one per AI-merged variant)
+    // We only count the +1 if there are kept sources (otherwise the
+    // canonical row has nothing left to sum and disappears).
+    const postUnmergeRows = (kept.length > 0 ? 1 : 0) + removed.length
+
+    // Render each source as a card. AI-merged sources get a red
+    // "splits out" badge; non-merged ones get a neutral "stays" badge
+    // so the user can see at a glance what's happening to each.
+    const sourceListHtml = sources.map(s => {
+      const isRemoved = !!s.viaAi
+      const badgeBg = isRemoved ? 'rgba(225,113,103,0.15)' : 'rgba(122,180,232,0.12)'
+      const badgeBorder = isRemoved ? 'rgba(225,113,103,0.35)' : 'rgba(122,180,232,0.25)'
+      const badgeColor = isRemoved ? 'var(--red)' : 'var(--text3)'
+      const badgeLabel = isRemoved ? 'splits out' : 'stays'
+      return `
+        <div style="padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:2px">
+            <div style="font-size:13px;color:var(--text);font-weight:500;flex:1;min-width:0;overflow-wrap:break-word">${esc(s.name)}</div>
+            <span style="font-size:9px;padding:2px 7px;background:${badgeBg};border:1px solid ${badgeBorder};border-radius:999px;color:${badgeColor};white-space:nowrap;flex-shrink:0;text-transform:uppercase;letter-spacing:0.4px;font-weight:600">${badgeLabel}</span>
+          </div>
+          <div style="font-size:11px;color:var(--text3);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <span>${fmt(s.amount, s.unit)}</span>
+            <span style="text-align:right;flex:1;min-width:0;overflow-wrap:break-word">${esc(s.mealName || '')}</span>
+          </div>
+        </div>
+      `
+    }).join('')
+
+    // Stash the AI-removed variant names for the unmerge button. We
+    // unmerge ONLY the AI-via sources; the canonical-direct ones
+    // weren't synonyms so there's nothing to remove from the DB.
+    const removeNames = removed.map(s => s.name).filter(Boolean)
+    const variantsAttr = btoa(unescape(encodeURIComponent(JSON.stringify(removeNames))))
 
     const existing = document.getElementById('merge-details-modal')
     if (existing) existing.remove()
@@ -8682,22 +8702,26 @@ function wireGlobals() {
     modal.className = 'modal-overlay open'
     modal.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:16px'
     modal.innerHTML = `
-      <div class="modal-box" style="max-width:420px;width:100%;max-height:85vh;display:flex;flex-direction:column">
+      <div class="modal-box" style="max-width:440px;width:100%;max-height:85vh;display:flex;flex-direction:column">
         <button class="modal-close" onclick="document.getElementById('merge-details-modal')?.remove()">×</button>
         <h3 style="margin:0 0 4px;font-family:'DM Serif Display',serif;font-size:20px">Merged ingredient</h3>
-        <div style="font-size:13px;color:var(--text3);margin-bottom:14px">
-          <span style="color:var(--text)">${esc(info.canonical || 'unknown')}</span> · ${totalLabel} total
+        <div style="font-size:13px;color:var(--text3);margin-bottom:14px;overflow-wrap:break-word">
+          <span style="color:var(--text)">${esc(info.canonical || 'unknown')}</span> · ${totalLabel} total · ${sources.length} source${sources.length === 1 ? '' : 's'}
         </div>
 
-        <div style="font-size:12px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">
-          Sources (${sources.length})
+        <div style="font-size:11px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">
+          Composition
         </div>
         <div style="overflow-y:auto;flex:1;margin-bottom:14px">
           ${sourceListHtml}
         </div>
 
-        <div style="font-size:12px;color:var(--text3);padding:8px 12px;background:var(--bg3);border-radius:6px;margin-bottom:14px;line-height:1.4">
-          <b style="color:var(--text2)">After unmerge:</b> these will split back into ${sources.length} separate row${sources.length === 1 ? '' : 's'} on the grocery list. The synonym mapping will also be removed from your saved settings.
+        <div style="font-size:12px;color:var(--text2);padding:10px 12px;background:var(--bg3);border-radius:6px;margin-bottom:14px;line-height:1.4">
+          <b style="color:var(--text)">After unmerge:</b> ${
+            postUnmergeRows === sources.length
+              ? `${postUnmergeRows} separate row${postUnmergeRows === 1 ? '' : 's'} (one per source above).`
+              : `${postUnmergeRows} row${postUnmergeRows === 1 ? '' : 's'} — the items marked <i>stays</i> remain on the canonical row, and each <i>splits out</i> item becomes its own row.`
+          } The synonym mapping${removed.length === 1 ? '' : 's'} will be removed from your saved settings.
         </div>
 
         <div style="display:flex;gap:8px;justify-content:flex-end">
