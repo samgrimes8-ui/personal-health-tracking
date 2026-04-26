@@ -2458,23 +2458,37 @@ function sumIngredients(items) {
     const canonical = canonicalizeName(afterAi) || afterAi || (item.name || '').toLowerCase().trim()
     const key = canonical
     const amt = parseAmount(item.amount)
+    // Source record for the merge-details modal — shows users WHAT got
+    // merged + WHERE it came from + HOW MUCH was contributed.
+    const sourceRecord = aiHit ? {
+      name: item.name,
+      amount: amt,
+      unit: item.unit || '',
+      mealName: item.mealName,
+    } : null
     if (!grouped[key]) {
       grouped[key] = {
         ...item,
         name: canonical,
         totalAmount: amt,
         meals: [item.mealName],
-        // Track AI-merged sources only — regex-merged rows don't get a
-        // badge (those collapses are deterministic and uninteresting).
-        aiMergedFrom: aiHit ? [item.name] : [],
+        // aiMergedFrom is now an array of {name, amount, unit, mealName}
+        // records (rich source info) instead of bare strings, so the
+        // unmerge modal can show contribution details.
+        aiMergedFrom: sourceRecord ? [sourceRecord] : [],
       }
     } else {
       const existing = grouped[key]
-      // Track newly merged source even if we found this canonical key
-      // via a different path. Dedup the array — same source shouldn't
-      // be listed twice if the same recipe has it duplicated.
-      if (aiHit && !existing.aiMergedFrom.includes(item.name)) {
-        existing.aiMergedFrom.push(item.name)
+      // Track newly merged source — different recipes contributing
+      // different variant names should each get their own entry. We
+      // dedupe on (name + mealName) combo so a recipe with the same
+      // ingredient duplicated doesn't list it twice.
+      if (sourceRecord) {
+        const dupe = existing.aiMergedFrom.find(s =>
+          s.name.toLowerCase() === sourceRecord.name.toLowerCase()
+          && s.mealName === sourceRecord.mealName
+        )
+        if (!dupe) existing.aiMergedFrom.push(sourceRecord)
       }
       // Try to convert through one of two dimensions:
       //   1. WEIGHT — oz/lbs/g/kg can sum together
@@ -2512,13 +2526,17 @@ function sumIngredients(items) {
             name: canonical,
             totalAmount: amt,
             meals: [item.mealName],
-            aiMergedFrom: aiHit ? [item.name] : [],
+            aiMergedFrom: sourceRecord ? [sourceRecord] : [],
           }
         } else {
           grouped[altKey].totalAmount += amt
           grouped[altKey].meals.push(item.mealName)
-          if (aiHit && !grouped[altKey].aiMergedFrom.includes(item.name)) {
-            grouped[altKey].aiMergedFrom.push(item.name)
+          if (sourceRecord) {
+            const dupe = grouped[altKey].aiMergedFrom.find(s =>
+              s.name.toLowerCase() === sourceRecord.name.toLowerCase()
+              && s.mealName === sourceRecord.mealName
+            )
+            if (!dupe) grouped[altKey].aiMergedFrom.push(sourceRecord)
           }
         }
         return
@@ -2632,24 +2650,29 @@ function renderGroceryFull(planner, rangeMeals) {
             </div>
             ${items.map(item => {
               const merged = item.aiMergedFrom || []
-              const mergeAttr = merged.length ? `data-merged-from="${esc(merged.join('|'))}"` : ''
+              // Encode merge sources as base64-encoded JSON on the data
+              // attribute. JSON because we're carrying rich {name, amount,
+              // unit, mealName} records now; base64 because raw JSON in
+              // an HTML attribute breaks on quotes/apostrophes/newlines
+              // and escaping is fragile across nested templates.
+              const mergeAttr = merged.length
+                ? `data-merge-info="${btoa(unescape(encodeURIComponent(JSON.stringify({ canonical: item.name, total: item.totalAmount, unit: item.unit, sources: merged }))))}"`
+                : ''
               return `
               <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border)" ${mergeAttr}>
                 <span style="font-weight:600;color:${cfg.color};min-width:80px;font-size:13px">
                   ${item.totalAmount ? `${item.totalAmount % 1 === 0 ? item.totalAmount : +item.totalAmount.toFixed(2)} ${item.unit}` : '—'}
                 </span>
                 <span style="flex:1;font-size:14px;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
-                  <span style="word-break:break-word">${esc(item.name)}</span>
+                  <!-- overflow-wrap:break-word is the standards-compliant
+                       version; word-break:break-word was non-standard
+                       and Safari mobile interpreted it as 'break every
+                       letter' for some flex children, producing one-letter-
+                       per-line stacking. Sticking with overflow-wrap. -->
+                  <span style="overflow-wrap:break-word;word-break:normal;hyphens:auto;min-width:0">${esc(item.name)}</span>
                   ${merged.length ? `
-                    <!-- Badge for AI-merged rows. Tap to unmerge. The
-                         from-names are encoded as a pipe-separated list
-                         on the data attribute so the handler can look
-                         them up without ferrying objects through onclick.
-                         white-space:nowrap on the button keeps the
-                         '+1 variant' text on a single line so it doesn't
-                         wrap into '+1' newline 'variant' on narrow screens. -->
                     <button onclick="showMergeDetails(this);event.stopPropagation()"
-                      title="Tap to view or undo this merge"
+                      title="Tap to view what got merged into this row"
                       style="background:rgba(122,180,232,0.12);border:1px solid rgba(122,180,232,0.3);border-radius:999px;padding:2px 9px;font-size:10px;color:var(--carbs);cursor:pointer;font-family:inherit;white-space:nowrap;line-height:1.4;flex-shrink:0">
                       ✨ +${merged.length} variant${merged.length === 1 ? '' : 's'}
                     </button>
@@ -8593,30 +8616,120 @@ function wireGlobals() {
 
   // ── Show merge details + unmerge UI ───────────────────────────────
   // Triggered by tapping the '✨ +N variants' badge on a merged row.
-  // Renders a small confirm() with the list of variants + an Undo
-  // button that splits them back into separate rows.
+  // Renders a real modal showing:
+  //   - The canonical ingredient + total amount
+  //   - Each variant that got merged in: original name, contributed
+  //     amount, source recipe
+  //   - A clear "after unmerge, these split back into N separate rows"
+  //     statement so the user knows what they're committing to
+  //   - Cancel / Unmerge buttons
   //
-  // The badge button has data-merged-from="name1|name2|name3" — we
-  // pull that off the parent row's dataset rather than passing strings
-  // through onclick (escaping nightmare with apostrophes etc).
+  // The previous version used confirm() with just variant names — not
+  // enough context to make an informed decision. User asked for "details
+  // of what the rows were before merged" and "what the rows will be if
+  // I unmerge", so this modal answers both.
+  //
+  // Data flows through data-merge-info as base64-encoded JSON. base64
+  // because raw JSON in an HTML attribute breaks on quotes/apostrophes;
+  // pipe-delimited strings can't carry the rich source records we need
+  // for this view.
   window.showMergeDetails = (btn) => {
     if (!btn) return
-    const row = btn.closest('[data-merged-from]')
+    const row = btn.closest('[data-merge-info]')
     if (!row) return
-    const mergedFromRaw = row.dataset.mergedFrom || ''
-    const variants = mergedFromRaw.split('|').map(s => s.trim()).filter(Boolean)
-    if (!variants.length) return
+    let info
+    try {
+      // Reverse of the encoding in the row render — base64 → utf8 → JSON
+      info = JSON.parse(decodeURIComponent(escape(atob(row.dataset.mergeInfo))))
+    } catch (err) {
+      console.error('[showMergeDetails] decode failed:', err)
+      return
+    }
+    if (!info?.sources?.length) return
 
-    // confirm() dialog showing the variants + asking if the user wants
-    // to unmerge them. Browsers truncate long messages so we cap.
-    const SHOW_MAX = 6
-    const list = variants.length <= SHOW_MAX
-      ? variants.map(v => `  • ${v}`).join('\n')
-      : variants.slice(0, SHOW_MAX).map(v => `  • ${v}`).join('\n') + `\n  …and ${variants.length - SHOW_MAX} more`
+    // Format an amount + unit for display ("0.25 cups", "2 tbsp",
+    // or "—" if amount is missing).
+    const fmt = (amt, unit) => {
+      if (!amt && amt !== 0) return '—'
+      const rounded = amt % 1 === 0 ? amt : +amt.toFixed(2)
+      return unit ? `${rounded} ${unit}` : `${rounded}`
+    }
 
-    const msg = `These ingredients were merged into this row:\n\n${list}\n\nUndo and split them back out?`
-    if (!confirm(msg)) return
-    unmergeIngredients(variants)
+    const totalLabel = fmt(info.total, info.unit)
+    const sources = info.sources
+
+    // Source rows — each one tells the user the original variant name,
+    // how much was contributed, and which recipe it came from.
+    const sourceListHtml = sources.map(s => `
+      <div style="padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+        <div style="font-size:13px;color:var(--text);font-weight:500;margin-bottom:2px">${esc(s.name)}</div>
+        <div style="font-size:11px;color:var(--text3);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <span>${fmt(s.amount, s.unit)}</span>
+          <span style="text-align:right;flex:1;min-width:0;overflow-wrap:break-word">${esc(s.mealName || '')}</span>
+        </div>
+      </div>
+    `).join('')
+
+    // Build the modal. Stash the variant names on the unmerge button
+    // so the click handler can read them without re-parsing the JSON.
+    const variantNames = sources.map(s => s.name).filter(Boolean)
+    const variantsAttr = btoa(unescape(encodeURIComponent(JSON.stringify(variantNames))))
+
+    const existing = document.getElementById('merge-details-modal')
+    if (existing) existing.remove()
+    const modal = document.createElement('div')
+    modal.id = 'merge-details-modal'
+    modal.className = 'modal-overlay open'
+    modal.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:16px'
+    modal.innerHTML = `
+      <div class="modal-box" style="max-width:420px;width:100%;max-height:85vh;display:flex;flex-direction:column">
+        <button class="modal-close" onclick="document.getElementById('merge-details-modal')?.remove()">×</button>
+        <h3 style="margin:0 0 4px;font-family:'DM Serif Display',serif;font-size:20px">Merged ingredient</h3>
+        <div style="font-size:13px;color:var(--text3);margin-bottom:14px">
+          <span style="color:var(--text)">${esc(info.canonical || 'unknown')}</span> · ${totalLabel} total
+        </div>
+
+        <div style="font-size:12px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">
+          Sources (${sources.length})
+        </div>
+        <div style="overflow-y:auto;flex:1;margin-bottom:14px">
+          ${sourceListHtml}
+        </div>
+
+        <div style="font-size:12px;color:var(--text3);padding:8px 12px;background:var(--bg3);border-radius:6px;margin-bottom:14px;line-height:1.4">
+          <b style="color:var(--text2)">After unmerge:</b> these will split back into ${sources.length} separate row${sources.length === 1 ? '' : 's'} on the grocery list. The synonym mapping will also be removed from your saved settings.
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button onclick="document.getElementById('merge-details-modal')?.remove()"
+            style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:8px 16px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:13px">
+            Cancel
+          </button>
+          <button onclick="confirmUnmergeFromModal('${variantsAttr}')"
+            style="background:var(--red);border:none;color:white;padding:8px 16px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:500">
+            Unmerge
+          </button>
+        </div>
+      </div>
+    `
+    document.body.appendChild(modal)
+  }
+
+  // Click handler for the Unmerge button inside the modal. Decodes the
+  // variants list and kicks off the actual unmerge. Kept separate from
+  // showMergeDetails for cleanliness.
+  window.confirmUnmergeFromModal = (variantsAttr) => {
+    let names
+    try {
+      names = JSON.parse(decodeURIComponent(escape(atob(variantsAttr))))
+    } catch (err) {
+      console.error('[confirmUnmergeFromModal] decode failed:', err)
+      return
+    }
+    document.getElementById('merge-details-modal')?.remove()
+    if (Array.isArray(names) && names.length) {
+      unmergeIngredients(names)
+    }
   }
 
   // Removes synonyms from both the DB and the in-memory map, then
