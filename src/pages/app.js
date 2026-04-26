@@ -18,7 +18,7 @@ import {
   getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
-import { categorizeByName } from '../lib/categorize.js'
+import { categorizeByName, parseAmount } from '../lib/categorize.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeRecipePhoto, analyzeDishBySearch, analyzePlannerDescription,
   classifyFoodPhoto,
@@ -2383,25 +2383,29 @@ function sumIngredients(items) {
   items.forEach(item => {
     if (item.excluded) return
     const key = item.name.toLowerCase().trim()
+    // parseAmount handles fractions ("1/2" → 0.5), unicode (½ → 0.5),
+    // mixed forms ("1 1/2" → 1.5), strings, numbers, and garbage.
+    // Critical for accurate totals — parseFloat alone misreads "1/2" as 1.
+    const amt = parseAmount(item.amount)
     if (!grouped[key]) {
-      grouped[key] = { ...item, totalAmount: parseFloat(item.amount) || 0, meals: [item.mealName] }
+      grouped[key] = { ...item, totalAmount: amt, meals: [item.mealName] }
     } else {
       const existing = grouped[key]
       // Try to convert to oz for summing
       const existOz = toOz(existing.totalAmount, existing.unit)
-      const newOz = toOz(parseFloat(item.amount) || 0, item.unit)
+      const newOz = toOz(amt, item.unit)
       if (existOz !== null && newOz !== null) {
         const totalOz = existOz + newOz
         const fmt = formatAmount(totalOz)
         existing.totalAmount = fmt.amount
         existing.unit = fmt.unit
       } else if (existing.unit === item.unit) {
-        existing.totalAmount += parseFloat(item.amount) || 0
+        existing.totalAmount += amt
       } else {
         // Different units that can't convert — add separate entry
         const altKey = `${key}_${item.unit}`
-        if (!grouped[altKey]) grouped[altKey] = { ...item, totalAmount: parseFloat(item.amount) || 0, meals: [item.mealName] }
-        else { grouped[altKey].totalAmount += parseFloat(item.amount) || 0; grouped[altKey].meals.push(item.mealName) }
+        if (!grouped[altKey]) grouped[altKey] = { ...item, totalAmount: amt, meals: [item.mealName] }
+        else { grouped[altKey].totalAmount += amt; grouped[altKey].meals.push(item.mealName) }
         return
       }
       if (!existing.meals.includes(item.mealName)) existing.meals.push(item.mealName)
@@ -2450,7 +2454,7 @@ function collectAllIngredients(planner, rangeMeals) {
       const fallback = aiCat || categorizeByName(ing.name) || 'other'
       items.push({
         name: ing.name,
-        amount: (parseFloat(ing.amount) || 0) * multiplier,
+        amount: parseAmount(ing.amount) * multiplier,
         unit: ing.unit || '',
         category: fallback,
         excluded: state.excludedIngredients.has(excKey),
@@ -2615,7 +2619,7 @@ function renderGroceryByMeal(planner, rangeMeals) {
                         ${ingredients.map(ing => {
                           const excKey = `${m.id}::${ing.name.toLowerCase()}`
                           const isExcluded = state.excludedIngredients.has(excKey)
-                          const adjustedAmt = (parseFloat(ing.amount) || 0) * multiplier
+                          const adjustedAmt = parseAmount(ing.amount) * multiplier
                           const displayAmt = adjustedAmt % 1 === 0 ? adjustedAmt : +adjustedAmt.toFixed(2)
                           const cat = CATEGORIES[ing.category] || CATEGORIES.other
                           return `
@@ -3736,7 +3740,7 @@ function renderIngredientRow(ing, idx, editable, targetServings, baseServings) {
   }
   const multiplier = (targetServings && baseServings && baseServings !== targetServings)
     ? targetServings / baseServings : 1
-  const rawAmt = parseFloat(ing.amount) || 0
+  const rawAmt = parseAmount(ing.amount)
   const scaledAmt = rawAmt ? rawAmt * multiplier : 0
   const displayAmt = scaledAmt === 0 ? (ing.amount || '') : (scaledAmt % 1 === 0 ? scaledAmt : +scaledAmt.toFixed(2))
   return `

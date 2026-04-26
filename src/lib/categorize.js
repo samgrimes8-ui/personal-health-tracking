@@ -20,6 +20,75 @@
 // library. Adding/tuning entries is grep-and-edit which is exactly what
 // we want when a real recipe surfaces a miss.
 
+// ─── Amount parser ────────────────────────────────────────────────────
+//
+// The AI returns ingredient amounts in inconsistent shapes despite the
+// schema asking for a number. Examples seen in production:
+//   2          → 2
+//   "2"        → 2     (numeric string)
+//   "1/2"      → 0.5   (fraction string — very common in cookbooks)
+//   "1 1/2"    → 1.5   (mixed fraction)
+//   "½"        → 0.5   (unicode fraction glyph)
+//   "1½"       → 1.5   (mixed unicode fraction)
+//   null/""    → 0
+//
+// parseFloat alone gets these wrong: parseFloat("1/2") returns 1, not
+// 0.5 — so when the user has "1/2 cup soy sauce", grocery list math
+// reads it as "1 cup". Big silent bug for shopping accuracy. This
+// helper is the canonical parser used everywhere ingredient amounts
+// are read on the client.
+
+// Map of unicode fraction glyphs to their decimal values. Covers the
+// common ones (¼ ½ ¾ ⅓ ⅔ ⅕ ⅖ ⅗ ⅘ ⅙ ⅚ ⅛ ⅜ ⅝ ⅞).
+const UNICODE_FRACTIONS = {
+  '¼': 0.25,  '½': 0.5,   '¾': 0.75,
+  '⅓': 1/3,   '⅔': 2/3,
+  '⅕': 0.2,   '⅖': 0.4,   '⅗': 0.6,   '⅘': 0.8,
+  '⅙': 1/6,   '⅚': 5/6,
+  '⅛': 0.125, '⅜': 0.375, '⅝': 0.625, '⅞': 0.875,
+}
+
+export function parseAmount(raw) {
+  if (raw == null) return 0
+  if (typeof raw === 'number') return isFinite(raw) ? raw : 0
+  let s = String(raw).trim()
+  if (!s) return 0
+
+  // Replace any unicode fraction glyph with " <decimal>" so mixed forms
+  // like "1½" and "1 ½" both work.
+  for (const [glyph, val] of Object.entries(UNICODE_FRACTIONS)) {
+    if (s.includes(glyph)) s = s.replace(glyph, ' ' + val)
+  }
+  s = s.trim().replace(/\s+/g, ' ')
+  if (!s) return 0
+
+  // Mixed fraction: "1 1/2" or "1 0.5" → 1 + 0.5 = 1.5
+  const mixedMatch = s.match(/^(\d+)\s+(\d+)\/(\d+)$/)
+  if (mixedMatch) {
+    const whole = parseInt(mixedMatch[1], 10)
+    const num = parseInt(mixedMatch[2], 10)
+    const den = parseInt(mixedMatch[3], 10)
+    if (den !== 0) return whole + (num / den)
+  }
+  // After unicode replacement, e.g. "1 0.5" → 1.5
+  const mixedDecimalMatch = s.match(/^(\d+)\s+([\d.]+)$/)
+  if (mixedDecimalMatch) {
+    const whole = parseFloat(mixedDecimalMatch[1])
+    const frac = parseFloat(mixedDecimalMatch[2])
+    if (isFinite(whole) && isFinite(frac)) return whole + frac
+  }
+  // Plain fraction: "1/2" → 0.5
+  const fracMatch = s.match(/^(\d+)\/(\d+)$/)
+  if (fracMatch) {
+    const num = parseInt(fracMatch[1], 10)
+    const den = parseInt(fracMatch[2], 10)
+    if (den !== 0) return num / den
+  }
+  // Fallback: regular number parse. This handles "2", "0.5", "2.5", etc.
+  const f = parseFloat(s)
+  return isFinite(f) ? f : 0
+}
+
 // Order: specific compound terms BEFORE generic ones. Within a
 // category, alphabetized for sanity.
 const CATEGORY_KEYWORDS = [
