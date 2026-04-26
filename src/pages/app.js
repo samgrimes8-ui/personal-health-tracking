@@ -18,6 +18,7 @@ import {
   getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
+import { categorizeByName } from '../lib/categorize.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeRecipePhoto, analyzeDishBySearch, analyzePlannerDescription,
   classifyFoodPhoto,
@@ -2437,11 +2438,21 @@ function collectAllIngredients(planner, rangeMeals) {
 
     ingredients.forEach(ing => {
       const excKey = `${m.id}::${ing.name.toLowerCase()}`
+      // Category resolution priority:
+      //   1. AI-supplied category (if it matches our taxonomy)
+      //   2. Keyword-based inference from the ingredient name
+      //   3. 'other' as last resort
+      // The keyword fallback rescues recipes where the AI dropped the
+      // field entirely (sometimes happens on photo flows) — without it
+      // every ingredient defaulted to 'other' and the grocery list
+      // rendered as one giant unsorted blob.
+      const aiCat = ing.category && CATEGORIES[ing.category] ? ing.category : null
+      const fallback = aiCat || categorizeByName(ing.name) || 'other'
       items.push({
         name: ing.name,
         amount: (parseFloat(ing.amount) || 0) * multiplier,
         unit: ing.unit || '',
-        category: ing.category || 'other',
+        category: fallback,
         excluded: state.excludedIngredients.has(excKey),
         excKey,
         mealId: m.id,

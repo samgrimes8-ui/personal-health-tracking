@@ -183,14 +183,41 @@ Rules for ingredients:
 - unit: prefer oz for most solid ingredients where it makes sense (meat, cheese, vegetables).
   Use lbs only for large cuts (whole chicken, roast). Use cups for liquids and grains.
   Use tbsp/tsp for oils, sauces, spices. Use "whole" or "cloves" for things like garlic.
-- category must be exactly one of: produce, protein, dairy, pantry, spices, grains, frozen, bakery, beverages
-  - produce: fresh fruits, vegetables, herbs
-  - protein: meat, poultry, fish, eggs, tofu, beans
+- category is REQUIRED on every single ingredient. Never omit this field.
+  Pick exactly one of: produce, protein, dairy, pantry, spices, grains, frozen, bakery, beverages.
+  Examples (so you anchor the right value):
+    "chicken breast" → protein
+    "ground beef" → protein
+    "garlic cloves" → produce
+    "fresh ginger" → produce
+    "yellow onion" → produce
+    "carrots" → produce
+    "bell pepper" → produce
+    "soy sauce" → pantry
+    "sesame oil" → pantry
+    "olive oil" → pantry
+    "rice vinegar" → pantry
+    "tomato paste" → pantry
+    "mayonnaise" → pantry
+    "brown sugar" → pantry
+    "white rice" → grains
+    "all-purpose flour" → grains
+    "salt" → spices
+    "black pepper" → spices
+    "paprika" → spices
+    "garlic powder" → spices
+    "red pepper flakes" → spices
+    "milk" → dairy
+    "butter" → dairy
+    "cheddar cheese" → dairy
+- Category guide:
+  - produce: fresh fruits, vegetables, herbs, garlic, onions
+  - protein: meat, poultry, fish, eggs, tofu, beans (dry beans go in pantry)
   - dairy: milk, cheese, butter, cream, yogurt
-  - pantry: oils, canned goods, sauces, vinegar, broth, pasta, condiments
-  - spices: dried spices, salt, pepper, seasonings
-  - grains: rice, bread, flour, oats, quinoa
-  - frozen: frozen vegetables, frozen proteins
+  - pantry: oils, vinegars, sauces, condiments, canned goods, dry pasta, peanut butter
+  - spices: dried spices, salt, pepper, dried herbs, seasonings
+  - grains: rice, flour, oats, quinoa, dry pasta if you'd rather not put it in pantry
+  - frozen: explicitly frozen items
   - bakery: fresh bread, rolls, tortillas
   - beverages: wine, beer, juice used in cooking
 - List every ingredient needed. If packaged/restaurant item with no recipe, return empty array.`
