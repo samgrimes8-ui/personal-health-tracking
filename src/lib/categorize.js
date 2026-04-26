@@ -20,6 +20,214 @@
 // library. Adding/tuning entries is grep-and-edit which is exactly what
 // we want when a real recipe surfaces a miss.
 
+// ─── Ingredient name canonicalization (Pass 1 of hybrid dedup) ──────────
+//
+// Same ingredient gets written different ways across recipes:
+//   "garlic cloves" / "garlic" / "cloves of garlic" → all the same thing
+//   "chicken breast" / "chicken breasts" / "boneless skinless chicken
+//     breast" → all the same thing
+//   "scallion" / "green onion" / "spring onion" → all the same thing
+//
+// When the grocery list groups by name, these become separate rows. The
+// keyword normalizer below maps every known variant to a canonical form
+// before grouping, so they collapse properly.
+//
+// Order matters — more specific patterns first. The first rule whose
+// pattern matches wins.
+//
+// Pass 2 (AI dedup) can fill gaps for ingredients we don't have rules
+// for. Together: ~95%+ dedup hit rate.
+
+const NAME_CANONICAL_RULES = [
+  // ─── Proteins ──────────────────────────────────────────────────────
+  // Chicken — canonicalize to "chicken breast" / "chicken thigh" /
+  // "chicken" (generic) etc, stripping skin/bone descriptors.
+  [/^(boneless,?\s*skinless\s+)?chicken\s+breasts?(\s+halves)?$/i, 'chicken breast'],
+  [/^(boneless,?\s*skinless\s+)?chicken\s+thighs?$/i, 'chicken thigh'],
+  [/^chicken\s+wings?$/i, 'chicken wings'],
+  [/^chicken\s+legs?$/i, 'chicken legs'],
+  [/^(whole\s+)?rotisserie\s+chicken$/i, 'rotisserie chicken'],
+  [/^ground\s+chicken$/i, 'ground chicken'],
+
+  // Beef
+  [/^ground\s+beef(\s+\(\d+%.*\))?$/i, 'ground beef'],
+  [/^(beef\s+)?(rib\s*eye|ribeye)\s+steaks?$/i, 'ribeye steak'],
+  [/^(beef\s+)?sirloin\s+steaks?$/i, 'sirloin steak'],
+  [/^flank\s+steaks?$/i, 'flank steak'],
+  [/^skirt\s+steaks?$/i, 'skirt steak'],
+
+  // Pork
+  [/^ground\s+pork$/i, 'ground pork'],
+  [/^pork\s+chops?$/i, 'pork chop'],
+  [/^pork\s+(tender)?loin$/i, 'pork tenderloin'],
+  [/^bacon(\s+strips?)?$/i, 'bacon'],
+  [/^(italian|breakfast)\s+sausages?$/i, 'sausage'],
+
+  // Turkey
+  [/^ground\s+turkey$/i, 'ground turkey'],
+  [/^turkey\s+breasts?$/i, 'turkey breast'],
+
+  // Seafood
+  [/^salmon\s+(filet|fillet)s?$/i, 'salmon'],
+  [/^(raw\s+|peeled\s+|cooked\s+)?shrimps?$/i, 'shrimp'],
+
+  // Eggs
+  [/^(large\s+|whole\s+|fresh\s+)?eggs?$/i, 'eggs'],
+  [/^egg\s+yolks?$/i, 'egg yolks'],
+  [/^egg\s+whites?$/i, 'egg whites'],
+
+  // ─── Produce: aromatics & alliums ──────────────────────────────────
+  // Garlic — collapse all forms to "garlic"
+  [/^(\d+\s+)?(garlic\s+cloves?|cloves?\s+of\s+garlic|fresh\s+garlic)$/i, 'garlic'],
+  [/^(minced\s+|crushed\s+)?garlic$/i, 'garlic'],
+  // Note: keep garlic POWDER and garlic SALT as separate items
+
+  // Ginger — fresh ginger / ginger root / gingerroot / ginger → "ginger"
+  [/^(fresh\s+)?ginger(\s*root)?$/i, 'ginger'],
+  [/^gingerroot$/i, 'ginger'],
+
+  // Onions — strip color qualifiers, collapse to "onion".
+  // (User can usually substitute red/yellow/white in most recipes)
+  [/^(red|yellow|white|sweet|spanish)\s+onions?$/i, 'onion'],
+  [/^onions?$/i, 'onion'],
+
+  // Green onions / scallions / spring onions all the same
+  [/^(green\s+onions?|scallions?|spring\s+onions?)$/i, 'green onions'],
+
+  // Shallots
+  [/^shallots?$/i, 'shallot'],
+
+  // Leeks
+  [/^leeks?$/i, 'leek'],
+
+  // ─── Produce: vegetables ──────────────────────────────────────────
+  // Bell peppers — strip color when summing (red/green/yellow/orange).
+  // Most recipes accept any color; if user wants color-specific they
+  // can edit the canonical entry. This is the one rule where we trade
+  // some specificity for fewer rows.
+  [/^(red|green|yellow|orange)\s+bell\s+peppers?$/i, 'bell pepper'],
+  [/^bell\s+peppers?$/i, 'bell pepper'],
+
+  // Tomatoes — strip variety qualifiers
+  [/^(roma|plum|beefsteak|vine[\s-]ripened)\s+tomatoes?$/i, 'tomato'],
+  [/^tomatoes?$/i, 'tomato'],
+  [/^cherry\s+tomatoes?$/i, 'cherry tomatoes'],
+  [/^grape\s+tomatoes?$/i, 'grape tomatoes'],
+
+  // Carrots
+  [/^carrots?$/i, 'carrot'],
+
+  // Cucumbers
+  [/^(english\s+|persian\s+)?cucumbers?$/i, 'cucumber'],
+
+  // Mushrooms
+  [/^(white\s+|button\s+)?mushrooms?$/i, 'mushrooms'],
+  [/^(baby\s+)?(cremini|crimini)\s+mushrooms?$/i, 'cremini mushrooms'],
+
+  // Potatoes
+  [/^(russet|idaho|yukon\s+gold|baking)\s+potatoes?$/i, 'potato'],
+  [/^potatoes?$/i, 'potato'],
+  [/^sweet\s+potatoes?$/i, 'sweet potato'],
+
+  // Greens
+  [/^(baby\s+)?spinach$/i, 'spinach'],
+  [/^(baby\s+)?kale$/i, 'kale'],
+  [/^(romaine|iceberg|butter|bibb)\s+lettuce$/i, 'lettuce'],
+
+  // ─── Produce: herbs ───────────────────────────────────────────────
+  // Fresh herbs — drop the "fresh" qualifier so they sum together
+  [/^fresh\s+(parsley|cilantro|basil|thyme|rosemary|oregano|sage|dill|mint|chives)$/i, '$1'],
+  [/^cilantro$/i, 'cilantro'],
+  [/^parsley$/i, 'parsley'],
+
+  // ─── Produce: fruits / citrus ─────────────────────────────────────
+  // Lemons / limes — common rules across forms
+  [/^lemon(\s+wedges?|\s+slices?)?$/i, 'lemon'],
+  [/^lemons?$/i, 'lemon'],
+  [/^lime(\s+wedges?|\s+slices?)?$/i, 'lime'],
+  [/^limes?$/i, 'lime'],
+
+  // ─── Pantry ────────────────────────────────────────────────────────
+  // Oils — strip "extra virgin" / "virgin" / etc, but keep oil type
+  [/^extra[\s-]?virgin\s+olive\s+oil$/i, 'olive oil'],
+  [/^virgin\s+olive\s+oil$/i, 'olive oil'],
+  [/^olive\s+oils?$/i, 'olive oil'],
+  [/^vegetable\s+oils?$/i, 'vegetable oil'],
+  [/^canola\s+oils?$/i, 'canola oil'],
+  [/^toasted\s+sesame\s+oil$/i, 'sesame oil'],
+  [/^sesame\s+oils?$/i, 'sesame oil'],
+
+  // Soy sauce — light/dark stay separate but normalize plain
+  [/^(reduced\s+sodium\s+|low[\s-]sodium\s+)?soy\s+sauces?$/i, 'soy sauce'],
+
+  // Vinegars
+  [/^(white|distilled\s+white)\s+vinegars?$/i, 'white vinegar'],
+  [/^apple\s+cider\s+vinegars?$/i, 'apple cider vinegar'],
+  [/^rice\s+(wine\s+)?vinegars?$/i, 'rice vinegar'],
+  [/^(red|white)\s+wine\s+vinegars?$/i, '$1 wine vinegar'],
+  [/^balsamic\s+vinegars?$/i, 'balsamic vinegar'],
+
+  // Sugar — collapse plain forms, keep specialty types
+  [/^(white\s+|granulated\s+)?sugars?$/i, 'sugar'],
+  [/^(light\s+|dark\s+)?brown\s+sugars?$/i, 'brown sugar'],
+
+  // Salt — collapse common forms but keep specialty variants
+  [/^(table\s+|fine\s+)?salts?$/i, 'salt'],
+  [/^kosher\s+salts?$/i, 'kosher salt'],
+  [/^sea\s+salts?$/i, 'sea salt'],
+
+  // Pepper
+  [/^(freshly\s+)?(ground\s+)?black\s+peppers?$/i, 'black pepper'],
+
+  // ─── Spices ────────────────────────────────────────────────────────
+  // Strip "ground" qualifier from spices that are almost always ground
+  [/^ground\s+(cumin|coriander|cinnamon|nutmeg|cloves|allspice|cardamom|turmeric|paprika)$/i, '$1'],
+  [/^red\s+pepper\s+flakes$/i, 'red pepper flakes'],
+  [/^crushed\s+red\s+pepper(\s+flakes)?$/i, 'red pepper flakes'],
+
+  // ─── Dairy ─────────────────────────────────────────────────────────
+  // Butter — collapse salted/unsalted/stick variations
+  [/^(unsalted\s+|salted\s+)?butter(\s+sticks?)?$/i, 'butter'],
+
+  // Milk — keep type qualifiers (whole/skim/2%) but collapse "whole milk"
+  [/^whole\s+milks?$/i, 'whole milk'],
+  [/^skim\s+milks?$/i, 'skim milk'],
+  [/^(2%|two\s+percent)\s+milks?$/i, '2% milk'],
+  [/^milks?$/i, 'milk'],
+
+  // Cheese
+  [/^(shredded\s+|grated\s+|sliced\s+)?(cheddar|mozzarella|parmesan|swiss|provolone|monterey\s+jack|pepper\s+jack)\s+cheeses?$/i, '$2 cheese'],
+  [/^(grated\s+|shredded\s+)?parmesan(\s+cheese)?$/i, 'parmesan cheese'],
+
+  // ─── Grains ────────────────────────────────────────────────────────
+  // Rice — keep type but strip "long-grain" etc
+  [/^(long[\s-]?grain\s+|long[\s-]?grained\s+)?white\s+rice$/i, 'white rice'],
+  [/^(long[\s-]?grain\s+)?brown\s+rice$/i, 'brown rice'],
+  [/^jasmine\s+rice$/i, 'jasmine rice'],
+  [/^basmati\s+rice$/i, 'basmati rice'],
+
+  // Flour
+  [/^all[\s-]?purpose\s+flour$/i, 'all-purpose flour'],
+  [/^whole\s+wheat\s+flour$/i, 'whole wheat flour'],
+]
+
+// Returns canonical form of an ingredient name. If no rule matches,
+// returns the original (trimmed, lowercased for consistency).
+export function canonicalizeName(name) {
+  if (!name || typeof name !== 'string') return ''
+  const trimmed = name.trim()
+  if (!trimmed) return ''
+
+  for (const [pattern, canonical] of NAME_CANONICAL_RULES) {
+    if (pattern.test(trimmed)) {
+      // Support backreferences like '$1' so a single rule can capture
+      // multiple variants ("red wine vinegar" → "$1 wine vinegar").
+      return trimmed.replace(pattern, canonical).toLowerCase()
+    }
+  }
+  return trimmed.toLowerCase()
+}
+
 // ─── Amount parser ────────────────────────────────────────────────────
 //
 // The AI returns ingredient amounts in inconsistent shapes despite the

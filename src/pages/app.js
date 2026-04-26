@@ -18,7 +18,7 @@ import {
   getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
-import { categorizeByName, parseAmount } from '../lib/categorize.js'
+import { categorizeByName, parseAmount, canonicalizeName } from '../lib/categorize.js'
 import {
   analyzePhoto, analyzeRecipe, analyzeRecipePhoto, analyzeDishBySearch, analyzePlannerDescription,
   classifyFoodPhoto,
@@ -2383,17 +2383,22 @@ function formatAmount(oz, preferUnit) {
 
 function sumIngredients(items) {
   // items: [{name, amount (number), unit, category, excluded, mealName}]
-  // Group by name+unit where possible, summing amounts
+  // Group by name+unit where possible, summing amounts.
+  // We canonicalize names first (Pass 1 dedup) so "garlic cloves" and
+  // "garlic" get summed onto the same row instead of showing twice.
+  // The displayed name uses the canonical form so the list reads
+  // consistently. AI-driven dedup (Pass 2) can layer on top of this
+  // for ingredients we don't have keyword rules for.
   const grouped = {}
   items.forEach(item => {
     if (item.excluded) return
-    const key = item.name.toLowerCase().trim()
-    // parseAmount handles fractions ("1/2" → 0.5), unicode (½ → 0.5),
-    // mixed forms ("1 1/2" → 1.5), strings, numbers, and garbage.
-    // Critical for accurate totals — parseFloat alone misreads "1/2" as 1.
+    const canonical = canonicalizeName(item.name) || item.name.toLowerCase().trim()
+    const key = canonical
     const amt = parseAmount(item.amount)
     if (!grouped[key]) {
-      grouped[key] = { ...item, totalAmount: amt, meals: [item.mealName] }
+      // First time we see this canonical key — store it with the
+      // canonical name as the display name (proper-cased on render).
+      grouped[key] = { ...item, name: canonical, totalAmount: amt, meals: [item.mealName] }
     } else {
       const existing = grouped[key]
       // Try to convert to oz for summing
@@ -2407,9 +2412,12 @@ function sumIngredients(items) {
       } else if (existing.unit === item.unit) {
         existing.totalAmount += amt
       } else {
-        // Different units that can't convert — add separate entry
-        const altKey = `${key}_${item.unit}`
-        if (!grouped[altKey]) grouped[altKey] = { ...item, totalAmount: amt, meals: [item.mealName] }
+        // Different units that can't convert — keep separate. The altKey
+        // still uses the canonical name so e.g. "1 lb chicken" and
+        // "8 oz chicken" merge if oz-convertible, but "1 lb chicken"
+        // and "1 cup chicken" stay separate.
+        const altKey = `${canonical}_${item.unit}`
+        if (!grouped[altKey]) grouped[altKey] = { ...item, name: canonical, totalAmount: amt, meals: [item.mealName] }
         else { grouped[altKey].totalAmount += amt; grouped[altKey].meals.push(item.mealName) }
         return
       }
