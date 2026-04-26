@@ -114,6 +114,7 @@ let state = {
   editingRecipe: null,
   recipeTab: 'ingredients',
   recipeServings: null, // 'ingredients' | 'instructions'  // recipe being edited in modal
+  cookingMode: null, // { recipeId, stepIndex } when in read-aloud mode; null otherwise
 }
 
 // Safe local date string — avoids UTC timezone shift from toISOString()
@@ -3601,28 +3602,53 @@ function renderRecipeModalContent(recipe, mode = 'view') {
 
         <!-- Ingredients / Instructions toggle (view mode only) -->
         <div style="margin-bottom:16px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-            <div style="display:flex;gap:0;background:var(--bg3);border-radius:var(--r);padding:3px;border:1px solid var(--border)">
-              <button onclick="setRecipeTab('ingredients')" id="rtab-ingredients"
-                class="${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? '' : 'active'}"
-                style="padding:5px 14px;border:none;border-radius:calc(var(--r) - 2px);font-size:12px;font-family:inherit;cursor:pointer;font-weight:500;
-                  background:${(!recipe.instructions?.steps?.length || state.recipeTab !== 'instructions') ? 'var(--bg2)' : 'none'};
-                  color:${(!recipe.instructions?.steps?.length || state.recipeTab !== 'instructions') ? 'var(--text)' : 'var(--text3)'}">
-                📋 Ingredients
-              </button>
-              <button onclick="setRecipeTab('instructions')" id="rtab-instructions"
-                style="padding:5px 14px;border:none;border-radius:calc(var(--r) - 2px);font-size:12px;font-family:inherit;cursor:pointer;font-weight:500;
-                  background:${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? 'var(--bg2)' : 'none'};
-                  color:${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? 'var(--text)' : 'var(--text3)'}">
-                👨‍🍳 Instructions
-              </button>
-            </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap">
+            ${(() => {
+              // Compute active tab once. If there are no instruction steps,
+              // 'instructions' is effectively unreachable, so we treat the
+              // ingredients button as active regardless of state.recipeTab.
+              const hasSteps = !!recipe.instructions?.steps?.length
+              const onInstr = hasSteps && state.recipeTab === 'instructions'
+              // Active tab gets:
+              //   - solid accent-tinted background (var(--accent) at 15% alpha)
+              //   - accent-colored text for clear "this is selected" signal
+              //   - subtle border highlight
+              // Inactive tab gets transparent bg + muted text. Way more
+              // contrast than the previous --bg2 / --bg3 attempt where
+              // the colors were ~6% lightness apart and indistinguishable
+              // on phone screens.
+              const activeStyle = 'background:rgba(212,165,116,0.18);color:var(--accent);box-shadow:inset 0 0 0 1px rgba(212,165,116,0.35)'
+              const inactiveStyle = 'background:transparent;color:var(--text3)'
+              return `
+                <div style="display:flex;gap:0;background:var(--bg3);border-radius:var(--r);padding:3px;border:1px solid var(--border)">
+                  <button onclick="setRecipeTab('ingredients')" id="rtab-ingredients"
+                    style="padding:6px 14px;border:none;border-radius:calc(var(--r) - 2px);font-size:12px;font-family:inherit;cursor:pointer;font-weight:600;transition:background 0.15s;${onInstr ? inactiveStyle : activeStyle}">
+                    📋 Ingredients
+                  </button>
+                  <button onclick="setRecipeTab('instructions')" id="rtab-instructions"
+                    style="padding:6px 14px;border:none;border-radius:calc(var(--r) - 2px);font-size:12px;font-family:inherit;cursor:pointer;font-weight:600;transition:background 0.15s;${onInstr ? activeStyle : inactiveStyle}">
+                    👨‍🍳 Instructions
+                  </button>
+                </div>
+              `
+            })()}
             ${(recipe.instructions?.steps?.length && state.recipeTab === 'instructions') ? `
-              <button onclick="downloadRecipeInstructions('${recipe.id}')"
-                style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:12px;color:var(--text2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px"
-                onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
-                ⬇ Download
-              </button>` : ''}
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <!-- Read-aloud cooking mode: opens a fullscreen overlay
+                     that reads each instruction step aloud and lets the
+                     user tap Next/Repeat. Uses browser SpeechSynthesis,
+                     no AI cost. -->
+                <button onclick="openCookingMode('${recipe.id}')"
+                  style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:12px;color:var(--text2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px"
+                  onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+                  🔊 Read aloud
+                </button>
+                <button onclick="downloadRecipeInstructions('${recipe.id}')"
+                  style="background:none;border:1px solid var(--border2);border-radius:var(--r);padding:5px 10px;font-size:12px;color:var(--text2);cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px"
+                  onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+                  ⬇ Download
+                </button>
+              </div>` : ''}
           </div>
 
           ${state.recipeTab === 'instructions' ? `
@@ -9918,6 +9944,193 @@ function wireGlobals() {
     a.click()
     URL.revokeObjectURL(a.href)
     showToast('Recipe downloaded — open in browser and Print → Save as PDF', 'success')
+  }
+
+  // ─── Cooking mode (read-aloud step navigator) ──────────────────────
+  // Opens a fullscreen overlay that shows ONE instruction step at a
+  // time and reads it aloud via the browser's SpeechSynthesis API.
+  // The user taps Next to advance + read the next step, or Repeat to
+  // re-read the current one. No AI cost — TTS runs entirely on-device.
+  //
+  // iOS Safari quirks worth knowing:
+  //   - speechSynthesis.speak() needs to be triggered from a user
+  //     gesture (button tap qualifies). We open the modal AND speak
+  //     in the same handler so the gesture chain is preserved.
+  //   - Voices load asynchronously. We pick a voice at speak time
+  //     rather than caching one — gives the system time to load
+  //     between modal-open and first speak() if voice list is empty
+  //     on first access.
+  //   - Speech can outlast the page. We always cancel() on close.
+  //
+  // State lives on state.cookingMode = { recipeId, stepIndex } so
+  // re-renders during the session don't lose place.
+
+  function speakStep(text) {
+    if (!('speechSynthesis' in window)) return
+    // Cancel any in-flight speech before starting a new one.
+    // Otherwise tapping Next mid-utterance queues them up.
+    window.speechSynthesis.cancel()
+    if (!text) return
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate = 0.95   // Slightly slower than default — easier to follow while cooking
+    utterance.pitch = 1.0
+    utterance.volume = 1.0
+    // Pick a reasonable English voice if multiple are available.
+    // Prefer a US English voice; fall back to any English; else default.
+    const voices = window.speechSynthesis.getVoices()
+    if (voices.length) {
+      const us = voices.find(v => v.lang === 'en-US' && v.default)
+        || voices.find(v => v.lang === 'en-US')
+        || voices.find(v => v.lang?.startsWith('en'))
+      if (us) utterance.voice = us
+    }
+    window.speechSynthesis.speak(utterance)
+  }
+
+  window.openCookingMode = (recipeId) => {
+    const recipe = state.recipes.find(r => r.id === recipeId)
+    const steps = recipe?.instructions?.steps
+    if (!steps?.length) {
+      showToast('No instructions to read', 'error')
+      return
+    }
+    if (!('speechSynthesis' in window)) {
+      showToast('Read-aloud not supported in this browser', 'error')
+      return
+    }
+    state.cookingMode = { recipeId, stepIndex: 0 }
+    renderCookingMode()
+    // Speak the first step. Must happen in the same gesture as the
+    // tap that opened the modal — iOS denies speech without it.
+    speakStep(steps[0])
+  }
+
+  function renderCookingMode() {
+    const cm = state.cookingMode
+    if (!cm) return
+    const recipe = state.recipes.find(r => r.id === cm.recipeId)
+    const steps = recipe?.instructions?.steps || []
+    if (!steps.length) {
+      window.closeCookingMode()
+      return
+    }
+    const idx = cm.stepIndex
+    const step = steps[idx]
+    const isLast = idx === steps.length - 1
+    const isFirst = idx === 0
+
+    // Build / replace the modal. We rebuild the whole thing on each
+    // step change rather than mutating in-place — content is small
+    // and full re-render keeps the markup straightforward.
+    let modal = document.getElementById('cooking-mode-modal')
+    if (modal) modal.remove()
+    modal = document.createElement('div')
+    modal.id = 'cooking-mode-modal'
+    modal.style.cssText = 'position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;padding:20px;overflow-y:auto'
+    modal.innerHTML = `
+      <!-- Header: recipe name, step counter, close -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:32px;flex-wrap:wrap">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px">Cooking</div>
+          <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--text);overflow-wrap:break-word">${esc(recipe.name)}</div>
+        </div>
+        <button onclick="closeCookingMode()" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);width:36px;height:36px;border-radius:50%;cursor:pointer;font-family:inherit;font-size:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0">×</button>
+      </div>
+
+      <!-- Progress: dots showing position. Tappable. -->
+      <div style="display:flex;gap:6px;justify-content:center;margin-bottom:24px;flex-wrap:wrap">
+        ${steps.map((_, i) => `
+          <button onclick="goToCookingStep(${i})"
+            aria-label="Step ${i + 1}"
+            title="Jump to step ${i + 1}"
+            style="width:${i === idx ? '24px' : '8px'};height:8px;border-radius:999px;border:none;cursor:pointer;background:${i === idx ? 'var(--accent)' : (i < idx ? 'var(--text3)' : 'var(--bg3)')};transition:width 0.2s;padding:0"></button>
+        `).join('')}
+      </div>
+
+      <!-- Step content: large readable text, centered, takes the rest of the space -->
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:0 8px">
+        <div style="font-size:13px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px;font-weight:600">Step ${idx + 1} of ${steps.length}</div>
+        <div style="font-size:22px;line-height:1.5;color:var(--text);max-width:520px;font-family:Georgia,serif">${esc(step)}</div>
+      </div>
+
+      <!-- Controls: repeat (always), back (not on first), next or finish (always) -->
+      <div style="display:flex;gap:10px;justify-content:center;margin-top:32px;padding-bottom:8px;flex-wrap:wrap">
+        ${!isFirst ? `
+          <button onclick="prevCookingStep()"
+            style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:14px 20px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:500;min-width:90px">
+            ← Back
+          </button>
+        ` : ''}
+        <button onclick="repeatCookingStep()"
+          style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:14px 20px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:500;min-width:90px">
+          ↻ Repeat
+        </button>
+        <button onclick="nextCookingStep()"
+          style="background:var(--accent);border:none;color:var(--bg);padding:14px 22px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:600;min-width:120px">
+          ${isLast ? '✓ Done' : 'Next →'}
+        </button>
+      </div>
+
+      ${recipe.instructions?.tips?.length ? `
+        <div style="margin-top:24px;padding:14px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);font-size:13px;color:var(--text2);line-height:1.5">
+          <div style="font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;font-weight:600">💡 Tips</div>
+          ${recipe.instructions.tips.map(t => `<div style="margin-bottom:4px">• ${esc(t)}</div>`).join('')}
+        </div>
+      ` : ''}
+    `
+    document.body.appendChild(modal)
+  }
+
+  window.repeatCookingStep = () => {
+    const cm = state.cookingMode
+    if (!cm) return
+    const recipe = state.recipes.find(r => r.id === cm.recipeId)
+    const step = recipe?.instructions?.steps?.[cm.stepIndex]
+    if (step) speakStep(step)
+  }
+
+  window.nextCookingStep = () => {
+    const cm = state.cookingMode
+    if (!cm) return
+    const recipe = state.recipes.find(r => r.id === cm.recipeId)
+    const steps = recipe?.instructions?.steps || []
+    if (cm.stepIndex >= steps.length - 1) {
+      // Already on the last step — Done button closes the mode.
+      window.closeCookingMode()
+      showToast('Recipe complete!', 'success')
+      return
+    }
+    cm.stepIndex++
+    renderCookingMode()
+    speakStep(steps[cm.stepIndex])
+  }
+
+  window.prevCookingStep = () => {
+    const cm = state.cookingMode
+    if (!cm) return
+    if (cm.stepIndex === 0) return
+    cm.stepIndex--
+    const recipe = state.recipes.find(r => r.id === cm.recipeId)
+    const steps = recipe?.instructions?.steps || []
+    renderCookingMode()
+    speakStep(steps[cm.stepIndex])
+  }
+
+  window.goToCookingStep = (idx) => {
+    const cm = state.cookingMode
+    if (!cm) return
+    const recipe = state.recipes.find(r => r.id === cm.recipeId)
+    const steps = recipe?.instructions?.steps || []
+    if (idx < 0 || idx >= steps.length) return
+    cm.stepIndex = idx
+    renderCookingMode()
+    speakStep(steps[idx])
+  }
+
+  window.closeCookingMode = () => {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+    state.cookingMode = null
+    document.getElementById('cooking-mode-modal')?.remove()
   }
 
   window.openRecipeModal = (id, mode = 'view') => {
