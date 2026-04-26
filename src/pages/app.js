@@ -2379,11 +2379,34 @@ const CATEGORIES = {
 const CATEGORY_ORDER = ['produce','protein','dairy','grains','pantry','spices','frozen','bakery','beverages','other']
 
 // ── Unit conversion helpers ────────────────────────────────────────────────────
+// Two parallel "dimensions": weight (oz) and volume (tbsp). When two
+// ingredients share a dimension, their amounts can be added together
+// (1/4 cup + 2 tbsp = 6 tbsp). When they don't (1 lb + 1 cup), they
+// stay separate.
 const UNIT_TO_OZ = { lbs: 16, lb: 16, oz: 1, g: 0.03527, kg: 35.27 }
 const OZ_CONVERSIONS = ['lbs','lb','oz','g','kg']
 
+// Volume units → tablespoons. tbsp picked as canonical because it
+// produces nicer totals than ml for typical recipe quantities.
+const UNIT_TO_TBSP = {
+  cup: 16, cups: 16, c: 16,
+  tbsp: 1, tbs: 1, tablespoon: 1, tablespoons: 1,
+  tsp: 1/3, teaspoon: 1/3, teaspoons: 1/3,
+  'fl oz': 2, floz: 2, 'fluid ounce': 2, 'fluid ounces': 2,
+  ml: 0.0676, milliliter: 0.0676, milliliters: 0.0676,
+  l: 67.628, liter: 67.628, liters: 67.628,
+  pint: 32, pints: 32, pt: 32,
+  quart: 64, quarts: 64, qt: 64,
+  gallon: 256, gallons: 256, gal: 256,
+}
+
 function toOz(amount, unit) {
   const factor = UNIT_TO_OZ[unit?.toLowerCase()]
+  return factor ? amount * factor : null
+}
+
+function toTbsp(amount, unit) {
+  const factor = UNIT_TO_TBSP[unit?.toLowerCase()]
   return factor ? amount * factor : null
 }
 
@@ -2391,6 +2414,19 @@ function formatAmount(oz, preferUnit) {
   if (oz === null) return null
   if (oz >= 16) return { amount: +(oz / 16).toFixed(2), unit: 'lbs' }
   return { amount: +oz.toFixed(2), unit: 'oz' }
+}
+
+// Format volume in tbsp back to the most-readable unit. Above 1/4 cup
+// (4 tbsp), we render as cups so summed volumes don't show as
+// "16 tbsp" when "1 cup" is what people expect.
+function formatVolume(tbsp) {
+  if (tbsp == null) return null
+  if (tbsp >= 4) {
+    const cups = tbsp / 16
+    return { amount: Math.round(cups * 4) / 4, unit: 'cups' }
+  }
+  if (tbsp >= 1) return { amount: +tbsp.toFixed(2), unit: 'tbsp' }
+  return { amount: +(tbsp * 3).toFixed(2), unit: 'tsp' }
 }
 
 function sumIngredients(items) {
@@ -2440,12 +2476,26 @@ function sumIngredients(items) {
       if (aiHit && !existing.aiMergedFrom.includes(item.name)) {
         existing.aiMergedFrom.push(item.name)
       }
-      // Try to convert to oz for summing
+      // Try to convert through one of two dimensions:
+      //   1. WEIGHT — oz/lbs/g/kg can sum together
+      //   2. VOLUME — cups/tbsp/tsp/ml/L can sum together
+      // We try weight first (covers meat/cheese), then volume (covers
+      // herbs, oils, sauces). If both fail or they're in different
+      // dimensions (1 lb chicken + 1 cup chicken), drop to the
+      // same-unit / different-unit branch below.
       const existOz = toOz(existing.totalAmount, existing.unit)
       const newOz = toOz(amt, item.unit)
+      const existTbsp = toTbsp(existing.totalAmount, existing.unit)
+      const newTbsp = toTbsp(amt, item.unit)
+
       if (existOz !== null && newOz !== null) {
         const totalOz = existOz + newOz
         const fmt = formatAmount(totalOz)
+        existing.totalAmount = fmt.amount
+        existing.unit = fmt.unit
+      } else if (existTbsp !== null && newTbsp !== null) {
+        const totalTbsp = existTbsp + newTbsp
+        const fmt = formatVolume(totalTbsp)
         existing.totalAmount = fmt.amount
         existing.unit = fmt.unit
       } else if (existing.unit === item.unit) {
@@ -2588,16 +2638,19 @@ function renderGroceryFull(planner, rangeMeals) {
                 <span style="font-weight:600;color:${cfg.color};min-width:80px;font-size:13px">
                   ${item.totalAmount ? `${item.totalAmount % 1 === 0 ? item.totalAmount : +item.totalAmount.toFixed(2)} ${item.unit}` : '—'}
                 </span>
-                <span style="flex:1;font-size:14px;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                  ${esc(item.name)}
+                <span style="flex:1;font-size:14px;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
+                  <span style="word-break:break-word">${esc(item.name)}</span>
                   ${merged.length ? `
                     <!-- Badge for AI-merged rows. Tap to unmerge. The
                          from-names are encoded as a pipe-separated list
                          on the data attribute so the handler can look
-                         them up without ferrying objects through onclick. -->
+                         them up without ferrying objects through onclick.
+                         white-space:nowrap on the button keeps the
+                         '+1 variant' text on a single line so it doesn't
+                         wrap into '+1' newline 'variant' on narrow screens. -->
                     <button onclick="showMergeDetails(this);event.stopPropagation()"
                       title="Tap to view or undo this merge"
-                      style="background:rgba(122,180,232,0.12);border:1px solid rgba(122,180,232,0.3);border-radius:999px;padding:1px 8px;font-size:10px;color:var(--carbs);cursor:pointer;font-family:inherit">
+                      style="background:rgba(122,180,232,0.12);border:1px solid rgba(122,180,232,0.3);border-radius:999px;padding:2px 9px;font-size:10px;color:var(--carbs);cursor:pointer;font-family:inherit;white-space:nowrap;line-height:1.4;flex-shrink:0">
                       ✨ +${merged.length} variant${merged.length === 1 ? '' : 's'}
                     </button>
                   ` : ''}
