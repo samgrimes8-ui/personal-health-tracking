@@ -720,3 +720,69 @@ Return ONLY this JSON (no markdown):
   }], { max_tokens: 2000, action: 'generate_recipe_from_mood' })
   return parseJSON(data)
 }
+
+// ─── Grocery list dedup (Pass 2 of hybrid) ────────────────────────────
+//
+// Pass 1 is a regex-based canonicalizer in src/lib/categorize.js — it
+// catches the common variants (garlic cloves → garlic, etc). Pass 2
+// (this function) sends the REMAINING distinct ingredient names to
+// Claude and asks it to identify any pairs that are actually the same
+// thing. Returns a synonym map the client applies as another canonical
+// pass, then re-sums.
+//
+// Cost optimization: we only send names + units, not full recipe text
+// or amounts. Token-light. ~3-5 AI Bucks per call typical.
+//
+// Returns: { synonyms: [{from: "...", to: "..."}, ...] }
+// 'from' is the variant name to replace; 'to' is the canonical name to
+// merge it under. The client renames + re-groups.
+export async function dedupGroceryNames(ingredients) {
+  if (!ingredients || ingredients.length < 2) return { synonyms: [] }
+
+  // Send name+unit pairs as a compact JSON array. Unit included because
+  // it disambiguates: "rice" 2 cups vs "rice" 1 lb might be the same
+  // dry rice or different (cooked vs uncooked). The model can use unit
+  // context to decide whether to merge.
+  const list = ingredients.map(i => ({ name: i.name, unit: i.unit || '' }))
+
+  const prompt = `You are reviewing a grocery list and finding duplicate ingredients written with different names. Look for items that are the same shopping item even if worded differently.
+
+Ingredients:
+${JSON.stringify(list, null, 2)}
+
+Examples of pairs that ARE duplicates:
+- "scallion greens" and "green onions" → same item
+- "fresh thyme leaves" and "thyme" → same item
+- "boneless chicken thighs" and "chicken thigh" → same item
+- "kosher diamond salt" and "kosher salt" → same item
+
+Examples of pairs that are NOT duplicates:
+- "soy sauce" and "fish sauce" → different
+- "chicken breast" and "chicken thigh" → different cuts
+- "white rice" and "brown rice" → different
+- "olive oil" and "sesame oil" → different oils
+- "garlic" and "garlic powder" → fresh vs dried, different
+- "lemon" and "lemon juice" → whole fruit vs juice, different
+
+Respond ONLY with a JSON object, no markdown, no explanation:
+{
+  "synonyms": [
+    {"from": "name as it appears in the input", "to": "canonical name to merge under"}
+  ]
+}
+
+Rules:
+- Only include genuine duplicates. When in doubt, leave them separate.
+- 'to' should be the cleaner, more common form (e.g. "green onions" not "scallion greens")
+- 'from' must match an ingredient name from the input list exactly (case-insensitive ok)
+- If nothing should be merged, return {"synonyms": []}.`
+
+  const data = await callProxy('grocery', [{
+    role: 'user',
+    content: prompt,
+  }], {
+    max_tokens: 800,
+    action: 'dedup_grocery_names',
+  })
+  return parseJSON(data)
+}

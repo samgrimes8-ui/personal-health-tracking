@@ -24,7 +24,7 @@ import {
   classifyFoodPhoto,
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
   generateRecipeInstructions, extractBodyScan, fetchOgMetadata, readBarcodeFromImage,
-  extractRecipeFromPhoto, generateRecipeFromMood
+  extractRecipeFromPhoto, generateRecipeFromMood, dedupGroceryNames
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -2234,8 +2234,9 @@ async function renderGroceryList(allMeals, planner) {
   container.innerHTML = `
     <div class="log-header">
       <span class="log-header-title">🛒 Grocery list</span>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="clear-btn" onclick="copyGroceryList()" style="color:var(--protein)" id="grocery-copy-btn">📋 Copy</button>
+        <button class="clear-btn" onclick="smartMergeGrocery()" style="color:var(--carbs)" id="grocery-merge-btn">✨ Smart merge</button>
         <button class="clear-btn" onclick="addGroceryItem()" style="color:var(--accent)">+ Add item</button>
         <button class="clear-btn" onclick="resetExclusions()" style="color:var(--text3)">Reset</button>
       </div>
@@ -2384,20 +2385,24 @@ function formatAmount(oz, preferUnit) {
 function sumIngredients(items) {
   // items: [{name, amount (number), unit, category, excluded, mealName}]
   // Group by name+unit where possible, summing amounts.
-  // We canonicalize names first (Pass 1 dedup) so "garlic cloves" and
-  // "garlic" get summed onto the same row instead of showing twice.
-  // The displayed name uses the canonical form so the list reads
-  // consistently. AI-driven dedup (Pass 2) can layer on top of this
-  // for ingredients we don't have keyword rules for.
+  // Two-pass dedup:
+  //   Pass 2 (AI synonyms, on-demand): if state._aiSynonyms has an
+  //     entry for this name, swap it in first.
+  //   Pass 1 (regex canonicalizer, free): runs on either the original
+  //     name or the AI-swapped name to handle variants the AI didn't
+  //     touch. Most rows get caught here.
+  // Display name on the merged row uses the final canonical form.
+  const aiSyn = state._aiSynonyms || {}
   const grouped = {}
   items.forEach(item => {
     if (item.excluded) return
-    const canonical = canonicalizeName(item.name) || item.name.toLowerCase().trim()
+    const lowered = (item.name || '').toLowerCase().trim()
+    // Apply AI synonym if one exists for this exact name
+    const afterAi = aiSyn[lowered] || lowered
+    const canonical = canonicalizeName(afterAi) || afterAi || (item.name || '').toLowerCase().trim()
     const key = canonical
     const amt = parseAmount(item.amount)
     if (!grouped[key]) {
-      // First time we see this canonical key — store it with the
-      // canonical name as the display name (proper-cased on render).
       grouped[key] = { ...item, name: canonical, totalAmount: amt, meals: [item.mealName] }
     } else {
       const existing = grouped[key]
@@ -8382,6 +8387,79 @@ function wireGlobals() {
     if (!state.groceryCustomItems) return
     state.groceryCustomItems.splice(idx, 1)
     renderPage()
+  }
+
+  // ── AI smart-merge for grocery list (Pass 2 of hybrid dedup) ──────
+  // Sends the current post-Pass-1 ingredient names to Claude and asks
+  // for a synonym map. Applied client-side via state._aiSynonyms which
+  // canonicalizeName consults before its regex rules. Session-scoped:
+  // synonyms reset on page reload.
+  //
+  // On-demand only — costs AI Bucks, so it doesn't run silently.
+  window.smartMergeGrocery = async () => {
+    const btn = document.getElementById('grocery-merge-btn')
+    if (!btn) return
+    const originalText = btn.textContent
+    try {
+      btn.disabled = true
+      btn.textContent = '✨ Merging...'
+
+      // Re-derive the current post-Pass-1 list to send to AI. Use the
+      // cached range meals we already store for the Copy button.
+      const planner = state.planner || { meals: [] }
+      const rangeMeals = state._groceryRangeMeals || (planner.meals || []).flat()
+      const allItems = collectAllIngredients(planner, rangeMeals)
+      const active = allItems.filter(i => !i.excluded)
+      const summed = sumIngredients(active)
+
+      if (summed.length < 2) {
+        showToast('Nothing to merge — list is already clean', '')
+        return
+      }
+
+      const result = await dedupGroceryNames(summed)
+      const synonyms = Array.isArray(result?.synonyms) ? result.synonyms : []
+
+      if (synonyms.length === 0) {
+        showToast('Already optimized — no merges found', 'success')
+        return
+      }
+
+      // Merge new synonyms into the session map. AI returns 'from' as
+      // the variant name and 'to' as the canonical. Store lowercased
+      // for case-insensitive lookup.
+      if (!state._aiSynonyms) state._aiSynonyms = {}
+      let added = 0
+      for (const pair of synonyms) {
+        if (!pair?.from || !pair?.to) continue
+        const fromKey = String(pair.from).toLowerCase().trim()
+        const toCanon = String(pair.to).toLowerCase().trim()
+        if (!fromKey || !toCanon || fromKey === toCanon) continue
+        // Don't overwrite existing entries silently — AI calls are
+        // additive across multiple taps if user wants to refine.
+        if (!state._aiSynonyms[fromKey]) {
+          state._aiSynonyms[fromKey] = toCanon
+          added++
+        }
+      }
+
+      if (added === 0) {
+        showToast('Already optimized — no new merges found', 'success')
+      } else {
+        showToast(`Merged ${added} similar item${added === 1 ? '' : 's'}`, 'success')
+        renderPage()
+      }
+    } catch (err) {
+      console.error('[smartMergeGrocery] failed:', err)
+      // 429 / spend-limit errors will have already shown the upgrade
+      // modal via callProxy's interceptor. Other errors get a toast.
+      if (!err?.message?.includes('AI Bucks')) {
+        showToast('Merge failed: ' + (err?.message || 'unknown'), 'error')
+      }
+    } finally {
+      btn.disabled = false
+      btn.textContent = originalText
+    }
   }
 
   // Legacy handlers — kept for compat
