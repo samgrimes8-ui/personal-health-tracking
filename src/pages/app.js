@@ -2621,7 +2621,13 @@ function renderGroceryByMeal(planner, rangeMeals) {
                           const isExcluded = state.excludedIngredients.has(excKey)
                           const adjustedAmt = parseAmount(ing.amount) * multiplier
                           const displayAmt = adjustedAmt % 1 === 0 ? adjustedAmt : +adjustedAmt.toFixed(2)
-                          const cat = CATEGORIES[ing.category] || CATEGORIES.other
+                          // Same category resolution as collectAllIngredients:
+                          // AI value if valid, else keyword inference, else 'other'.
+                          // Without this, every row in the per-meal view shows
+                          // "Other" because the AI commonly omits category.
+                          const aiCatRaw = ing.category && CATEGORIES[ing.category] ? ing.category : null
+                          const resolvedCat = aiCatRaw || categorizeByName(ing.name) || 'other'
+                          const cat = CATEGORIES[resolvedCat] || CATEGORIES.other
                           return `
                             <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);${isExcluded ? 'opacity:0.4' : ''}">
                               <button onclick="toggleIngredientExclusion('${m.id}', '${ing.name.replace(/'/g,"\\'")}', ${isExcluded})"
