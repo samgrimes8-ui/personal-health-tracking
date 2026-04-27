@@ -66,21 +66,43 @@ Nova is the warm-female one most users gravitate toward.
 
 ### Implementation sketch
 
-- New table: `recipe_audio(recipe_id, step_index, servings, voice_id, mp3_url, char_count, created_at)`
+- New table: `recipe_audio(recipe_id, step_index, servings, voice_id, instructions_version, mp3_url, char_count, created_at)`
   - **Cache key includes servings** because instruction text scales with serving size (scaleStepText regex-replaces quantities). Same recipe at 4 vs 6 servings produces different text → different audio. Without `servings` in the key, scaled-up reads would play wrong numbers.
+  - **Cache key includes instructions_version** for cache invalidation on edit. See "Edit invalidation" below.
   - Servings is `numeric(6,2)` to handle 0.5, 1.5, 2.5 etc.
   - `voice_id` indexed because we'll likely settle on Nova for everyone but want flexibility to add ElevenLabs voices later.
-- New endpoint: `api/tts.js` that takes (recipe_id, step_index, servings, voice_id), checks cache, generates if missing via OpenAI tts-1-hd, uploads MP3 to Supabase Storage, returns URL
+- New column on recipes: `instructions_version int default 1`. Bumped (`+= 1`) on every recipe save. The save itself IS the invalidation — atomic, concurrent-safe, no cleanup race conditions.
+- New endpoint: `api/tts.js` that takes (recipe_id, step_index, servings, voice_id, instructions_version), checks cache, generates if missing via OpenAI tts-1-hd, uploads MP3 to Supabase Storage, returns URL
 - Cooking mode: instead of `speakStep()` calling browser TTS, fetch the MP3 URL and play it via `<audio>` element
-- Pass `state.recipeServings` (or recipe.servings if null) into the fetch so the cache key matches what's on screen
+- Pass `state.recipeServings` (or recipe.servings if null) AND `recipe.instructions_version` into the fetch so the cache key matches the current recipe state
 - Fallback: if api/tts is unavailable or user is over budget, fall back to current free browser TTS (graceful degrade)
 - Voice picker: add "Premium voices" section above the device voices
 
-### Cost math with servings caching
+### Edit invalidation
+
+If a user listens to instructions, finds an error, edits the recipe, and re-opens cooking mode, they MUST hear the corrected version — not a cached MP3 with the old wrong text. Stale audio while cooking is way worse than spending another $0.033 to regenerate.
+
+**Trigger: bump `recipes.instructions_version` on every recipe save.** Hooks into the existing upsertRecipe path — no new save flows to wire. Cache rows referencing the old version become unreachable. New reads at the new version trigger regeneration.
+
+Why a version counter rather than `DELETE FROM recipe_audio WHERE recipe_id = X` on save:
+- **Atomic with the save.** No crash window between delete and write that leaves stale rows cached.
+- **Concurrent-safe.** Two users editing simultaneously don't trample each other.
+- **Storage cleanup is async.** A nightly job (or cron) sweeps `recipe_audio` rows where `instructions_version != recipes.instructions_version` and deletes the orphaned MP3s from Supabase Storage. Doesn't block any user flow.
+
+Bump triggers (anywhere we already write to the recipes table — these all go through upsertRecipe so it's one place):
+- User edits an instruction step manually
+- User taps "✨ Regenerate instructions" (AI rewrites)
+- User edits ingredients (conservative — might affect a referenced quantity)
+- User changes the recipe name or other fields (cheap to over-invalidate vs. risk of stale audio)
+
+The only edits that DON'T need invalidation are tags, share toggles, and serving label (these don't appear in scaleStepText). Could exempt those for marginal cost savings, but probably not worth the complexity — let everything bump.
+
+### Cost math with servings caching + invalidation
 
 - Storage cost per recipe: ~50KB per MP3 × 6 steps × 5 typical serving sizes = 1.5MB. At Supabase $0.021/GB/mo → effectively $0 even at 10k recipes.
-- Each unique (recipe, servings) combo costs ~$0.033 ONCE, then $0 for all subsequent reads (across all users).
-- Most users use 1-2 serving sizes per recipe (base + doubled). So a typical recipe's lifetime TTS cost is $0.07.
+- Each unique (recipe, servings, version) combo costs ~$0.033 ONCE, then $0 for all subsequent reads (across all users).
+- Edits that bump the version → re-pay for that recipe's reads going forward. But edits are infrequent — most recipes are read many more times than they're edited.
+- Most users use 1-2 serving sizes per recipe (base + doubled). So a typical recipe's lifetime TTS cost is $0.07-$0.10 even with occasional edits.
 - Edge case: weird custom servings (e.g. user types 7) → cache miss → $0.033 → one-time. Acceptable.
 
 ---
