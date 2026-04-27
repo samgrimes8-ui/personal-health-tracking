@@ -45,6 +45,15 @@ alter table public.model_pricing
   add column if not exists effective_from    timestamptz,
   add column if not exists effective_until   timestamptz;
 
+-- Relax NOT NULL on input/output cost. The original schema required them
+-- because every row was a chat model. With unit-billed models (TTS uses
+-- per-character pricing, image-gen uses per-image, etc) those columns
+-- legitimately need to be null on those rows. Constraint at the data
+-- level is replaced by branch logic in calculate_request_cost_v2 below.
+alter table public.model_pricing
+  alter column input_cost_per_1m  drop not null,
+  alter column output_cost_per_1m drop not null;
+
 -- Backfill existing rows: all current rows are Anthropic chat models
 -- using token-based pricing, effective from when they were created.
 update public.model_pricing
