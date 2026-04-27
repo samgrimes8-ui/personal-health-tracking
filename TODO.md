@@ -105,6 +105,77 @@ The only edits that DON'T need invalidation are tags, share toggles, and serving
 - Most users use 1-2 serving sizes per recipe (base + doubled). So a typical recipe's lifetime TTS cost is $0.07-$0.10 even with occasional edits.
 - Edge case: weird custom servings (e.g. user types 7) → cache miss → $0.033 → one-time. Acceptable.
 
+### Tracking infrastructure changes (NEEDED before TTS can ship)
+
+User: "now we need to account for the recipe mp3 file generation in
+our AI cost and token tracker."
+
+Current `token_usage` + `record_usage` RPC + `calculate_request_cost`
+are CHAT-MODEL-shaped: they assume input_tokens + output_tokens →
+cost. TTS doesn't fit (no output tokens, billed per character).
+
+Needed schema changes:
+
+1. **token_usage new columns:**
+   - `provider text` — 'anthropic' / 'openai' / 'elevenlabs'
+   - `units_used integer` — generic unit count
+   - `unit_type text` — 'tokens' / 'characters' / 'images' / 'seconds_audio'
+   - Make `input_tokens` and `output_tokens` nullable (TTS leaves them null)
+
+2. **record_usage RPC: add p_provider, p_units_used, p_unit_type
+   parameters with defaults so old callers keep working unchanged.**
+
+3. **calculate_request_cost: rewrite to dispatch on (provider, model):**
+   - chat models → existing input × rate + output × rate logic
+   - TTS models → units_used × per-character rate
+   - Future: image-gen → units_used × per-image rate
+
+4. **Bonus: model_pricing table** so adding a new model or adjusting
+   rates is a SQL row, not a function rewrite. Schema:
+   ```
+   model_pricing(provider text, model text, input_rate numeric,
+                 output_rate numeric, unit_rate numeric,
+                 unit_type text, effective_from timestamptz,
+                 primary key (provider, model, effective_from))
+   ```
+
+### Why this matters for the spend cap
+
+Existing `check_spend_limit` reads `user_profiles.total_spent_usd`,
+which is the running total updated by `record_usage`. As long as
+record_usage continues to update that column with correct cost_usd,
+the AI Bucks paywall keeps working seamlessly across providers.
+
+User burns 100 AI Bucks ($0.10) on Claude → spend cap respected.
+Same user burns 50 AI Bucks ($0.05) on TTS via OpenAI → cap also
+respected. Spend cap is provider-agnostic.
+
+### Cache hit cost
+
+When we serve audio from cache, we DON'T call record_usage at all
+— no cost, no tracking. Only the FIRST generation per (recipe,
+servings, version, voice) records usage. This is what keeps the
+average cost per user low even with persistent caching.
+
+### What to verify before shipping TTS
+
+```sql
+-- Confirm calculate_request_cost current shape
+select pg_get_functiondef(oid)
+from pg_proc
+where proname = 'calculate_request_cost'
+  and pronamespace = 'public'::regnamespace;
+
+-- Confirm token_usage columns
+select column_name, data_type, is_nullable
+from information_schema.columns
+where table_schema = 'public' and table_name = 'token_usage'
+order by ordinal_position;
+```
+
+Need to see these before finalizing the TTS migration to make sure
+the changes are additive and don't break existing analyze.js calls.
+
 ---
 
 ## Other deferred items
