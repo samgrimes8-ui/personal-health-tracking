@@ -45,6 +45,16 @@ alter table public.model_pricing
   add column if not exists effective_from    timestamptz,
   add column if not exists effective_until   timestamptz;
 
+-- Relax NOT NULL on input/output cost columns. These are still required
+-- for token-based models, but providers like OpenAI TTS use unit_cost_per_1m
+-- exclusively (unit-based billing), so the input/output rate columns
+-- legitimately should be null for those rows. The new
+-- calculate_request_cost_v2 function enforces consistency at the
+-- (model, unit_type) level, so DB-level NOT NULL was over-strict.
+alter table public.model_pricing
+  alter column input_cost_per_1m drop not null,
+  alter column output_cost_per_1m drop not null;
+
 -- Relax NOT NULL on input/output cost. The original schema required them
 -- because every row was a chat model. With unit-billed models (TTS uses
 -- per-character pricing, image-gen uses per-image, etc) those columns
