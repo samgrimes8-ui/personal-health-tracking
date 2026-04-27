@@ -66,11 +66,22 @@ Nova is the warm-female one most users gravitate toward.
 
 ### Implementation sketch
 
-- New table: `recipe_audio(recipe_id, step_index, voice_id, mp3_url, char_count, created_at)`
-- New endpoint: `api/tts.js` that takes (recipe_id, step_index, voice_id), checks cache, generates if missing, returns URL
+- New table: `recipe_audio(recipe_id, step_index, servings, voice_id, mp3_url, char_count, created_at)`
+  - **Cache key includes servings** because instruction text scales with serving size (scaleStepText regex-replaces quantities). Same recipe at 4 vs 6 servings produces different text → different audio. Without `servings` in the key, scaled-up reads would play wrong numbers.
+  - Servings is `numeric(6,2)` to handle 0.5, 1.5, 2.5 etc.
+  - `voice_id` indexed because we'll likely settle on Nova for everyone but want flexibility to add ElevenLabs voices later.
+- New endpoint: `api/tts.js` that takes (recipe_id, step_index, servings, voice_id), checks cache, generates if missing via OpenAI tts-1-hd, uploads MP3 to Supabase Storage, returns URL
 - Cooking mode: instead of `speakStep()` calling browser TTS, fetch the MP3 URL and play it via `<audio>` element
+- Pass `state.recipeServings` (or recipe.servings if null) into the fetch so the cache key matches what's on screen
 - Fallback: if api/tts is unavailable or user is over budget, fall back to current free browser TTS (graceful degrade)
 - Voice picker: add "Premium voices" section above the device voices
+
+### Cost math with servings caching
+
+- Storage cost per recipe: ~50KB per MP3 × 6 steps × 5 typical serving sizes = 1.5MB. At Supabase $0.021/GB/mo → effectively $0 even at 10k recipes.
+- Each unique (recipe, servings) combo costs ~$0.033 ONCE, then $0 for all subsequent reads (across all users).
+- Most users use 1-2 serving sizes per recipe (base + doubled). So a typical recipe's lifetime TTS cost is $0.07.
+- Edge case: weird custom servings (e.g. user types 7) → cache miss → $0.033 → one-time. Acceptable.
 
 ---
 
