@@ -25,7 +25,8 @@ import {
   classifyFoodPhoto,
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
   generateRecipeInstructions, extractBodyScan, fetchOgMetadata, readBarcodeFromImage,
-  extractRecipeFromPhoto, generateRecipeFromMood, dedupGroceryNames
+  extractRecipeFromPhoto, generateRecipeFromMood, dedupGroceryNames,
+  fetchRecipeAudio
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -9856,8 +9857,14 @@ function wireGlobals() {
         // instructions can't silently vanish.
         if (saved?.instructions) {
           recipe.instructions = saved.instructions
+          if (saved.instructions_version != null) {
+            recipe.instructions_version = saved.instructions_version
+          }
           if (state.editingRecipe && state.editingRecipe.id === recipeId) {
             state.editingRecipe.instructions = saved.instructions
+            if (saved.instructions_version != null) {
+              state.editingRecipe.instructions_version = saved.instructions_version
+            }
           }
         }
         showToast('Instructions generated and saved!', 'success')
@@ -9986,6 +9993,53 @@ function wireGlobals() {
   // Net result: on a typical iPhone we should pick Samantha (Enhanced)
   // or similar without the user touching anything.
 
+  // ─── Premium voices (OpenAI TTS via /api/tts) ──────────────────────
+  // These play through an <audio> element, not SpeechSynthesis. Each
+  // step gets cached server-side per (recipe, step, servings, voice,
+  // version), so subsequent reads of the same recipe cost $0.
+  //
+  // Voice list mirrors what OpenAI tts-1-hd exposes. Nova is the
+  // warm-female pick most users gravitate toward; we surface it first
+  // in the picker. Free voices keep using browser SpeechSynthesis;
+  // selecting a premium voice routes through the API instead.
+  const PREMIUM_VOICES = [
+    { id: 'nova',    label: 'Nova',    desc: 'Warm, friendly · default premium' },
+    { id: 'shimmer', label: 'Shimmer', desc: 'Soft, calm female' },
+    { id: 'alloy',   label: 'Alloy',   desc: 'Neutral, balanced' },
+    { id: 'echo',    label: 'Echo',    desc: 'Crisp male' },
+    { id: 'fable',   label: 'Fable',   desc: 'Storyteller, British' },
+    { id: 'onyx',    label: 'Onyx',    desc: 'Deep male' },
+  ]
+  const PREMIUM_VOICE_IDS = new Set(PREMIUM_VOICES.map(v => v.id))
+
+  // localStorage shape:
+  //   macrolens_voice_name      → name string for a SpeechSynthesis voice
+  //   macrolens_voice_premium   → '1' if a premium voice is selected
+  //                               (id is then in macrolens_voice_name)
+  function getSelectedPremiumVoice() {
+    if (localStorage.getItem('macrolens_voice_premium') !== '1') return null
+    const id = localStorage.getItem('macrolens_voice_name')
+    return PREMIUM_VOICE_IDS.has(id) ? id : null
+  }
+
+  // Reusable <audio> element for premium playback. Created lazily so
+  // we don't burn an extra DOM node when the user never opens cooking
+  // mode. Volume/rate controls match the SpeechSynthesis defaults so
+  // the two paths sound similar in pacing.
+  let _audioEl = null
+  function getAudioEl() {
+    if (_audioEl) return _audioEl
+    _audioEl = document.createElement('audio')
+    _audioEl.preload = 'auto'
+    _audioEl.style.display = 'none'
+    document.body.appendChild(_audioEl)
+    return _audioEl
+  }
+  function stopAudio() {
+    if (_audioEl) { _audioEl.pause(); _audioEl.removeAttribute('src'); _audioEl.load() }
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+  }
+
   const KNOWN_GOOD_VOICES = [
     'samantha', 'ava', 'allison', 'karen', 'moira', 'tessa',
     'susan', 'victoria', 'serena', 'kate', 'fiona', 'nicky',
@@ -10070,10 +10124,77 @@ function wireGlobals() {
   }
   initSpeechSynthesis()
 
-  function speakStep(text) {
+  // Speak a step. Two paths:
+  //
+  //   Premium (OpenAI TTS): hits /api/tts, plays the returned MP3 via
+  //   <audio>. Used when the user has picked a premium voice. Caches
+  //   server-side per (recipe, step, servings, voice, version) so
+  //   subsequent reads of the same recipe cost nothing.
+  //
+  //   Free (browser SpeechSynthesis): the original on-device path.
+  //   Always cancels any pending utterance first to avoid stacking.
+  //
+  // ctx is an optional object — if provided AND a premium voice is
+  // selected, we route through the API. Otherwise fall back to the
+  // free path. ctx shape: { recipeId, stepIndex, servings, instructionsVersion }.
+  // We also fall back gracefully if the API call fails for any reason
+  // (network, spend cap, etc) — better to read in a robot voice than
+  // not at all mid-cook.
+  function speakStep(text, ctx) {
+    stopAudio()
+    if (!text) return
+
+    const premium = ctx ? getSelectedPremiumVoice() : null
+    if (premium && ctx?.recipeId != null && ctx.instructionsVersion != null) {
+      const audio = getAudioEl()
+      // Track this fetch so a fast user (Next > Next > Next) only ever
+      // hears the latest one. Older fetches that resolve late get dropped.
+      const ticket = ++_audioTicket
+      fetchRecipeAudio({
+        recipeId: ctx.recipeId,
+        stepIndex: ctx.stepIndex,
+        servings: ctx.servings,
+        voiceId: premium,
+        instructionsVersion: ctx.instructionsVersion,
+      }).then(({ url }) => {
+        if (ticket !== _audioTicket) return  // user moved on
+        audio.src = url
+        audio.play().catch(err => {
+          // Autoplay blocked or codec issue — fall back to browser TTS
+          // so the user still hears the step.
+          console.warn('[cooking] audio playback failed, falling back:', err?.message)
+          speakStepFree(text)
+        })
+      }).catch(err => {
+        if (ticket !== _audioTicket) return
+        console.warn('[cooking] premium TTS failed, falling back:', err?.message)
+        speakStepFree(text)
+      })
+      return
+    }
+
+    speakStepFree(text)
+  }
+
+  let _audioTicket = 0
+
+  // Builds the context premium TTS needs from the cooking-mode state.
+  // Cooking mode reads steps unscaled (we don't expose a serving picker
+  // there), so target servings = recipe.servings. instructions_version
+  // comes off the recipe row — DB trigger keeps it in sync on every save.
+  function cookingStepCtx(recipe, stepIndex) {
+    if (!recipe) return null
+    return {
+      recipeId: recipe.id,
+      stepIndex,
+      servings: Number(recipe.servings) || 1,
+      instructionsVersion: Number(recipe.instructions_version) || 1,
+    }
+  }
+
+  function speakStepFree(text) {
     if (!('speechSynthesis' in window)) return
     window.speechSynthesis.cancel()
-    if (!text) return
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.rate = 0.95
     utterance.pitch = 1.0
@@ -10098,7 +10219,7 @@ function wireGlobals() {
     renderCookingMode()
     // Speak the first step. Must happen in the same gesture as the
     // tap that opened the modal — iOS denies speech without it.
-    speakStep(steps[0])
+    speakStep(steps[0], cookingStepCtx(recipe, 0))
   }
 
   function renderCookingMode() {
@@ -10137,8 +10258,10 @@ function wireGlobals() {
            lets the user pick a different one. Subtle since this is a
            secondary control; the cooking flow is the primary action. -->
       ${(() => {
-        const active = getActiveVoice()
-        const label = active ? active.name : 'Default voice'
+        const premium = getSelectedPremiumVoice()
+        const label = premium
+          ? '✨ ' + (PREMIUM_VOICES.find(v => v.id === premium)?.label || premium)
+          : (getActiveVoice()?.name || 'Default voice')
         return `
           <div style="display:flex;justify-content:center;margin-bottom:20px">
             <button onclick="openVoicePicker()"
@@ -10201,7 +10324,7 @@ function wireGlobals() {
     if (!cm) return
     const recipe = state.recipes.find(r => r.id === cm.recipeId)
     const step = recipe?.instructions?.steps?.[cm.stepIndex]
-    if (step) speakStep(step)
+    if (step) speakStep(step, cookingStepCtx(recipe, cm.stepIndex))
   }
 
   window.nextCookingStep = () => {
@@ -10217,7 +10340,7 @@ function wireGlobals() {
     }
     cm.stepIndex++
     renderCookingMode()
-    speakStep(steps[cm.stepIndex])
+    speakStep(steps[cm.stepIndex], cookingStepCtx(recipe, cm.stepIndex))
   }
 
   window.prevCookingStep = () => {
@@ -10228,7 +10351,7 @@ function wireGlobals() {
     const recipe = state.recipes.find(r => r.id === cm.recipeId)
     const steps = recipe?.instructions?.steps || []
     renderCookingMode()
-    speakStep(steps[cm.stepIndex])
+    speakStep(steps[cm.stepIndex], cookingStepCtx(recipe, cm.stepIndex))
   }
 
   window.goToCookingStep = (idx) => {
@@ -10239,11 +10362,11 @@ function wireGlobals() {
     if (idx < 0 || idx >= steps.length) return
     cm.stepIndex = idx
     renderCookingMode()
-    speakStep(steps[idx])
+    speakStep(steps[idx], cookingStepCtx(recipe, idx))
   }
 
   window.closeCookingMode = () => {
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+    stopAudio()
     state.cookingMode = null
     document.getElementById('cooking-mode-modal')?.remove()
   }
@@ -10262,7 +10385,8 @@ function wireGlobals() {
     }
     // Sort by score so the picks at the top are the best quality
     const sorted = [...pool].sort((a, b) => scoreVoice(b) - scoreVoice(a))
-    const currentName = (getActiveVoice() || {}).name
+    const currentPremium = getSelectedPremiumVoice()
+    const currentDeviceName = !currentPremium ? (getActiveVoice() || {}).name : null
 
     const modal = document.createElement('div')
     modal.id = 'voice-picker-modal'
@@ -10272,11 +10396,30 @@ function wireGlobals() {
       <div class="modal-box" style="max-width:400px;width:100%;max-height:80vh;display:flex;flex-direction:column">
         <button class="modal-close" onclick="document.getElementById('voice-picker-modal')?.remove()">×</button>
         <h3 style="margin:0 0 4px;font-family:'DM Serif Display',serif;font-size:18px">Choose a voice</h3>
-        <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Tap any voice to preview. Best quality at the top.</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Tap any voice to preview. Premium voices use AI Bucks once per recipe.</div>
 
         <div style="overflow-y:auto;flex:1;margin-bottom:12px">
+          <!-- Premium voices (OpenAI TTS) — natural-sounding, generated
+               on the server. First read of a recipe step burns AI Bucks;
+               every subsequent read of the same step is free (cached). -->
+          <div style="font-size:10px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin:4px 4px 8px;font-weight:600">✨ Premium voices</div>
+          ${PREMIUM_VOICES.map(v => {
+            const isActive = currentPremium === v.id
+            return `
+              <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:${isActive ? 'rgba(212,165,116,0.12)' : 'var(--bg3)'};border:1px solid ${isActive ? 'rgba(212,165,116,0.4)' : 'var(--border)'};border-radius:8px;margin-bottom:6px;cursor:pointer"
+                onclick="previewPremiumVoice('${v.id}')">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:14px;color:var(--text);font-weight:${isActive ? '600' : '500'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.label}${isActive ? ' ✓' : ''}</div>
+                  <div style="font-size:11px;color:var(--text3);margin-top:2px">${v.desc}</div>
+                </div>
+                <div style="font-size:11px;color:var(--accent);letter-spacing:1px;flex-shrink:0">★★★</div>
+              </div>
+            `
+          }).join('')}
+
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin:18px 4px 8px;font-weight:600">Device voices · free</div>
           ${sorted.map(v => {
-            const isActive = v.name === currentName
+            const isActive = v.name === currentDeviceName
             const score = scoreVoice(v)
             // Visual quality indicator — purely cosmetic but helps the
             // user understand why some voices ranked higher than others.
@@ -10310,15 +10453,17 @@ function wireGlobals() {
   }
 
   window.previewVoice = (voiceName) => {
-    // Persist the choice and read the current step in the new voice
-    // so the user can hear the difference immediately.
+    // Picking a device voice clears the premium flag — these are mutually
+    // exclusive (only one voice plays at a time).
     localStorage.setItem('macrolens_voice_name', voiceName)
+    localStorage.removeItem('macrolens_voice_premium')
     _cachedVoice = null  // invalidate cache so getActiveVoice picks fresh
     const cm = state.cookingMode
     const recipe = cm ? state.recipes.find(r => r.id === cm.recipeId) : null
     const sample = recipe?.instructions?.steps?.[cm?.stepIndex ?? 0]
       || 'This is a sample of the selected voice.'
-    speakStep(sample)
+    // No ctx — preview always plays through the device voice path
+    speakStepFree(sample)
     // Re-render the picker so the active checkmark moves
     document.getElementById('voice-picker-modal')?.remove()
     window.openVoicePicker()
@@ -10326,8 +10471,29 @@ function wireGlobals() {
     if (state.cookingMode) renderCookingMode()
   }
 
+  window.previewPremiumVoice = (voiceId) => {
+    if (!PREMIUM_VOICE_IDS.has(voiceId)) return
+    // Persist as the active choice. We store the voice id in the same
+    // localStorage key device voices use, plus a flag so getSelectedPremiumVoice
+    // knows to interpret it as a premium id.
+    localStorage.setItem('macrolens_voice_name', voiceId)
+    localStorage.setItem('macrolens_voice_premium', '1')
+    _cachedVoice = null
+    const cm = state.cookingMode
+    const recipe = cm ? state.recipes.find(r => r.id === cm.recipeId) : null
+    if (recipe && cm) {
+      const idx = cm.stepIndex ?? 0
+      const sample = recipe.instructions?.steps?.[idx]
+      if (sample) speakStep(sample, cookingStepCtx(recipe, idx))
+    }
+    document.getElementById('voice-picker-modal')?.remove()
+    window.openVoicePicker()
+    if (state.cookingMode) renderCookingMode()
+  }
+
   window.resetVoiceToAuto = () => {
     localStorage.removeItem('macrolens_voice_name')
+    localStorage.removeItem('macrolens_voice_premium')
     _cachedVoice = null
     document.getElementById('voice-picker-modal')?.remove()
     if (state.cookingMode) renderCookingMode()

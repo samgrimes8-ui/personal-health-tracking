@@ -654,7 +654,7 @@ export async function saveRecipeInstructions(userId, recipeId, instructions) {
     .update({ instructions: payload, updated_at: new Date().toISOString() })
     .eq('id', recipeId)
     .eq('user_id', userId)
-    .select('id, instructions')
+    .select('id, instructions, instructions_version')
     .maybeSingle()
   if (error) {
     console.error('saveRecipeInstructions error:', error)

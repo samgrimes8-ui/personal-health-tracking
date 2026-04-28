@@ -4,7 +4,12 @@ Living backlog. Items move out as they ship.
 
 ## Cooking mode — paid voices
 
-**Status:** Deferred decision; deciding when ready.
+**Status:** ✅ SHIPPED (code) — Apr 28 session. Pending: `OPENAI_API_KEY`
+in Vercel env, and the `recipe_audio.sql` migration to run in Supabase
+before going live. Once those land, premium voices appear in the voice
+picker under "✨ Premium voices" and route through `/api/tts` with
+per-recipe MP3 caching. Graceful fallback to browser SpeechSynthesis on
+network failure or spend-cap hits.
 
 User feedback after launching free read-aloud (Apr 26 session):
 "sounds like Stephen hawking ... we might need to upgrade to paid

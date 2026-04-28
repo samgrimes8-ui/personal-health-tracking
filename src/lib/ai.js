@@ -124,6 +124,66 @@ async function callProxy(feature, messages, options = {}) {
   }
 }
 
+// ─── Recipe audio (cooking mode TTS) ─────────────────────────────────────────
+//
+// Hits /api/tts which is cache-first: existing (recipe, step, servings, voice,
+// version) combos return the cached MP3 URL with no spend. New combos pay for
+// OpenAI TTS once and cache forever.
+//
+// Throws on failure so callers can fall back to browser SpeechSynthesis.
+
+export async function fetchRecipeAudio({ recipeId, stepIndex, servings, voiceId, instructionsVersion }) {
+  // Same JWT-refresh dance as callProxy — TTS endpoint also requires auth.
+  let session
+  try {
+    const { data: refreshed } = await supabase.auth.refreshSession()
+    if (refreshed?.session) session = refreshed.session
+    else {
+      const { data } = await supabase.auth.getSession()
+      session = data?.session
+    }
+  } catch {
+    const { data } = await supabase.auth.getSession()
+    session = data?.session
+  }
+  if (!session?.access_token) throw new Error('Session expired')
+
+  const res = await fetch('/api/tts', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({
+      recipe_id: recipeId,
+      step_index: stepIndex,
+      servings,
+      voice_id: voiceId,
+      instructions_version: instructionsVersion,
+    }),
+  })
+
+  const data = await res.json().catch(() => ({ error: `Server returned ${res.status}` }))
+  if (!res.ok) {
+    // Mirror the analyze.js spend-cap modal hook so paid voices and chat
+    // hit the same upgrade flow when the user runs out of AI Bucks.
+    if (res.status === 429 && data.code === 'spending_limit_exceeded') {
+      if (typeof window !== 'undefined' && typeof window.openLimitReachedModal === 'function') {
+        window.openLimitReachedModal({
+          spentUsd: data.spent_usd,
+          limitUsd: data.limit_usd,
+        })
+      }
+      throw new Error("You've used all your AI Bucks this month")
+    }
+    const err = new Error(data.error ?? `Request failed (${res.status})`)
+    err.code = data.code
+    err.status = res.status
+    throw err
+  }
+  return data  // { url, cached }
+}
+
 // ─── Helper: parse JSON from Anthropic response ───────────────────────────────
 
 function parseJSON(data) {
