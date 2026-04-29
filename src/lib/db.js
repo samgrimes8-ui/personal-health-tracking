@@ -1627,3 +1627,260 @@ export async function copyBroadcastToPlanner(userId, broadcast, startDate, selec
   const recipesUpdated = diagnostics.filter(d => d.status === 'auto-updated').length
   return { mealsCopied: rows.length, recipesAdded, recipesUpdated, diagnostics }
 }
+
+// ─── Personal meal plan shares ──────────────────────────────────────────────
+//
+// Distinct from provider broadcasts: any user can share a single week of
+// their planner via a private link. The shared snapshot is self-contained
+// (recipes embedded in plan_data) so the public landing page doesn't need
+// any cross-user RLS gymnastics.
+
+function _shortShareToken() {
+  return Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 8)
+}
+
+// Snapshots one week of the user's planner into the structure that the share
+// page + copy flow consumes. weekStart is the Sunday of the target week.
+export async function createMealPlanShare(userId, weekStart, label = null) {
+  if (!supabase) return null
+
+  // Fetch the planner rows for this week.
+  const weekEnd = (() => {
+    const d = new Date(weekStart + 'T00:00:00')
+    d.setDate(d.getDate() + 6)
+    return d.toISOString().slice(0, 10)
+  })()
+  const { data: meals, error: mErr } = await supabase
+    .from('meal_planner')
+    .select('id, day_of_week, meal_type, meal_name, planned_servings, is_leftover, recipe_id, actual_date')
+    .eq('user_id', userId)
+    .gte('actual_date', weekStart)
+    .lte('actual_date', weekEnd)
+    .order('actual_date', { ascending: true })
+  if (mErr) throw mErr
+  if (!meals?.length) throw new Error('No meals planned for that week')
+
+  // Pull the referenced recipes (just the user's own — RLS already enforces).
+  const recipeIds = [...new Set(meals.map(m => m.recipe_id).filter(Boolean))]
+  let recipesById = {}
+  if (recipeIds.length) {
+    const { data: rs } = await supabase
+      .from('recipes')
+      .select('id, name, servings, ingredients, instructions, calories, protein, carbs, fat, fiber, sugar, description, tags, source_url')
+      .in('id', recipeIds)
+      .eq('user_id', userId)
+    recipesById = Object.fromEntries((rs || []).map(r => [r.id, r]))
+  }
+
+  // Build the snapshot. Each item embeds the recipe inline so the share is
+  // self-contained — recipient doesn't need to hit the owner's row.
+  const plan_data = meals.map(m => {
+    const r = m.recipe_id ? recipesById[m.recipe_id] : null
+    return {
+      day_of_week: m.day_of_week,
+      meal_type: m.meal_type,
+      meal_name: m.meal_name,
+      planned_servings: m.planned_servings,
+      is_leftover: !!m.is_leftover,
+      actual_date: m.actual_date,
+      recipe_id: m.recipe_id,
+      recipe_snapshot: r ? {
+        name: r.name,
+        servings: r.servings,
+        ingredients: r.ingredients,
+        instructions: r.instructions,
+        calories: r.calories,
+        protein: r.protein,
+        carbs: r.carbs,
+        fat: r.fat,
+        fiber: r.fiber,
+        sugar: r.sugar,
+        description: r.description,
+        tags: r.tags,
+        source_url: r.source_url,
+      } : null,
+    }
+  })
+
+  const share_token = _shortShareToken()
+  const { data, error } = await supabase
+    .from('meal_plan_shares')
+    .insert({
+      owner_user_id: userId,
+      share_token,
+      week_start: weekStart,
+      label: label || null,
+      plan_data,
+      is_active: true,
+    })
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+// Public read by token. RLS allows anon + authenticated to select active rows.
+// We don't auto-embed user_profiles here — there's no FK between
+// meal_plan_shares.owner_user_id and user_profiles, and user_profiles RLS
+// would block the join anyway from a logged-out recipient. The /api/share
+// landing page does a separate service-role lookup; the in-app copy modal
+// falls back to a generic owner label.
+export async function getMealPlanShareByToken(token) {
+  if (!supabase) return null
+  const { data } = await supabase
+    .from('meal_plan_shares')
+    .select('*')
+    .eq('share_token', token)
+    .eq('is_active', true)
+    .maybeSingle()
+  if (!data) return null
+  // Best-effort owner name lookup (RLS may block — that's fine, we just
+  // fall back to a generic label in the UI).
+  try {
+    const { data: prof } = await supabase
+      .from('user_profiles')
+      .select('provider_name')
+      .eq('user_id', data.owner_user_id)
+      .maybeSingle()
+    data.user_profiles = prof || null
+  } catch {
+    data.user_profiles = null
+  }
+  return data
+}
+
+export async function getMyMealPlanShares(userId) {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('meal_plan_shares')
+    .select('id, share_token, week_start, label, is_active, created_at')
+    .eq('owner_user_id', userId)
+    .order('created_at', { ascending: false })
+  if (error) return []
+  return data ?? []
+}
+
+export async function revokeMealPlanShare(userId, shareId) {
+  if (!supabase) return
+  const { error } = await supabase
+    .from('meal_plan_shares')
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq('id', shareId)
+    .eq('owner_user_id', userId)
+  if (error) throw error
+}
+
+// Copy a personal meal-plan share into the recipient's planner.
+//
+//   share          → the row from getMealPlanShareByToken
+//   targetWeekStart→ Sunday of the recipient's destination week
+//   saveRecipeIdx  → Set<number> of plan_data indices whose recipes the
+//                    recipient opted to import into their library. Indices
+//                    not in the set get a planner row with recipe_id=null
+//                    (just the meal name) plus from_share_token/index so
+//                    they can save the recipe later from the planner row.
+export async function copyMealPlanShareToPlanner(userId, share, targetWeekStart, saveRecipeIdx = null) {
+  if (!supabase || !share?.plan_data?.length) return { mealsCopied: 0, recipesAdded: 0 }
+
+  const items = share.plan_data
+  const saveSet = saveRecipeIdx instanceof Set ? saveRecipeIdx : new Set(saveRecipeIdx || [])
+
+  // Pre-load the recipient's existing recipes so we can dedupe by source_recipe_id
+  // and avoid double-importing if the recipient hits the same share twice.
+  const { data: existing } = await supabase
+    .from('recipes')
+    .select('id, source_recipe_id, name')
+    .eq('user_id', userId)
+  const existingBySource = {}
+  for (const r of existing || []) {
+    if (r.source_recipe_id) existingBySource[r.source_recipe_id] = r.id
+  }
+
+  // Import recipes the user wants to save. Map plan_data index → new recipe id.
+  const importedRecipeIdByIdx = {}
+  let recipesAdded = 0
+  for (let i = 0; i < items.length; i++) {
+    if (!saveSet.has(i)) continue
+    const item = items[i]
+    const snap = item.recipe_snapshot
+    if (!snap) continue
+    if (item.recipe_id && existingBySource[item.recipe_id]) {
+      importedRecipeIdByIdx[i] = existingBySource[item.recipe_id]
+      continue
+    }
+    const { data: created, error: rErr } = await supabase
+      .from('recipes')
+      .insert({
+        user_id: userId,
+        name: snap.name,
+        servings: snap.servings || 1,
+        ingredients: snap.ingredients || [],
+        instructions: snap.instructions || null,
+        calories: snap.calories,
+        protein: snap.protein,
+        carbs: snap.carbs,
+        fat: snap.fat,
+        fiber: snap.fiber,
+        sugar: snap.sugar,
+        description: snap.description,
+        tags: snap.tags || [],
+        source_url: snap.source_url,
+        source_recipe_id: item.recipe_id || null,
+      })
+      .select('id')
+      .single()
+    if (rErr) {
+      console.warn('[copyMealPlanShare] recipe insert failed:', rErr.message)
+      continue
+    }
+    importedRecipeIdByIdx[i] = created.id
+    recipesAdded += 1
+  }
+
+  // Build planner rows. day_of_week is preserved from the share so meals land
+  // on the same weekday in the recipient's target week. week_start_date is
+  // the Sunday-of-week that meal_planner uses as its primary grouping key,
+  // so meals from different rows still cluster correctly even when
+  // targetWeekStart isn't a Sunday.
+  const targetStart = new Date(targetWeekStart + 'T00:00:00')
+  const rows = items.map((item, i) => {
+    const dow = item.day_of_week ?? 0
+    const d = new Date(targetStart); d.setDate(d.getDate() + dow)
+    const actual_date = d.toISOString().slice(0, 10)
+    // Sunday of the actual_date's week (matches getWeekStart() in app.js).
+    const sunday = new Date(d); sunday.setDate(sunday.getDate() - sunday.getDay())
+    const week_start_date = sunday.toISOString().slice(0, 10)
+    const recipeId = importedRecipeIdByIdx[i] || null
+    const snap = item.recipe_snapshot || {}
+    return {
+      user_id: userId,
+      week_start_date,
+      actual_date,
+      day_of_week: dow,
+      meal_type: item.meal_type || null,
+      meal_name: item.meal_name || snap.name || 'Meal',
+      planned_servings: item.planned_servings ?? 1,
+      is_leftover: !!item.is_leftover,
+      recipe_id: recipeId,
+      // Carry macros from the snapshot so calorie / protein totals on the
+      // recipient's planner work even if they didn't import the recipe.
+      calories: snap.calories ?? null,
+      protein: snap.protein ?? null,
+      carbs: snap.carbs ?? null,
+      fat: snap.fat ?? null,
+      fiber: snap.fiber ?? null,
+      // Provenance: only stamp these when we DIDN'T import the recipe, so
+      // the planner row knows it can offer a "save recipe from share" link.
+      from_share_token: recipeId ? null : share.share_token,
+      from_share_index: recipeId ? null : i,
+    }
+  })
+
+  const { data: inserted, error } = await supabase
+    .from('meal_planner')
+    .insert(rows)
+    .select()
+  if (error) throw error
+
+  return { mealsCopied: inserted?.length || 0, recipesAdded }
+}

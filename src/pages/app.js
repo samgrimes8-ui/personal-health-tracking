@@ -16,7 +16,9 @@ import {
   getIngredientSynonyms, saveIngredientSynonyms, deleteIngredientSynonyms,
   getProviders, getProviderBroadcasts, saveBroadcast, deleteBroadcast,
   followProvider, unfollowProvider, getFollowedProviders, isFollowingProvider,
-  getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar
+  getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar,
+  createMealPlanShare, getMealPlanShareByToken, getMyMealPlanShares, revokeMealPlanShare,
+  copyMealPlanShareToPlanner,
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
 import { categorizeByName, parseAmount, canonicalizeName } from '../lib/categorize.js'
@@ -187,7 +189,23 @@ export async function initApp(user, container) {
   const savedPage = sessionStorage.getItem('macrolens_page')
   const validPages = ['log','analytics','planner','history','goals','recipes','foods','account','providers']
   if (savedPage && validPages.includes(savedPage)) state.currentPage = savedPage
+
+  // Personal meal-plan share inbound URL: /?share=<token>. Strip the param
+  // first so a refresh doesn't re-fire the modal, then route to the planner
+  // and open the copy flow once the page renders.
+  const shareToken = new URLSearchParams(window.location.search).get('share')
+  if (shareToken) {
+    try { window.history.replaceState(null, '', window.location.pathname) } catch {}
+    state.currentPage = 'planner'
+    state._pendingShareCopyToken = shareToken
+  }
+
   renderPage()
+
+  if (shareToken) {
+    // Fire after the planner has had a chance to render.
+    setTimeout(() => window.openIncomingShareModal?.(shareToken), 50)
+  }
   // Load new user badge for admins (background, non-blocking)
   if (state.usage?.isAdmin) {
     getAdminUserOverview().then(users => {
@@ -1952,9 +1970,16 @@ async function renderPlanner(container) {
     ${state.showCalendar ? renderCalendarPicker() : ''}
 
     <!-- Planner / Grocery tabs -->
-    <div style="display:flex;gap:4px;margin-bottom:20px;margin-top:16px">
+    <div style="display:flex;gap:4px;margin-bottom:20px;margin-top:16px;align-items:center;flex-wrap:wrap">
       <button class="mode-tab ${state.plannerView !== 'grocery' ? 'active' : ''}" onclick="setPlannerView('meals')" style="flex:0 0 auto;padding:8px 18px">📅 Meal plan</button>
       <button class="mode-tab ${state.plannerView === 'grocery' ? 'active' : ''}" onclick="setPlannerView('grocery')" style="flex:0 0 auto;padding:8px 18px">🛒 Grocery list${isPremiumOnlyFeature('grocery') ? ' <span style=\"font-size:10px;opacity:0.7;margin-left:4px\">⭐</span>' : ''}</button>
+      ${state.plannerView !== 'grocery' && hasMealsThisWeek ? `
+        <button onclick="openShareWeekModal()"
+          title="Share this week with someone (private link)"
+          style="margin-left:auto;background:color-mix(in srgb, var(--accent) 10%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:var(--r);padding:7px 12px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap;font-weight:500">
+          🔗 Share week
+        </button>
+      ` : ''}
     </div>
 
     ${state.plannerView === 'grocery' ? '<div id="grocery-placeholder"><div class="log-empty">Loading grocery list...</div></div>' : renderMealPlanView(planner)}
@@ -8808,6 +8833,240 @@ function wireGlobals() {
     state.mealServings = {}
     state.excludedIngredients = new Set()
     renderPage()
+  }
+
+  // ── Personal meal-plan shares (planner side) ────────────────────────────
+  // Opens a modal showing existing shares for the user + a "Generate share"
+  // button for the current week. Distinct from provider broadcasts: any user
+  // can use this, no follower model, just a private link.
+  window.openShareWeekModal = async () => {
+    const existing = await getMyMealPlanShares(state.user.id)
+    const labelDefault = `Week of ${formatWeekLabel(state.weekStart)}`
+    const fmtDate = s => new Date(s + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+    const baseUrl = window.location.origin
+
+    document.getElementById('share-week-modal')?.remove()
+    const modal = document.createElement('div')
+    modal.id = 'share-week-modal'
+    modal.className = 'modal-overlay open'
+    modal.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:16px;z-index:200'
+    modal.innerHTML = `
+      <div class="modal-box" style="max-width:520px;width:100%;max-height:88vh;display:flex;flex-direction:column">
+        <button class="modal-close" onclick="document.getElementById('share-week-modal')?.remove()">×</button>
+        <h3 style="margin:0 0 4px;font-family:'DM Serif Display',serif;font-size:20px">Share this week</h3>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:16px;line-height:1.5">
+          Generate a private link for ${esc(labelDefault)}. Anyone with the link can view the meals and copy them into their own planner. Distinct from publishing as a provider — this isn't shown to anyone unless you send the link.
+        </div>
+
+        <div class="modal-field" style="margin-bottom:14px">
+          <label>Optional label</label>
+          <input type="text" id="share-label-input" placeholder="${esc(labelDefault)}"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none" />
+        </div>
+
+        <button id="share-generate-btn" onclick="generateMealPlanShare()"
+          style="width:100%;padding:12px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:18px">
+          🔗 Generate share link
+        </button>
+
+        <div id="share-result" style="display:none;margin-bottom:18px;padding:12px;background:color-mix(in srgb, var(--green) 10%, transparent);border:1px solid color-mix(in srgb, var(--green) 30%, transparent);border-radius:var(--r)">
+          <div style="font-size:11px;color:var(--green);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;font-weight:600">✓ Link ready</div>
+          <div id="share-result-url" style="font-size:12px;color:var(--text);word-break:break-all;line-height:1.5;margin-bottom:8px"></div>
+          <button onclick="copyMealPlanShareLink()" id="share-copy-btn"
+            style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:6px 12px;border-radius:var(--r);font-size:12px;font-family:inherit;cursor:pointer">📋 Copy link</button>
+        </div>
+
+        <div style="overflow-y:auto;flex:1">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Your active shares</div>
+          ${(() => {
+            const active = existing.filter(s => s.is_active)
+            if (!active.length) return `<div style="font-size:13px;color:var(--text3);padding:12px 0">No active shares yet.</div>`
+            return active.map(s => `
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:500;color:var(--text)">${esc(s.label || 'Week of ' + fmtDate(s.week_start))}</div>
+                  <div style="font-size:11px;color:var(--text3);margin-top:2px;word-break:break-all">${baseUrl}/api/share/${esc(s.share_token)}</div>
+                </div>
+                <button onclick="copyExistingShareLink('${esc(s.share_token)}', this)" title="Copy link"
+                  style="background:none;border:1px solid var(--border2);color:var(--text2);padding:5px 10px;border-radius:var(--r);font-size:11px;font-family:inherit;cursor:pointer;white-space:nowrap">📋</button>
+                <button onclick="revokeMealPlanShareHandler('${s.id}')" title="Revoke link"
+                  style="background:none;border:1px solid var(--border2);color:var(--text3);padding:5px 10px;border-radius:var(--r);font-size:11px;font-family:inherit;cursor:pointer;white-space:nowrap"
+                  onmouseover="this.style.color='var(--red)';this.style.borderColor='var(--red)'"
+                  onmouseout="this.style.color='var(--text3)';this.style.borderColor='var(--border2)'">Revoke</button>
+              </div>
+            `).join('')
+          })()}
+        </div>
+      </div>
+    `
+    document.body.appendChild(modal)
+  }
+
+  window.generateMealPlanShare = async () => {
+    const btn = document.getElementById('share-generate-btn')
+    const labelInput = document.getElementById('share-label-input')
+    const label = labelInput?.value?.trim() || null
+    if (btn) { btn.disabled = true; btn.textContent = 'Generating…' }
+    try {
+      const share = await createMealPlanShare(state.user.id, state.weekStart, label)
+      const url = `${window.location.origin}/api/share/${share.share_token}`
+      state._lastGeneratedShareUrl = url
+      const result = document.getElementById('share-result')
+      const urlEl = document.getElementById('share-result-url')
+      if (urlEl) urlEl.textContent = url
+      if (result) result.style.display = 'block'
+      // Best-effort auto-copy. iOS may block this without a user gesture
+      // chain; the explicit Copy button is the fallback.
+      try { await navigator.clipboard.writeText(url) } catch {}
+    } catch (err) {
+      showToast('Could not generate share: ' + err.message, 'error')
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '🔗 Generate share link' }
+    }
+  }
+
+  window.copyMealPlanShareLink = async () => {
+    const url = state._lastGeneratedShareUrl
+    if (!url) return
+    const btn = document.getElementById('share-copy-btn')
+    try {
+      await navigator.clipboard.writeText(url)
+      if (btn) { btn.textContent = '✓ Copied'; setTimeout(() => { btn.textContent = '📋 Copy link' }, 2000) }
+    } catch {
+      showToast('Copy failed — long-press the link instead', 'error')
+    }
+  }
+
+  window.copyExistingShareLink = async (token, buttonEl) => {
+    const url = `${window.location.origin}/api/share/${token}`
+    try {
+      await navigator.clipboard.writeText(url)
+      if (buttonEl) { const orig = buttonEl.textContent; buttonEl.textContent = '✓'; setTimeout(() => { buttonEl.textContent = orig }, 1500) }
+    } catch {
+      showToast('Copy failed', 'error')
+    }
+  }
+
+  window.revokeMealPlanShareHandler = async (shareId) => {
+    if (!confirm('Revoke this share? The link will stop working immediately.')) return
+    try {
+      await revokeMealPlanShare(state.user.id, shareId)
+      showToast('Share revoked', 'success')
+      document.getElementById('share-week-modal')?.remove()
+      window.openShareWeekModal()  // re-open with refreshed list
+    } catch (err) {
+      showToast('Could not revoke: ' + err.message, 'error')
+    }
+  }
+
+  // ── Recipient side: incoming /?share=<token> opens a copy modal that
+  // lets the user pick a target Sunday-start week and choose which meals
+  // to also import as recipes into their library.
+  window.openIncomingShareModal = async (token) => {
+    const share = await getMealPlanShareByToken(token).catch(() => null)
+    if (!share) {
+      showToast('That share link is no longer active', 'error')
+      return
+    }
+
+    const items = Array.isArray(share.plan_data) ? share.plan_data : []
+    if (!items.length) {
+      showToast('That share is empty', 'error')
+      return
+    }
+
+    const ownerName = share.user_profiles?.provider_name || 'Someone'
+    const title = share.label || `${ownerName}'s meal plan`
+    const defaultTarget = state.weekStart || getWeekStart()
+    const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+
+    document.getElementById('share-import-modal')?.remove()
+    const modal = document.createElement('div')
+    modal.id = 'share-import-modal'
+    modal.className = 'modal-overlay open'
+    modal.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:16px;z-index:200'
+    modal.innerHTML = `
+      <div class="modal-box" style="max-width:560px;width:100%;max-height:88vh;display:flex;flex-direction:column">
+        <button class="modal-close" onclick="document.getElementById('share-import-modal')?.remove()">×</button>
+        <h3 style="margin:0 0 4px;font-family:'DM Serif Display',serif;font-size:20px">Copy ${esc(title)}</h3>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:14px;line-height:1.5">
+          Pick a target week. Meals land on the same weekday in that week. By default, recipes are NOT saved to your library — check the boxes below for any you want to keep as recipes.
+        </div>
+
+        <div class="modal-field" style="margin-bottom:14px">
+          <label>Target week start (Sunday)</label>
+          <input type="date" id="share-target-week" value="${defaultTarget}"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none" />
+          <div style="font-size:11px;color:var(--text3);margin-top:6px">Tip: Sunday is the standard start. Other days will still work — meals just shift by the same offset.</div>
+        </div>
+
+        <div style="overflow-y:auto;flex:1;margin-bottom:14px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:10px 0">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Meals to copy</div>
+            <button onclick="toggleAllShareRecipes(true)" style="background:none;border:none;color:var(--accent);font-size:11px;font-family:inherit;cursor:pointer;padding:0">Save all recipes</button>
+          </div>
+          ${items.map((item, i) => {
+            const dayLabel = DAY_NAMES[item.day_of_week] || ''
+            const mealName = item.meal_name || item.recipe_snapshot?.name || 'Meal'
+            const cal = Math.round(Number(item.recipe_snapshot?.calories || 0))
+            return `
+              <label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer">
+                <input type="checkbox" class="share-save-recipe" data-idx="${i}"
+                  ${item.recipe_snapshot ? '' : 'disabled'}
+                  style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer" />
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;color:var(--text);font-weight:500">${esc(mealName)}</div>
+                  <div style="font-size:11px;color:var(--text3);margin-top:1px">
+                    ${esc(dayLabel)} · ${esc(item.meal_type || '—')} · ${cal} kcal
+                    ${item.is_leftover ? ' · ↩ leftover' : ''}
+                    ${!item.recipe_snapshot ? ' · no recipe attached' : ''}
+                  </div>
+                </div>
+              </label>
+            `
+          }).join('')}
+        </div>
+
+        <div style="display:flex;gap:10px">
+          <button class="btn-cancel" onclick="document.getElementById('share-import-modal')?.remove()">Cancel</button>
+          <button class="btn-save" id="share-import-confirm" onclick="confirmIncomingShareCopy('${esc(token)}')">Copy meals to my planner</button>
+        </div>
+      </div>
+    `
+    document.body.appendChild(modal)
+  }
+
+  window.toggleAllShareRecipes = (checked) => {
+    document.querySelectorAll('.share-save-recipe').forEach(el => {
+      if (!el.disabled) el.checked = checked
+    })
+  }
+
+  window.confirmIncomingShareCopy = async (token) => {
+    const share = await getMealPlanShareByToken(token).catch(() => null)
+    if (!share) { showToast('Share no longer available', 'error'); return }
+    const target = document.getElementById('share-target-week')?.value
+    if (!target) { showToast('Pick a target week', 'error'); return }
+    const saveSet = new Set()
+    document.querySelectorAll('.share-save-recipe').forEach(el => {
+      if (el.checked) saveSet.add(Number(el.getAttribute('data-idx')))
+    })
+    const btn = document.getElementById('share-import-confirm')
+    if (btn) { btn.disabled = true; btn.textContent = 'Copying…' }
+    try {
+      const { mealsCopied, recipesAdded } = await copyMealPlanShareToPlanner(state.user.id, share, target, saveSet)
+      // Reload planner data so the new meals show up.
+      await loadAll()
+      state.weekStart = target
+      document.getElementById('share-import-modal')?.remove()
+      const recMsg = recipesAdded > 0 ? ` · ${recipesAdded} recipe${recipesAdded === 1 ? '' : 's'} saved` : ''
+      showToast(`Copied ${mealsCopied} meal${mealsCopied === 1 ? '' : 's'}${recMsg}`, 'success')
+      renderPage()
+    } catch (err) {
+      console.error('[share copy] failed:', err)
+      showToast('Could not copy: ' + err.message, 'error')
+      if (btn) { btn.disabled = false; btn.textContent = 'Copy meals to my planner' }
+    }
   }
 
   window.shiftWeek = (dir) => {
