@@ -185,3 +185,11 @@ average cost per user low even with persistent caching.
   state._stagedCustomTags; should be first-class
 - **Save-pipeline normalization** — parseAmount applied at write
   time, not just read time, so DB stores clean numbers
+- **Refresh snapshot on personal meal-plan shares** — today a share
+  is a static snapshot at create-time. Add a "Refresh" button on
+  each share row in the planner's share modal that re-captures the
+  current week's planner state into the same share row (same URL,
+  same token, just updated `plan_data` + `updated_at`). Saves users
+  from generating a new link every time they tweak a meal. Caveat:
+  the public landing page caches for ~60s, so recipients might see
+  a brief lag after a refresh — acceptable.
