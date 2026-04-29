@@ -1499,31 +1499,6 @@ function renderDashboard(container) {
     <div class="greeting">${greeting}</div>
     <div class="greeting-sub">Log your meals and track your macros.</div>
 
-    <div class="stats-row">
-      <div class="stat-card"><div class="stat-label">Calories</div><div class="stat-val" style="color:var(--cal)" id="stat-cal">0</div><div class="stat-sub">of <span id="stat-cal-goal">${state.goals.calories}</span> kcal</div></div>
-      <div class="stat-card"><div class="stat-label">Protein</div><div class="stat-val" style="color:var(--protein)" id="stat-p">0g</div><div class="stat-sub">of <span id="stat-p-goal">${state.goals.protein}</span>g</div></div>
-      <div class="stat-card"><div class="stat-label">Carbs</div><div class="stat-val" style="color:var(--carbs)" id="stat-c">0g</div><div class="stat-sub">of <span id="stat-c-goal">${state.goals.carbs}</span>g</div></div>
-      <div class="stat-card"><div class="stat-label">Fat</div><div class="stat-val" style="color:var(--fat)" id="stat-f">0g</div><div class="stat-sub">of <span id="stat-f-goal">${state.goals.fat}</span>g</div></div>
-    </div>
-
-    ${renderDashboardAnalyticsWidget()}
-
-    <!-- Quick log — above analyze. For free users, we highlight that
-         this is the AI-free path so they understand they can log meals
-         without burning through their 100 AI Bucks. Quick Log just
-         writes to the DB, no Anthropic call. -->
-    <div class="log-card" style="margin-bottom:16px">
-      <div class="log-header">
-        <span class="log-header-title">Quick log ${state.usage?.isFree ? '<span style="font-size:10px;margin-left:6px;padding:2px 8px;background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;font-weight:500;letter-spacing:0">⚡ Free · No AI</span>' : ''}</span>
-        <span style="font-size:11px;color:var(--text3)">from recipes & history</span>
-      </div>
-      <div style="padding:12px 16px">
-        <input class="planner-search" id="quick-log-search" placeholder="Search meals and recipes to log..."
-          oninput="filterQuickLog()" style="margin-bottom:8px" />
-        <div id="quick-log-list"></div>
-      </div>
-    </div>
-
     <!-- Analyze food -->
     <div class="two-col">
       <div class="upload-card">
@@ -1674,6 +1649,37 @@ function renderDashboard(container) {
       </div>
     </div>
 
+    <!-- Quick log — AI-free path. For free users, the Free badge calls
+         out that this doesn't burn AI Bucks. -->
+    <div class="log-card" style="margin-bottom:16px">
+      <div class="log-header">
+        <span class="log-header-title">Quick log ${state.usage?.isFree ? '<span style="font-size:10px;margin-left:6px;padding:2px 8px;background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;font-weight:500;letter-spacing:0">⚡ Free · No AI</span>' : ''}</span>
+        <span style="font-size:11px;color:var(--text3)">from recipes & history</span>
+      </div>
+      <div style="padding:12px 16px">
+        <input class="planner-search" id="quick-log-search" placeholder="Search meals and recipes to log..."
+          oninput="filterQuickLog()" style="margin-bottom:8px" />
+        <div id="quick-log-list"></div>
+      </div>
+    </div>
+
+    <!-- Daily macro counts -->
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-label">Calories</div><div class="stat-val" style="color:var(--cal)" id="stat-cal">0</div><div class="stat-sub">of <span id="stat-cal-goal">${state.goals.calories}</span> kcal</div></div>
+      <div class="stat-card"><div class="stat-label">Protein</div><div class="stat-val" style="color:var(--protein)" id="stat-p">0g</div><div class="stat-sub">of <span id="stat-p-goal">${state.goals.protein}</span>g</div></div>
+      <div class="stat-card"><div class="stat-label">Carbs</div><div class="stat-val" style="color:var(--carbs)" id="stat-c">0g</div><div class="stat-sub">of <span id="stat-c-goal">${state.goals.carbs}</span>g</div></div>
+      <div class="stat-card"><div class="stat-label">Fat</div><div class="stat-val" style="color:var(--fat)" id="stat-f">0g</div><div class="stat-sub">of <span id="stat-f-goal">${state.goals.fat}</span>g</div></div>
+    </div>
+
+    <!-- Today's meals -->
+    <div class="log-card" style="margin-bottom:16px">
+      <div class="log-header">
+        <span class="log-header-title">Today's meals</span>
+      </div>
+      <div id="today-log-body">${renderTodayMeals(todayLog)}</div>
+    </div>
+
+    <!-- Macro breakdown / Goal progress -->
     <div class="chart-row">
       <div class="chart-card">
         <div class="chart-title">Macro breakdown today</div>
@@ -1704,12 +1710,8 @@ function renderDashboard(container) {
       </div>
     </div>
 
-    <div class="log-card">
-      <div class="log-header">
-        <span class="log-header-title">Today's meals</span>
-      </div>
-      <div id="today-log-body">${renderTodayMeals(todayLog)}</div>
-    </div>
+    <!-- Analytics -->
+    ${renderDashboardAnalyticsWidget()}
   `
 
   updateStats()
