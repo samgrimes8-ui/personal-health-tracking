@@ -446,7 +446,12 @@ function lineChart(values, opts = {}) {
   const {
     width = 600, height = 180, color = 'var(--accent)',
     targetLine = null, targetLabel = '', labels = [],
-    yFormat = (v) => Math.round(v)
+    yFormat = (v) => Math.round(v),
+    // autoY=true sizes the y-axis to the data (with a small padding band
+    // above/below) instead of pinning the floor to 0. Used for series
+    // where 0 isn't a meaningful baseline — e.g. body weight, where a
+    // 175 lb line on a 0-200 axis pancakes the trend into the top edge.
+    autoY = false,
   } = opts
   if (!values.length) return '<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">No data yet</div>'
 
@@ -455,12 +460,22 @@ function lineChart(values, opts = {}) {
   const plotH = height - padT - padB
 
   const allValues = targetLine != null ? [...values, targetLine] : values
-  const maxRaw = Math.max(...allValues, 1)
-  const minRaw = Math.min(...allValues.filter(v => v > 0), 0)
-  // Round max up to next nice number
-  const magnitude = Math.pow(10, Math.floor(Math.log10(maxRaw)))
-  const max = Math.ceil(maxRaw / magnitude) * magnitude
-  const min = 0
+  let min, max
+  if (autoY) {
+    const lo = Math.min(...allValues)
+    const hi = Math.max(...allValues)
+    const span = hi - lo
+    // Floor padding at 1 unit so a perfectly flat series still gets a
+    // breathable axis instead of a single horizontal line at mid-chart.
+    const pad = Math.max(span * 0.1, 1)
+    min = Math.floor(lo - pad)
+    max = Math.ceil(hi + pad)
+  } else {
+    const maxRaw = Math.max(...allValues, 1)
+    const magnitude = Math.pow(10, Math.floor(Math.log10(maxRaw)))
+    max = Math.ceil(maxRaw / magnitude) * magnitude
+    min = 0
+  }
   const range = max - min || 1
 
   const xFor = i => padL + (i / (values.length - 1 || 1)) * plotW
@@ -694,7 +709,8 @@ function renderAnalyticsPage(container) {
         ${lineChart(weightData.map(c => weightFor(c.weight)), {
           width: 600, height: 160, color: 'var(--accent)',
           labels: weightData.map(c => shortDate(c.date)),
-          yFormat: v => v + ' ' + weightUnit
+          yFormat: v => v + ' ' + weightUnit,
+          autoY: true,
         })}
       </div>
     ` : ''}
