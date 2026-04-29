@@ -412,10 +412,19 @@ export async function getUsageSummary(userId) {
   }
 }
 
-// Admin only — get all users
+// Admin only — get all users.
+//
+// Backed by a SECURITY DEFINER function that explicitly checks
+// is_admin(auth.uid()) before returning rows. Replaced the previous
+// public.admin_user_overview view, which the Supabase linter flagged
+// as exposing auth.users to anon and as bypassing RLS via SECURITY
+// DEFINER. Function variant is safe because the auth check gates
+// access at the application layer.
 export async function getAdminUserOverview() {
   if (!supabase) return []
-  const { data, error } = await supabase.from('admin_user_overview').select('*').order('spent_this_month_usd', { ascending: false })
+  const { data, error } = await supabase
+    .rpc('admin_user_overview')
+    .order('spent_this_month_usd', { ascending: false })
   if (error) throw error
   return data ?? []
 }
