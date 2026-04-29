@@ -4938,51 +4938,50 @@ function renderGoalsPage(container) {
           const fmtMonthLong = s => new Date(s + '-01T12:00:00').toLocaleDateString([], { month: 'long', year: 'numeric' })
           const renderRows = arr => arr.map(c => buildCheckinRow(c, isImperial)).join('')
 
-          // Last 4 weeks — sorted newest first.
-          const weeklyKeys = Object.keys(_bucketed.weekly).sort().reverse()
-          if (weeklyKeys.length) {
-            const rows = weeklyKeys.map(wk => {
-              const cs = _bucketed.weekly[wk].slice().sort((a,b) => (_checkinDate(b) || '').localeCompare(_checkinDate(a) || ''))
-              return _renderBucket(`wk:${wk}`, `Week of ${fmtDateLong(wk)}`, null, _avg(cs), cs.length, renderRows(cs))
-            }).join('')
-            sections.push(`
-              <div style="margin-top:18px">
-                <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Last 4 weeks</div>
-                ${rows}
-              </div>`)
-          }
-
-          // Past 12 months — same idea, monthly buckets.
-          const monthlyKeys = Object.keys(_bucketed.monthly).sort().reverse()
-          if (monthlyKeys.length) {
-            const rows = monthlyKeys.map(mo => {
-              const cs = _bucketed.monthly[mo].slice().sort((a,b) => (_checkinDate(b) || '').localeCompare(_checkinDate(a) || ''))
-              return _renderBucket(`mo:${mo}`, fmtMonthLong(mo), null, _avg(cs), cs.length, renderRows(cs))
-            }).join('')
-            sections.push(`
-              <div style="margin-top:18px">
-                <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Past 12 months</div>
-                ${rows}
-              </div>`)
-          }
-
-          // Older — yearly avg per year, with DEXA/InBody scans surfaced
-          // as standalone callout rows above each year's annual avg so
-          // they're easy to find without expanding multiple months.
-          const yearlyKeys = Object.keys(_bucketed.yearly).sort().reverse()
-          if (yearlyKeys.length) {
-            const rows = yearlyKeys.map(yr => {
-              const cs = _bucketed.yearly[yr].slice().sort((a,b) => (_checkinDate(b) || '').localeCompare(_checkinDate(a) || ''))
+          // Render one tier section. Within each tier, every bucket row gets
+          // its DEXA/InBody scans (if any) pulled out as standalone callout
+          // rows ABOVE the bucket — same pattern across all three tiers so
+          // a scan from any era is reachable in one click. Scans still flow
+          // through into the bucket's average, they're just also surfaced
+          // individually.
+          const tier = (title, keys, getCs, bucketLabel, bucketKeyPrefix) => {
+            if (!keys.length) return ''
+            const rows = keys.map(k => {
+              const cs = getCs(k).slice().sort((a,b) => (_checkinDate(b) || '').localeCompare(_checkinDate(a) || ''))
               const scans = cs.filter(c => c.scan_type)
-              const yearRow = _renderBucket(`yr:${yr}`, `${yr} annual avg`, null, _avg(cs), cs.length, renderRows(cs))
-              return scans.map(_renderScanCallout).join('') + yearRow
+              const bucketRow = _renderBucket(`${bucketKeyPrefix}:${k}`, bucketLabel(k), null, _avg(cs), cs.length, renderRows(cs))
+              return scans.map(_renderScanCallout).join('') + bucketRow
             }).join('')
-            sections.push(`
+            return `
               <div style="margin-top:18px">
-                <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Older</div>
+                <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">${title}</div>
                 ${rows}
-              </div>`)
+              </div>`
           }
+
+          sections.push(tier(
+            'Last 4 weeks',
+            Object.keys(_bucketed.weekly).sort().reverse(),
+            wk => _bucketed.weekly[wk],
+            wk => `Week of ${fmtDateLong(wk)}`,
+            'wk',
+          ))
+
+          sections.push(tier(
+            'Past 12 months',
+            Object.keys(_bucketed.monthly).sort().reverse(),
+            mo => _bucketed.monthly[mo],
+            mo => fmtMonthLong(mo),
+            'mo',
+          ))
+
+          sections.push(tier(
+            'Older',
+            Object.keys(_bucketed.yearly).sort().reverse(),
+            yr => _bucketed.yearly[yr],
+            yr => `${yr} annual avg`,
+            'yr',
+          ))
 
           return sections.join('')
         })()}
