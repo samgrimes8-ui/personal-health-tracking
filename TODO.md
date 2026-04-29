@@ -163,6 +163,15 @@ average cost per user low even with persistent caching.
 
 ---
 
+## Known bugs
+
+- **Password reset broken** — reported 2026-04-28. Reset flow does
+  not work for `sam.grimes8@yahoo.com`. Need to repro: check whether
+  the reset email sends at all (Resend logs / Supabase auth logs),
+  whether the link's redirect URL is correct, and whether the new
+  password actually persists. Yahoo deliverability is also a likely
+  suspect — may need to compare against a Gmail account.
+
 ## Other deferred items
 
 - **Stripe wiring** — handleUpgradeClick is a placeholder; real
