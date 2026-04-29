@@ -804,14 +804,20 @@ function renderDashboardAnalyticsWidget() {
     const calValues = daily.map(d => d.cal)
     const proteinValues = daily.map(d => d.p)
 
-    // Weight delta across whatever checkins we have in the last 30 days
+    // Weight delta — scoped to the current calendar month. Earlier this
+    // was "first checkin → last checkin" with no time filter, which on
+    // long-running accounts displayed a multi-year gain. Users want a
+    // recent-progress signal, not a lifetime cumulative.
     const isImperial = state.units === 'imperial'
     const weightUnit = isImperial ? 'lbs' : 'kg'
-    const recentCheckins = [...checkins]
+    const monthStart = (() => { const d = new Date(); d.setDate(1); return localDateStr(d) })()
+    const monthCheckins = [...checkins]
       .filter(c => c.weight_kg)
-      .sort((a, b) => (a.scan_date || a.checked_in_at || '').localeCompare(b.scan_date || b.checked_in_at || ''))
-    const weightDelta = recentCheckins.length >= 2
-      ? (recentCheckins[recentCheckins.length - 1].weight_kg - recentCheckins[0].weight_kg)
+      .map(c => ({ ...c, _date: c.scan_date || (c.checked_in_at ? c.checked_in_at.slice(0, 10) : '') }))
+      .filter(c => c._date >= monthStart)
+      .sort((a, b) => a._date.localeCompare(b._date))
+    const weightDelta = monthCheckins.length >= 2
+      ? (monthCheckins[monthCheckins.length - 1].weight_kg - monthCheckins[0].weight_kg)
       : null
     const weightDeltaDisp = weightDelta != null
       ? `${weightDelta > 0 ? '+' : ''}${(isImperial ? weightDelta * 2.20462 : weightDelta).toFixed(1)} ${weightUnit}`
@@ -842,7 +848,7 @@ function renderDashboardAnalyticsWidget() {
           ${tile('Avg calories', Math.round(summary.avg.cal), 'kcal/day', calValues, 'var(--cal)')}
           ${tile('Avg protein', Math.round(summary.avg.p) + 'g', `${summary.proteinAdherencePct}% hit goal`, proteinValues, 'var(--protein)')}
           ${weightDeltaDisp
-            ? tile('Weight change', weightDeltaDisp, `${recentCheckins.length} check-ins`, null, 'var(--accent)')
+            ? tile('Weight change', weightDeltaDisp, `this month · ${monthCheckins.length} check-ins`, null, 'var(--accent)')
             : tile('Days logged', summary.loggedDays + '/7', 'this week', null, 'var(--text)')}
         </div>
       </div>
