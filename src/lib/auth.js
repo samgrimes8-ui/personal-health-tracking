@@ -43,20 +43,18 @@ export function onAuthStateChange(callback) {
   // the page comes back — re-initializing the whole app and wiping any
   // in-progress DOM state (like a photo preview the user just selected).
   //
-  // We only want to react to genuine sign-in / sign-out transitions.
+  // We only want to react to genuine sign-in / sign-out transitions, plus
+  // PASSWORD_RECOVERY so the bootstrap can route to the reset form.
   let lastUserId = null
   return supabase.auth.onAuthStateChange((event, session) => {
     const userId = session?.user?.id ?? null
-    // INITIAL_SESSION fires on first load — always let it through.
-    // SIGNED_IN / SIGNED_OUT fire on real auth changes.
-    // TOKEN_REFRESHED, USER_UPDATED, PASSWORD_RECOVERY: skip if the user
-    // identity hasn't changed (same user, just fresh token).
     const isIdentityChange = userId !== lastUserId
     const isInitial = event === 'INITIAL_SESSION'
     const isExplicit = event === 'SIGNED_IN' || event === 'SIGNED_OUT'
-    if (isInitial || isExplicit || isIdentityChange) {
+    const isRecovery = event === 'PASSWORD_RECOVERY'
+    if (isInitial || isExplicit || isRecovery || isIdentityChange) {
       lastUserId = userId
-      callback(session?.user ?? null)
+      callback(session?.user ?? null, event)
     }
   })
 }
@@ -65,5 +63,10 @@ export async function resetPassword(email) {
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: `${window.location.origin}/#reset-password`,
   })
+  if (error) throw error
+}
+
+export async function updatePassword(newPassword) {
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
   if (error) throw error
 }

@@ -1,9 +1,15 @@
 import './style.css'
 import { supabase } from './lib/supabase.js'
 import { onAuthStateChange } from './lib/auth.js'
-import { renderAuthPage } from './pages/auth.js'
+import { renderAuthPage, renderResetPasswordPage } from './pages/auth.js'
 import { initApp } from './pages/app.js'
 import { initCapacitor } from './lib/capacitor.js'
+
+// Captured before Supabase parses & clears the URL hash. The recovery email
+// link arrives as `/#reset-password&access_token=...&type=recovery`, and
+// Supabase strips the auth tokens once it processes them.
+const initialHash = window.location.hash || ''
+const isRecoveryUrl = initialHash.includes('reset-password') || initialHash.includes('type=recovery')
 
 const appEl = document.getElementById('app')
 
@@ -28,7 +34,13 @@ async function bootstrap() {
     await initApp({ id: 'local', email: 'local@macrolens.app' }, appEl)
     return
   }
-  onAuthStateChange(async (user) => {
+  let recoveryHandled = false
+  onAuthStateChange(async (user, event) => {
+    const inRecoveryFlow = !recoveryHandled && (event === 'PASSWORD_RECOVERY' || (isRecoveryUrl && user))
+    if (inRecoveryFlow) {
+      renderResetPasswordPage(appEl, () => { recoveryHandled = true })
+      return
+    }
     if (user) {
       await initApp(user, appEl)
     } else {

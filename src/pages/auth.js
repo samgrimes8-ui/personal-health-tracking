@@ -1,4 +1,63 @@
-import { signIn, signUp, signInWithGoogle, resetPassword } from '../lib/auth.js'
+import { signIn, signUp, signInWithGoogle, resetPassword, updatePassword, signOut } from '../lib/auth.js'
+
+const RESET_SUCCESS_KEY = 'macrolens-reset-success'
+
+export function renderResetPasswordPage(container, onComplete) {
+  container.innerHTML = `
+    <div class="auth-wrap">
+      <div class="auth-card">
+        <div class="auth-logo">
+          <div class="auth-logo-text">MacroLens</div>
+          <div class="auth-logo-sub">Set a new password</div>
+        </div>
+
+        <div id="auth-error" class="auth-error" style="display:none"></div>
+        <div id="auth-success" class="auth-success" style="display:none"></div>
+
+        <div class="auth-field">
+          <label>New password</label>
+          <input type="password" id="new-password" placeholder="At least 6 characters" autofocus />
+        </div>
+        <div class="auth-field">
+          <label>Confirm new password</label>
+          <input type="password" id="new-password-confirm" placeholder="••••••••" />
+        </div>
+        <button class="auth-btn" id="reset-btn" onclick="handleResetSubmit()">Update password</button>
+      </div>
+    </div>
+  `
+
+  window.handleResetSubmit = async () => {
+    const password = document.getElementById('new-password').value
+    const confirm = document.getElementById('new-password-confirm').value
+    if (!password || !confirm) return showAuthError('Please fill in both fields')
+    if (password !== confirm) return showAuthError('Passwords do not match')
+    if (password.length < 6) return showAuthError('Password must be at least 6 characters')
+
+    setAuthLoading('reset-btn', true)
+    try {
+      await updatePassword(password)
+      sessionStorage.setItem(RESET_SUCCESS_KEY, '1')
+      if (typeof onComplete === 'function') onComplete()
+      // Clear the recovery hash before signing out so the next render hits the
+      // login form, not the reset form.
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      }
+      await signOut()
+      // signOut fires SIGNED_OUT → main.js renders renderAuthPage, which reads
+      // sessionStorage and shows the success message.
+    } catch (err) {
+      showAuthError(err.message)
+    } finally {
+      setAuthLoading('reset-btn', false)
+    }
+  }
+
+  container.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') window.handleResetSubmit()
+  })
+}
 
 export function renderAuthPage(container) {
   container.innerHTML = `
@@ -154,6 +213,13 @@ export function renderAuthPage(container) {
     if (loginVisible) window.handleLogin()
     else window.handleSignup()
   })
+
+  // Surface the post-reset success message and clear the flag so it doesn't
+  // come back on the next visit.
+  if (sessionStorage.getItem(RESET_SUCCESS_KEY)) {
+    sessionStorage.removeItem(RESET_SUCCESS_KEY)
+    showAuthSuccess('Password updated. Sign in with your new password.')
+  }
 }
 
 function showAuthError(msg) {
@@ -182,4 +248,5 @@ function setAuthLoading(btnId, loading) {
   if (btnId === 'login-btn') btn.textContent = loading ? 'Signing in...' : 'Sign in'
   else if (btnId === 'signup-btn') btn.textContent = loading ? 'Creating account...' : 'Create account'
   else if (btnId === 'forgot-btn') btn.textContent = loading ? 'Sending...' : 'Send reset link'
+  else if (btnId === 'reset-btn') btn.textContent = loading ? 'Updating...' : 'Update password'
 }
