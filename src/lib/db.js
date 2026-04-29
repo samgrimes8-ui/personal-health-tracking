@@ -933,7 +933,11 @@ export async function saveBodyMetrics(userId, metrics) {
   return data
 }
 
-export async function getCheckins(userId, limit = 52) {
+export async function getCheckins(userId, limit = 2000) {
+  // Default raised from 52 → 2000 to cover yearly history. At one weigh-in
+  // per day that's ~5.5 years; almost all real users will fall well under
+  // this cap. The Goals page now buckets checkins into weekly/monthly/yearly
+  // tiers and needs the full set to compute past-year averages.
   if (!supabase) return []
   const { data, error } = await supabase
     .from('checkins').select('*').eq('user_id', userId)
@@ -946,6 +950,18 @@ export async function saveCheckin(userId, checkin) {
   if (!supabase) return checkin
   const { data, error } = await supabase
     .from('checkins').insert({ ...checkin, user_id: userId }).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function updateCheckin(userId, checkinId, patch) {
+  if (!supabase) return { id: checkinId, ...patch }
+  const { data, error } = await supabase
+    .from('checkins')
+    .update(patch)
+    .eq('id', checkinId)
+    .eq('user_id', userId)  // defense-in-depth: only update your own rows
+    .select().single()
   if (error) throw error
   return data
 }

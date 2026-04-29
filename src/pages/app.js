@@ -9,7 +9,7 @@ import {
   getFoodItems, upsertFoodItem, deleteFoodItem,
   saveRecipeInstructions, autoSaveFoodItem,
   logError, cleanupOldErrors, getErrorLogs, getAllErrorLogs,
-  getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, deleteCheckin, uploadScanFile, getScanUrl,
+  getBodyMetrics, saveBodyMetrics, getCheckins, saveCheckin, updateCheckin, deleteCheckin, uploadScanFile, getScanUrl,
   generateShareToken,
   enableRecipeSharing, disableRecipeSharing, getSharedRecipe, saveSharedRecipeToLibrary, getRecipeByIdPublic,
   saveRecipeOgCache, setUserRole, clearSpendingOverride, hideTagPreset, unhideTagPreset,
@@ -117,6 +117,8 @@ let state = {
   recipeServings: null, // 'ingredients' | 'instructions'  // recipe being edited in modal
   cookingMode: null, // { recipeId, stepIndex } when in read-aloud mode; null otherwise
   cookingVoiceOff: localStorage.getItem('macrolens_voice_off') === '1', // silent step-through mode
+  editingCheckinId: null, // when set, the checkin modal is in edit-mode for this row
+  checkinExpanded: new Set(), // bucket keys ('wk:YYYY-MM-DD', 'mo:YYYY-MM', 'yr:YYYY') currently expanded
 }
 
 // Safe local date string — avoids UTC timezone shift from toISOString()
@@ -1141,7 +1143,7 @@ function renderShell(container) {
     <div class="modal-overlay" id="checkin-modal">
       <div class="modal-box" style="max-width:480px">
         <button class="modal-close" onclick="closeCheckinModal()">×</button>
-        <h3>Log weight</h3>
+        <h3 id="ci-title">Log weight</h3>
 
         <!-- Quick entry: just weight + date -->
         <div style="background:var(--bg3);border-radius:var(--r);padding:12px;margin-bottom:10px">
@@ -4053,8 +4055,11 @@ function buildCheckinRow(c, isImperial) {
         ${c.scan_type ? `<span style="font-size:10px;color:var(--text3);margin-left:6px;text-transform:uppercase;background:var(--bg4);padding:2px 5px;border-radius:3px">${c.scan_type}</span>` : ''}
         ${c.notes ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${c.notes}</div>` : ''}
       </div>
-      <div style="display:flex;align-items:center;gap:10px">
+      <div style="display:flex;align-items:center;gap:6px">
         ${c.scan_file_path ? '<span style="font-size:20px" title="Scan attached">📄</span>' : ''}
+        <button onclick="openCheckinModal('${c.id}')" title="Edit check-in"
+          style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:4px;line-height:1;font-family:inherit"
+          onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text3)'">✎</button>
         <button onclick="deleteCheckinHandler('${c.id}')" title="Delete check-in"
           style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:4px;line-height:1;font-family:inherit"
           onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text3)'">×</button>
@@ -4582,25 +4587,124 @@ function renderGoalsPage(container) {
   const bmOpen = bmSaved === '1' || (bmSaved === null && !m.weight_kg)
   const gsOpen = gsSaved === '1' || (gsSaved === null && !state.goals?.calories)
 
-  // Weekly average weight from check-ins. Buckets by Sunday-start week to
-  // match getWeekStart() used elsewhere. A single bar per week — multiple
-  // weigh-ins in the same week are averaged so the chart smooths out
-  // morning/evening fluctuations.
+  // Three-tier history bucketing.
+  //   Last 4 weeks         → grouped by Sunday-start week
+  //   Past 12 months       → grouped by calendar month, excluding any
+  //                          dates already covered by the 4-week window
+  //   Older                → grouped by year. Inside each year, scan
+  //                          checkins (DEXA / InBody) are pulled out and
+  //                          surfaced as standalone rows so users can find
+  //                          them without expanding multi-month rollups.
+  // A checkin lands in exactly one bucket, so totals across tiers don't
+  // double-count.
+  const _now = new Date()
+  const _todayStr = localDateStr(_now)
+  const _weeklyHorizon = (() => {
+    // Sunday of (current week - 3) so we always show 4 weeks of weekly rows.
+    const d = new Date(_now); d.setDate(d.getDate() - d.getDay() - 21); return localDateStr(d)
+  })()
+  const _monthlyHorizon = (() => {
+    // 12 calendar months before the weekly horizon's month-start.
+    const d = new Date(_weeklyHorizon + 'T00:00:00'); d.setDate(1); d.setMonth(d.getMonth() - 12)
+    return localDateStr(d)
+  })()
+  const _avg = arr => {
+    const ws = arr.filter(c => c.weight_kg).map(c => Number(c.weight_kg))
+    if (!ws.length) return null
+    return ws.reduce((a,b) => a+b, 0) / ws.length
+  }
+  const _fmtWeight = kg => kg == null ? '—' : (isImperial ? +(kg * 2.20462).toFixed(1) + ' lbs' : +kg.toFixed(1) + ' kg')
+  const _checkinDate = c => c.scan_date || (c.checked_in_at ? c.checked_in_at.slice(0, 10) : null)
+  const _weekStartOf = dateStr => { const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() - d.getDay()); return localDateStr(d) }
+
+  const _bucketed = (() => {
+    const weekly = {}, monthly = {}, yearly = {}
+    for (const c of checkins) {
+      const dateStr = _checkinDate(c)
+      if (!dateStr) continue
+      if (dateStr >= _weeklyHorizon) {
+        const wk = _weekStartOf(dateStr)
+        ;(weekly[wk] = weekly[wk] || []).push(c)
+      } else if (dateStr >= _monthlyHorizon) {
+        const mo = dateStr.slice(0, 7)
+        ;(monthly[mo] = monthly[mo] || []).push(c)
+      } else {
+        const yr = dateStr.slice(0, 4)
+        ;(yearly[yr] = yearly[yr] || []).push(c)
+      }
+    }
+    return { weekly, monthly, yearly }
+  })()
+
+  // Chart still uses Sunday-start weekly averages — pulled out so the bar
+  // chart on top of the section keeps working without computing twice.
   const weeklyAvgs = (() => {
     const buckets = {}
     for (const c of checkins) {
-      const date = c.scan_date || (c.checked_in_at ? c.checked_in_at.slice(0, 10) : null)
+      const date = _checkinDate(c)
       if (!date || !c.weight_kg) continue
-      const d = new Date(date + 'T00:00:00')
-      d.setDate(d.getDate() - d.getDay())
-      const wk = localDateStr(d)
-      if (!buckets[wk]) buckets[wk] = []
-      buckets[wk].push(Number(c.weight_kg))
+      const wk = _weekStartOf(date)
+      ;(buckets[wk] = buckets[wk] || []).push(Number(c.weight_kg))
     }
     return Object.entries(buckets)
       .map(([weekStart, ws]) => ({ weekStart, avg_kg: ws.reduce((a,b)=>a+b,0) / ws.length, count: ws.length }))
       .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
   })()
+
+  // Renders one collapsible bucket row. `key` becomes the expansion-state
+  // identifier; `contents` is the HTML to show when expanded.
+  const _renderBucket = (key, label, sub, weightAvg, count, contents) => {
+    const expanded = state.checkinExpanded?.has(key)
+    return `
+      <div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:6px">
+        <div onclick="toggleCheckinBucket('${key}')"
+          style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg3);cursor:pointer;user-select:none">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0">
+            <span style="display:inline-block;transform:rotate(${expanded ? '90deg' : '0'});transition:transform 0.15s;font-size:11px;color:var(--text3);flex-shrink:0">▸</span>
+            <div style="min-width:0">
+              <div style="font-size:13px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
+              ${sub ? `<div style="font-size:11px;color:var(--text3);margin-top:1px">${sub}</div>` : ''}
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;margin-left:10px">
+            ${weightAvg != null ? `<div style="font-size:13px;font-weight:600;color:var(--accent)">${_fmtWeight(weightAvg)}</div>` : ''}
+            <div style="font-size:10px;color:var(--text3);margin-top:1px">${count} ${count === 1 ? 'reading' : 'readings'}</div>
+          </div>
+        </div>
+        ${expanded ? `<div style="padding:10px 12px;background:var(--bg2)">${contents}</div>` : ''}
+      </div>`
+  }
+
+  // Single-checkin "callout" used for DEXA/InBody scans surfaced above
+  // their year's annual average row. Behaves like a one-item bucket whose
+  // expanded state shows the full buildCheckinRow card.
+  const _renderScanCallout = c => {
+    const key = `sc:${c.id}`
+    const expanded = state.checkinExpanded?.has(key)
+    const dateStr = _checkinDate(c)
+    const dateLabel = dateStr ? new Date(dateStr + 'T12:00:00').toLocaleDateString([], { month:'short', day:'numeric', year:'numeric' }) : '—'
+    const scanLabel = c.scan_type ? c.scan_type.toUpperCase() : 'Scan'
+    return `
+      <div style="border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:6px">
+        <div onclick="toggleCheckinBucket('${key}')"
+          style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:color-mix(in srgb, var(--accent) 6%, var(--bg3));cursor:pointer;user-select:none">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0">
+            <span style="display:inline-block;transform:rotate(${expanded ? '90deg' : '0'});transition:transform 0.15s;font-size:11px;color:var(--text3);flex-shrink:0">▸</span>
+            <div style="min-width:0">
+              <div style="font-size:13px;font-weight:600;color:var(--text)">📄 ${scanLabel} · ${dateLabel}</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:1px">
+                ${[
+                  c.weight_kg ? _fmtWeight(c.weight_kg) : null,
+                  c.body_fat_pct != null ? c.body_fat_pct + '% BF' : null,
+                  c.muscle_mass_kg ? _fmtWeight(c.muscle_mass_kg) + ' muscle' : null,
+                ].filter(Boolean).join(' · ')}
+              </div>
+            </div>
+          </div>
+        </div>
+        ${expanded ? `<div style="padding:10px 12px;background:var(--bg2)">${buildCheckinRow(c, isImperial)}</div>` : ''}
+      </div>`
+  }
 
   container.innerHTML = `
     <div class="greeting">Goals & Body</div>
@@ -4827,9 +4931,61 @@ function renderGoalsPage(container) {
             })()}
           </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          ${checkins.slice(0,8).map(c => buildCheckinRow(c, isImperial)).join('')}
-        </div>
+        <!-- Tiered history: weekly (last 4) → monthly (past 12) → yearly. -->
+        ${(() => {
+          const sections = []
+          const fmtDateLong = s => new Date(s + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' })
+          const fmtMonthLong = s => new Date(s + '-01T12:00:00').toLocaleDateString([], { month: 'long', year: 'numeric' })
+          const renderRows = arr => arr.map(c => buildCheckinRow(c, isImperial)).join('')
+
+          // Last 4 weeks — sorted newest first.
+          const weeklyKeys = Object.keys(_bucketed.weekly).sort().reverse()
+          if (weeklyKeys.length) {
+            const rows = weeklyKeys.map(wk => {
+              const cs = _bucketed.weekly[wk].slice().sort((a,b) => (_checkinDate(b) || '').localeCompare(_checkinDate(a) || ''))
+              return _renderBucket(`wk:${wk}`, `Week of ${fmtDateLong(wk)}`, null, _avg(cs), cs.length, renderRows(cs))
+            }).join('')
+            sections.push(`
+              <div style="margin-top:18px">
+                <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Last 4 weeks</div>
+                ${rows}
+              </div>`)
+          }
+
+          // Past 12 months — same idea, monthly buckets.
+          const monthlyKeys = Object.keys(_bucketed.monthly).sort().reverse()
+          if (monthlyKeys.length) {
+            const rows = monthlyKeys.map(mo => {
+              const cs = _bucketed.monthly[mo].slice().sort((a,b) => (_checkinDate(b) || '').localeCompare(_checkinDate(a) || ''))
+              return _renderBucket(`mo:${mo}`, fmtMonthLong(mo), null, _avg(cs), cs.length, renderRows(cs))
+            }).join('')
+            sections.push(`
+              <div style="margin-top:18px">
+                <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Past 12 months</div>
+                ${rows}
+              </div>`)
+          }
+
+          // Older — yearly avg per year, with DEXA/InBody scans surfaced
+          // as standalone callout rows above each year's annual avg so
+          // they're easy to find without expanding multiple months.
+          const yearlyKeys = Object.keys(_bucketed.yearly).sort().reverse()
+          if (yearlyKeys.length) {
+            const rows = yearlyKeys.map(yr => {
+              const cs = _bucketed.yearly[yr].slice().sort((a,b) => (_checkinDate(b) || '').localeCompare(_checkinDate(a) || ''))
+              const scans = cs.filter(c => c.scan_type)
+              const yearRow = _renderBucket(`yr:${yr}`, `${yr} annual avg`, null, _avg(cs), cs.length, renderRows(cs))
+              return scans.map(_renderScanCallout).join('') + yearRow
+            }).join('')
+            sections.push(`
+              <div style="margin-top:18px">
+                <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Older</div>
+                ${rows}
+              </div>`)
+          }
+
+          return sections.join('')
+        })()}
       `}
     </div>
   `
@@ -6420,6 +6576,17 @@ function wireGlobals() {
     renderPage()
   }
 
+  // Goals page — Weekly check-in tier expansion. Keys are 'wk:YYYY-MM-DD',
+  // 'mo:YYYY-MM', 'yr:YYYY', or 'sc:<id>' for scan callouts. State lives
+  // on state.checkinExpanded (a Set) — purely transient, not persisted,
+  // since it's just UI affordance.
+  window.toggleCheckinBucket = (key) => {
+    if (!state.checkinExpanded) state.checkinExpanded = new Set()
+    if (state.checkinExpanded.has(key)) state.checkinExpanded.delete(key)
+    else state.checkinExpanded.add(key)
+    renderPage()
+  }
+
   // Goals page — toggle Body metrics or Goal settings collapse. Default
   // open/closed is computed from data (open if empty, closed if filled),
   // so on first toggle we have to resolve current visible state to know
@@ -6620,36 +6787,65 @@ function wireGlobals() {
     if (toggle) toggle.style.color = isOpen ? 'var(--text3)' : 'var(--accent)'
   }
 
-  window.openCheckinModal = () => {
+  window.openCheckinModal = (editId = null) => {
     state.pendingCheckinScan = null
+    state.editingCheckinId = editId
     const isImperial = state.units === 'imperial'
+    const editing = editId ? (state.checkins || []).find(c => String(c.id) === String(editId)) : null
     const today = new Date().toISOString().split('T')[0]
-    document.getElementById('ci-date').value = today
-    document.getElementById('ci-scan-date').value = today
+
+    // Title flips between Log and Edit so the user knows which mode they're in.
+    const titleEl = document.getElementById('ci-title')
+    if (titleEl) titleEl.textContent = editing ? 'Edit weigh-in' : 'Log weight'
+
     const wLabel = document.getElementById('ci-weight-label')
     if (wLabel) wLabel.textContent = isImperial ? 'Weight (lbs)' : 'Weight (kg)'
     const mLabel = document.getElementById('ci-muscle-label')
     if (mLabel) mLabel.innerHTML = `${isImperial ? 'Muscle mass (lbs)' : 'Muscle mass (kg)'} <span style="font-weight:400;color:var(--text3);font-size:10px">(optional)</span>`
-    const bm = state.bodyMetrics
-    document.getElementById('ci-weight').value = bm?.weight_kg
-      ? (isImperial ? +(bm.weight_kg * 2.20462).toFixed(1) : bm.weight_kg) : ''
-    document.getElementById('ci-bf').value = bm?.body_fat_pct || ''
-    document.getElementById('ci-muscle').value = bm?.muscle_mass_kg
-      ? (isImperial ? +(bm.muscle_mass_kg * 2.20462).toFixed(1) : bm.muscle_mass_kg) : ''
-    document.getElementById('ci-notes').value = ''
+
+    if (editing) {
+      // Prefill from the existing row. We don't try to repopulate every
+      // extended body-comp field here — those came from a scan extract and
+      // aren't editable through this modal anyway. The basic fields and
+      // notes are what users typically need to fix.
+      const ciDate = editing.checked_in_at ? editing.checked_in_at.slice(0, 10) : today
+      document.getElementById('ci-date').value = ciDate
+      document.getElementById('ci-scan-date').value = editing.scan_date || ciDate
+      document.getElementById('ci-weight').value = editing.weight_kg
+        ? (isImperial ? +(editing.weight_kg * 2.20462).toFixed(1) : editing.weight_kg) : ''
+      document.getElementById('ci-bf').value = editing.body_fat_pct ?? ''
+      document.getElementById('ci-muscle').value = editing.muscle_mass_kg
+        ? (isImperial ? +(editing.muscle_mass_kg * 2.20462).toFixed(1) : editing.muscle_mass_kg) : ''
+      document.getElementById('ci-notes').value = editing.notes || ''
+    } else {
+      document.getElementById('ci-date').value = today
+      document.getElementById('ci-scan-date').value = today
+      const bm = state.bodyMetrics
+      document.getElementById('ci-weight').value = bm?.weight_kg
+        ? (isImperial ? +(bm.weight_kg * 2.20462).toFixed(1) : bm.weight_kg) : ''
+      document.getElementById('ci-bf').value = bm?.body_fat_pct || ''
+      document.getElementById('ci-muscle').value = bm?.muscle_mass_kg
+        ? (isImperial ? +(bm.muscle_mass_kg * 2.20462).toFixed(1) : bm.muscle_mass_kg) : ''
+      document.getElementById('ci-notes').value = ''
+    }
+
     document.getElementById('scan-status').textContent = ''
     document.getElementById('scan-upload-inner').innerHTML = '<div style="font-size:24px;margin-bottom:4px">📄</div><div style="font-size:13px;color:var(--text2)">Upload scan (PDF or image)</div><div style="font-size:11px;color:var(--text3);margin-top:2px">AI will extract your metrics automatically</div>'
-    // Collapse details panel on open
+    // Collapse details panel on open (auto-expanded by handleScanUpload when a
+    // scan is added). When editing an existing scan checkin, default to open
+    // so the user sees the scan-related fields without an extra click.
     const panel = document.getElementById('ci-details-panel')
     const arrow = document.getElementById('ci-details-arrow')
-    if (panel) panel.style.display = 'none'
-    if (arrow) arrow.textContent = '▸'
+    const wantOpen = !!(editing && (editing.scan_type || editing.scan_file_path))
+    if (panel) panel.style.display = wantOpen ? 'block' : 'none'
+    if (arrow) arrow.textContent = wantOpen ? '▾' : '▸'
     document.getElementById('checkin-modal').classList.add('open')
   }
 
   window.closeCheckinModal = () => {
     document.getElementById('checkin-modal').classList.remove('open')
     state.pendingCheckinScan = null
+    state.editingCheckinId = null
   }
 
   window.handleScanUpload = async (file) => {
@@ -6776,6 +6972,26 @@ function wireGlobals() {
       const date = document.getElementById('ci-date')?.value || new Date().toISOString().split('T')[0]
       const scanDate = document.getElementById('ci-scan-date')?.value || date
       const notes = document.getElementById('ci-notes')?.value?.trim() || ''
+
+      // Edit path: just patch the basic fields. Extended scan fields
+      // (segmental lean mass, BMR, BMI, etc.) came from the original scan
+      // extract and stay intact — this modal doesn't expose them as editable.
+      if (state.editingCheckinId) {
+        const patched = await updateCheckin(state.user.id, state.editingCheckinId, {
+          checked_in_at: date,
+          scan_date: scanDate,
+          weight_kg: weight,
+          body_fat_pct: bf,
+          muscle_mass_kg: muscle,
+          notes,
+        })
+        const idx = (state.checkins || []).findIndex(c => String(c.id) === String(state.editingCheckinId))
+        if (idx >= 0) state.checkins[idx] = { ...state.checkins[idx], ...patched }
+        closeCheckinModal()
+        renderPage()
+        showToast('Check-in updated', 'success')
+        return
+      }
 
       // Upload scan file if present — non-blocking, never fails the checkin
       let scanPath = null
