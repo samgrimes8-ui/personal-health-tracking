@@ -4573,28 +4573,65 @@ function renderGoalsPage(container) {
       ${opts.map(([v,l]) => `<option value="${v}" ${val===v?'selected':''}>${l}</option>`).join('')}
     </select>`
 
+  // Collapse state — explicit user choice (localStorage) wins; otherwise
+  // default to expanded for missing data so the onboarding flow still
+  // funnels new users into filling things in. Once data exists, we collapse
+  // to keep the page short.
+  const bmSaved = (() => { try { return localStorage.getItem('macrolens_goals_bm_open') } catch { return null } })()
+  const gsSaved = (() => { try { return localStorage.getItem('macrolens_goals_gs_open') } catch { return null } })()
+  const bmOpen = bmSaved === '1' || (bmSaved === null && !m.weight_kg)
+  const gsOpen = gsSaved === '1' || (gsSaved === null && !state.goals?.calories)
+
+  // Weekly average weight from check-ins. Buckets by Sunday-start week to
+  // match getWeekStart() used elsewhere. A single bar per week — multiple
+  // weigh-ins in the same week are averaged so the chart smooths out
+  // morning/evening fluctuations.
+  const weeklyAvgs = (() => {
+    const buckets = {}
+    for (const c of checkins) {
+      const date = c.scan_date || (c.checked_in_at ? c.checked_in_at.slice(0, 10) : null)
+      if (!date || !c.weight_kg) continue
+      const d = new Date(date + 'T00:00:00')
+      d.setDate(d.getDate() - d.getDay())
+      const wk = localDateStr(d)
+      if (!buckets[wk]) buckets[wk] = []
+      buckets[wk].push(Number(c.weight_kg))
+    }
+    return Object.entries(buckets)
+      .map(([weekStart, ws]) => ({ weekStart, avg_kg: ws.reduce((a,b)=>a+b,0) / ws.length, count: ws.length }))
+      .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
+  })()
+
   container.innerHTML = `
     <div class="greeting">Goals & Body</div>
     <div class="greeting-sub">Track your metrics, calculate your targets, log your progress.</div>
 
-    <button onclick="openCheckinModal()"
-      style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:16px;display:flex;align-items:center;justify-content:center;gap:8px">
-      📊 Log weight
-    </button>
-
     <div class="upload-card" style="margin-bottom:16px">
-      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
-        <span>Body metrics</span>
-        <div style="display:flex;gap:4px;background:var(--bg3);border-radius:var(--r);padding:3px;border:1px solid var(--border)">
-          <button onclick="setUnits('imperial')"
-            style="padding:4px 10px;border:none;border-radius:calc(var(--r) - 2px);font-size:11px;font-family:inherit;cursor:pointer;font-weight:500;
-              background:${isImperial ? 'var(--bg2)' : 'none'};color:${isImperial ? 'var(--text)' : 'var(--text3)'}">lbs / ft</button>
-          <button onclick="setUnits('metric')"
-            style="padding:4px 10px;border:none;border-radius:calc(var(--r) - 2px);font-size:11px;font-family:inherit;cursor:pointer;font-weight:500;
-              background:${!isImperial ? 'var(--bg2)' : 'none'};color:${!isImperial ? 'var(--text)' : 'var(--text3)'}">kg / cm</button>
-        </div>
+      <div onclick="toggleGoalsSection('bm')"
+        class="section-title" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;margin-bottom:${bmOpen ? '16px' : '0'}">
+        <span style="display:flex;align-items:center;gap:8px">
+          <span style="display:inline-block;transform:rotate(${bmOpen ? '90deg' : '0deg'});transition:transform 0.15s;font-size:11px;color:var(--text3)">▸</span>
+          <span>Body metrics</span>
+          ${!bmOpen && bmr ? `<span style="font-size:11px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">BMR ${bmr} · TDEE ${tdee}</span>` : ''}
+        </span>
+        ${bmOpen ? `
+          <div onclick="event.stopPropagation()" style="display:flex;gap:4px;background:var(--bg3);border-radius:var(--r);padding:3px;border:1px solid var(--border)">
+            <button onclick="setUnits('imperial')"
+              style="padding:4px 10px;border:none;border-radius:calc(var(--r) - 2px);font-size:11px;font-family:inherit;cursor:pointer;font-weight:500;
+                background:${isImperial ? 'var(--bg2)' : 'none'};color:${isImperial ? 'var(--text)' : 'var(--text3)'}">lbs / ft</button>
+            <button onclick="setUnits('metric')"
+              style="padding:4px 10px;border:none;border-radius:calc(var(--r) - 2px);font-size:11px;font-family:inherit;cursor:pointer;font-weight:500;
+                background:${!isImperial ? 'var(--bg2)' : 'none'};color:${!isImperial ? 'var(--text)' : 'var(--text3)'}">kg / cm</button>
+          </div>
+        ` : ''}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      <div style="${bmOpen ? '' : 'display:none'}">
+        <button onclick="openCheckinModal()"
+          style="width:100%;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);padding:11px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer;margin-bottom:14px;display:flex;align-items:center;justify-content:center;gap:8px"
+          onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+          📊 Log weight + InBody / DEXA scan
+        </button>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
         <div>
           <label class="field-label">Sex</label>
           ${sel('bm-sex', m.sex||'male', [['male','Male'],['female','Female']])}
@@ -4665,11 +4702,20 @@ function renderGoalsPage(container) {
             : '⚠ Using Mifflin-St Jeor estimate — add body fat % for better accuracy'}
         </div>
       ` : ''}
+      </div>
     </div>
 
     <!-- Goal settings -->
     <div class="upload-card" style="margin-bottom:16px">
-      <div class="section-title">Goal settings</div>
+      <div onclick="toggleGoalsSection('gs')"
+        class="section-title" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;margin-bottom:${gsOpen ? '12px' : '0'}">
+        <span style="display:flex;align-items:center;gap:8px">
+          <span style="display:inline-block;transform:rotate(${gsOpen ? '90deg' : '0deg'});transition:transform 0.15s;font-size:11px;color:var(--text3)">▸</span>
+          <span>Goal settings</span>
+          ${!gsOpen && state.goals?.calories ? `<span style="font-size:11px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">${state.goals.calories} kcal · ${state.goals.protein}P / ${state.goals.carbs}C / ${state.goals.fat}F</span>` : ''}
+        </span>
+      </div>
+      <div style="${gsOpen ? '' : 'display:none'}">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
         <div>
           <label class="field-label">Goal weight (${isImperial ? 'lbs' : 'kg'})</label>
@@ -4743,33 +4789,42 @@ function renderGoalsPage(container) {
           </button>
         </div>
       </div>
+      </div>
     </div>
 
     <!-- Weekly check-in -->
     <div class="upload-card" style="margin-bottom:16px">
       <div class="section-title">Weekly check-in</div>
       <button onclick="openCheckinModal()"
-        style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:8px">
-        📊 Log weight
+        style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:8px">
+        📊 Log weight + InBody / DEXA scan
       </button>
-      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:12px">
-        Upload your InBody or DEXA scan to auto-extract body composition data
+      <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:14px">
+        Tap to enter your weekly weigh-in or upload an InBody / DEXA scan — AI extracts body composition automatically.
       </div>
-      ${!checkins.length ? `
+      ${!weeklyAvgs.length ? `
         <div style="font-size:13px;color:var(--text3);padding:12px 0">No check-ins yet. Log your first weekly weigh-in!</div>
       ` : `
-        <!-- Progress chart placeholder -->
+        <!-- Weekly average weight chart — one bar per week, multiple weigh-ins
+             in the same week are averaged so day-to-day fluctuations smooth out. -->
         <div style="margin-bottom:12px">
-          <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Weight trend (${isImperial ? 'lbs' : 'kg'})</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div style="font-size:12px;color:var(--text3)">Weekly average weight (${isImperial ? 'lbs' : 'kg'})</div>
+            <div style="font-size:11px;color:var(--text3)">${weeklyAvgs.length} ${weeklyAvgs.length === 1 ? 'week' : 'weeks'}</div>
+          </div>
           <div style="display:flex;align-items:flex-end;gap:4px;height:60px">
-            ${checkins.slice(0,12).reverse().map(c => {
-              const allW = checkins.filter(x=>x.weight_kg).map(x=>x.weight_kg)
-              const minW = Math.min(...allW), maxW = Math.max(...allW)
+            ${(() => {
+              const last = weeklyAvgs.slice(-12)
+              const allAvgs = last.map(w => w.avg_kg)
+              const minW = Math.min(...allAvgs), maxW = Math.max(...allAvgs)
               const range = maxW - minW || 1
-              const pct = c.weight_kg ? Math.round(((c.weight_kg - minW) / range) * 50 + 10) : 10
-              const label = (c.scan_date || c.checked_in_at) + ': ' + (c.weight_kg ? (isImperial ? +(c.weight_kg*2.20462).toFixed(1)+'lbs' : c.weight_kg+'kg') : '?')
-              return `<div style="flex:1;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:4px;opacity:0.7" title="${label}"></div>`
-            }).join('')}
+              return last.map(w => {
+                const pct = Math.round(((w.avg_kg - minW) / range) * 50 + 10)
+                const display = isImperial ? +(w.avg_kg * 2.20462).toFixed(1) + ' lbs' : +w.avg_kg.toFixed(1) + ' kg'
+                const tip = `Week of ${w.weekStart}: ${display} (${w.count} ${w.count === 1 ? 'reading' : 'readings'})`
+                return `<div style="flex:1;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:4px;opacity:0.85" title="${tip}"></div>`
+              }).join('')
+            })()}
           </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:8px">
@@ -6362,6 +6417,24 @@ function wireGlobals() {
   window.setUnits = (units) => {
     state.units = units
     localStorage.setItem('macrolens_units', units)
+    renderPage()
+  }
+
+  // Goals page — toggle Body metrics or Goal settings collapse. Default
+  // open/closed is computed from data (open if empty, closed if filled),
+  // so on first toggle we have to resolve current visible state to know
+  // which way to flip.
+  window.toggleGoalsSection = (key) => {
+    const lsKey = key === 'bm' ? 'macrolens_goals_bm_open' : 'macrolens_goals_gs_open'
+    const saved = (() => { try { return localStorage.getItem(lsKey) } catch { return null } })()
+    let isOpen
+    if (saved === null) {
+      const m = state.bodyMetrics || {}
+      isOpen = key === 'bm' ? !m.weight_kg : !state.goals?.calories
+    } else {
+      isOpen = saved === '1'
+    }
+    try { localStorage.setItem(lsKey, isOpen ? '0' : '1') } catch {}
     renderPage()
   }
 
