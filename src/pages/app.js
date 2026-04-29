@@ -2312,7 +2312,7 @@ async function renderGroceryList(allMeals, planner) {
               ${orphanLeftovers.length} leftover${orphanLeftovers.length === 1 ? '' : 's'} without a cook in your shopping window
             </div>
             <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-bottom:6px">
-              These meals are planned as leftovers, but their source cook ${orphanLeftovers.every(o => o.source) ? 'happens before this window' : `isn't in your planner`}. You'll need to cook them fresh — their ingredients are shown below as full shopping items.
+              These meals are planned as leftovers, but their source cook ${orphanLeftovers.every(o => o.source) ? 'happens before this window' : `isn't in your planner`}. They're not in your shopping list — toggle "Add to list" on the meal below if you need to shop for them.
             </div>
             <div style="display:flex;flex-direction:column;gap:3px">
               ${orphanLeftovers.slice(0, 5).map(({ leftover, source }) => {
@@ -2333,7 +2333,7 @@ async function renderGroceryList(allMeals, planner) {
     <div style="display:flex;gap:4px;padding:10px 16px;border-bottom:1px solid var(--border)">
       <button class="mode-tab ${view === 'full' ? 'active' : ''}" onclick="setGroceryView('full')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">Full list</button>
       <button class="mode-tab ${view === 'bymeal' ? 'active' : ''}" onclick="setGroceryView('bymeal')" style="flex:0 0 auto;font-size:12px;padding:5px 12px">By meal</button>
-      <span style="margin-left:auto;font-size:11px;color:var(--text3);align-self:center">${rangeMeals.filter(m => !isLeftover(m)).length} meals · ${fmtDate(fromDate)} – ${fmtDate(toDate)}</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--text3);align-self:center">${rangeMeals.filter(m => isMealIncludedInGroceries(m)).length} meals in list · ${fmtDate(fromDate)} – ${fmtDate(toDate)}</span>
     </div>
 
     <div id="grocery-body">
@@ -2572,6 +2572,19 @@ function sumIngredients(items) {
   return Object.values(grouped)
 }
 
+// Resolves whether a meal should contribute ingredients to the aggregated
+// grocery list. Default: include non-leftovers, exclude leftovers (covered
+// AND orphan — orphans used to be auto-included as fresh cooks, but users
+// found that surprising). The user can override either direction via the
+// per-meal toggle in the "By meal" view; that override is stored in
+// state.userMealOverrides and wins over the default.
+function isMealIncludedInGroceries(meal) {
+  const override = state.userMealOverrides?.get(meal.id)
+  if (override === 'include') return true
+  if (override === 'exclude') return false
+  return !isLeftover(meal)
+}
+
 function collectAllIngredients(planner, rangeMeals) {
   // Use rangeMeals if provided (cross-week), else fall back to current week planner
   const items = []
@@ -2580,12 +2593,7 @@ function collectAllIngredients(planner, rangeMeals) {
   const meals = rangeMeals || planner?.meals?.flat() || []
 
   meals.forEach(m => {
-    // Skip leftovers that have a source cook in the shopping window — their
-    // ingredients are covered. BUT include orphaned leftovers (source is
-    // outside the window) so the user actually gets the ingredients they
-    // need to cook them fresh.
-    const orphanIds = state._orphanLeftoverIds || new Set()
-    if (isLeftover(m) && !orphanIds.has(m.id)) return
+    if (!isMealIncludedInGroceries(m)) return
 
     const mealName = m.meal_name || m.name
     const recipe = state.recipes.find(r => r.name.toLowerCase() === (originalMealName(m) || mealName).toLowerCase())
@@ -2765,32 +2773,48 @@ function renderGroceryByMeal(planner, rangeMeals) {
 
               const isOrphanLeftover = isLeftover(m) && (state._orphanLeftoverIds || new Set()).has(m.id)
               const isCoveredLeftover = isLeftover(m) && !isOrphanLeftover
+              const includedInList = isMealIncludedInGroceries(m)
+              // Toggle button. The label flips between "Add to list" and
+              // "In list — remove" so it always describes the action that
+              // happens on click, not the current state.
+              const toggleBtn = `
+                <button onclick="toggleMealInclusion('${m.id}')"
+                  title="${includedInList ? 'Remove from grocery list' : 'Add to grocery list'}"
+                  style="font-size:11px;padding:3px 9px;border-radius:999px;cursor:pointer;font-family:inherit;white-space:nowrap;
+                    background:${includedInList ? 'color-mix(in srgb, var(--green) 12%, transparent)' : 'var(--bg4)'};
+                    color:${includedInList ? 'var(--green)' : 'var(--text3)'};
+                    border:1px solid ${includedInList ? 'color-mix(in srgb, var(--green) 30%, transparent)' : 'var(--border2)'}">
+                  ${includedInList ? '✓ In list' : '+ Add to list'}
+                </button>`
 
               return `
-                <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg3);border-radius:var(--r)">
+                <div style="margin-bottom:12px;padding:10px 12px;background:var(--bg3);border-radius:var(--r);${includedInList ? '' : 'opacity:0.7'}">
                   ${isCoveredLeftover ? `
                     <!-- Leftover meal with source in range — ingredients not duplicated -->
-                    <div style="display:flex;align-items:center;gap:10px">
-                      <div style="flex:1">
+                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                      <div style="flex:1;min-width:0">
                         <div style="font-size:13px;font-weight:500;color:var(--text2)">${esc(mealName)}</div>
                         <div style="font-size:11px;color:var(--text3);margin-top:3px">
                           ↩ Leftovers from ${originalMealName(m)} — ingredients already on your list
                         </div>
                       </div>
-                      <span style="font-size:11px;padding:3px 8px;background:color-mix(in srgb, var(--carbs) 12%, transparent);color:var(--carbs);border-radius:4px;border:1px solid color-mix(in srgb, var(--carbs) 25%, transparent)">no shopping needed</span>
+                      ${toggleBtn}
                     </div>
                   ` : `
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap">
                       <div style="font-size:13px;font-weight:500;color:var(--text);flex:1;min-width:0">${esc(mealName)}</div>
-                      ${isOrphanLeftover
-                        ? `<span style="font-size:10px;padding:2px 7px;background:rgba(217,96,96,0.12);color:var(--red);border-radius:4px;border:1px solid rgba(217,96,96,0.3);white-space:nowrap">⚠ orphan — shopping needed</span>`
-                        : (!ingredients.length
-                          ? `<button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>`
-                          : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`)}
+                      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                        ${isOrphanLeftover
+                          ? `<span style="font-size:10px;padding:2px 7px;background:color-mix(in srgb, var(--accent) 12%, transparent);color:var(--accent);border-radius:4px;border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);white-space:nowrap">orphan leftover</span>`
+                          : (!ingredients.length
+                            ? `<button class="clear-btn" style="color:var(--carbs);font-size:11px" onclick="fetchAndSaveIngredients('${m.id}', '${mealName.replace(/'/g,"\\'")}')">✨ AI extract</button>`
+                            : `<span style="font-size:11px;color:var(--text3)">${ingredients.length} ingredients</span>`)}
+                        ${toggleBtn}
+                      </div>
                     </div>
-                    ${isOrphanLeftover ? `
-                      <div style="font-size:11px;color:var(--text3);margin-bottom:8px;padding:6px 8px;background:rgba(217,96,96,0.05);border-radius:4px;line-height:1.4">
-                        Source cook is outside your shopping window. Ingredients added to your list as if cooking fresh.
+                    ${isOrphanLeftover && !includedInList ? `
+                      <div style="font-size:11px;color:var(--text3);margin-bottom:8px;padding:6px 8px;background:color-mix(in srgb, var(--accent) 5%, transparent);border-radius:4px;line-height:1.4">
+                        Source cook is outside your shopping window. Add to list if you'll cook this fresh.
                       </div>
                     ` : ''}
 
@@ -8832,8 +8856,23 @@ function wireGlobals() {
     renderPage()
   }
 
+  // Flips a meal's inclusion in the aggregated grocery list. Default behavior
+  // (no override) is "include non-leftovers, exclude leftovers"; this writes
+  // the opposite of whatever's currently being shown so the next render
+  // reflects the user's intent.
+  window.toggleMealInclusion = (mealId) => {
+    if (!state.userMealOverrides) state.userMealOverrides = new Map()
+    const meals = state._groceryRangeMeals || []
+    const meal = meals.find(m => String(m.id) === String(mealId))
+    if (!meal) return
+    const currentlyIncluded = isMealIncludedInGroceries(meal)
+    state.userMealOverrides.set(mealId, currentlyIncluded ? 'exclude' : 'include')
+    renderPage()
+  }
+
   window.resetExclusions = () => {
     state.excludedIngredients = new Set()
+    state.userMealOverrides = new Map()
     renderPage()
   }
 
