@@ -3,25 +3,54 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  /* Palette — warmer dark, more inviting. Slightly lifted from pure-black to
-     give the app a cozy feel while still reading as "dark mode." */
-  --bg: #15130f; --bg2: #1f1c17; --bg3: #2a2620; --bg4: #3a362e;
-  --border: rgba(255,255,255,0.09); --border2: rgba(255,255,255,0.16);
-  --text: #f5f1e9; --text2: #b0aa9f; --text3: #787269;
-  --accent: #eacb57; --accent2: #d4b23f;
-  --protein: #86d3ad; --carbs: #87bdf0; --fat: #eea682; --cal: #eacb57;
-  --green: #67bc85; --red: #e06e6e;
+  /* Layout primitives that don't change between themes. Palette tokens live
+     under [data-theme] selectors below. The inline script in index.html
+     always sets data-theme on <html> before CSS evaluates, so there is no
+     unstyled flash and no need for a :root fallback palette. */
   --r: 10px; --r2: 14px; --r3: 20px;
   font-family: 'DM Sans', sans-serif;
 }
 
+/* ── Dark palette ────────────────────────────────────────────────────────────
+   The original warm-dark theme. Slightly lifted from pure-black so the app
+   feels cozy rather than oppressive. Gold accent ties to nutrition / harvest. */
+:root[data-theme="dark"] {
+  --bg: #15130f; --bg2: #1f1c17; --bg3: #2a2620; --bg4: #3a362e;
+  --border: rgba(255,255,255,0.09); --border2: rgba(255,255,255,0.16);
+  --text: #f5f1e9; --text2: #b0aa9f; --text3: #787269;
+  --accent: #eacb57; --accent2: #d4b23f; --accent-hover: #f0d060; --accent-fg: #1a1500;
+  --protein: #86d3ad; --carbs: #87bdf0; --fat: #eea682; --cal: #eacb57; --fiber: #c4a8f0;
+  --green: #67bc85; --red: #e06e6e;
+  --overlay: rgba(0,0,0,0.7);
+  --bg-grad-1: rgba(234,203,87,0.06);
+  --bg-grad-2: rgba(135,189,240,0.04);
+}
+
+/* ── Light palette ───────────────────────────────────────────────────────────
+   Fresh produce-market vibe: cream off-white surface, carrot-orange accent.
+   Macro colors (protein/carbs/fat/fiber) keep their semantic family — protein
+   stays green, carbs stay blue, etc. — but darken/saturate to read on white.
+   Accent is orange specifically so it doesn't collide with any macro hue. */
+:root[data-theme="light"] {
+  --bg: #fbfaf6; --bg2: #ffffff; --bg3: #f4f2eb; --bg4: #e9e6dd;
+  --border: rgba(20,15,10,0.08); --border2: rgba(20,15,10,0.14);
+  --text: #1f2118; --text2: #5b5e54; --text3: #8a8c83;
+  --accent: #e8843a; --accent2: #c66a23; --accent-hover: #f0975a; --accent-fg: #ffffff;
+  --protein: #3aa377; --carbs: #3d88c6; --fat: #d96a72; --cal: #c89518; --fiber: #9870d4;
+  --green: #3aa377; --red: #c64a4a;
+  --overlay: rgba(20,15,10,0.45);
+  --bg-grad-1: rgba(232,132,58,0.05);
+  --bg-grad-2: rgba(58,163,119,0.04);
+}
+
 body {
   background: var(--bg);
-  /* Subtle warm radial wash at top-left so the page isn't a flat slab of dark.
-     Barely perceptible but lifts the whole UI. */
+  /* Subtle radial wash so the page isn't a flat slab of color. Tokens swap
+     per theme: warm gold + cool blue in dark, warm orange + leafy green in
+     light. Barely perceptible — just enough to lift the surface. */
   background-image:
-    radial-gradient(ellipse 800px 600px at 10% 0%, rgba(234,203,87,0.06), transparent 60%),
-    radial-gradient(ellipse 900px 700px at 90% 100%, rgba(135,189,240,0.04), transparent 60%);
+    radial-gradient(ellipse 800px 600px at 10% 0%, var(--bg-grad-1), transparent 60%),
+    radial-gradient(ellipse 900px 700px at 90% 100%, var(--bg-grad-2), transparent 60%);
   background-attachment: fixed;
   color: var(--text);
   min-height: 100vh;
@@ -41,8 +70,8 @@ body {
 .auth-field label { font-size: 12px; color: var(--text3); display: block; margin-bottom: 6px; }
 .auth-field input { width: 100%; background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--r); padding: 11px 13px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; transition: border-color 0.15s; }
 .auth-field input:focus { border-color: var(--accent2); }
-.auth-btn { width: 100%; padding: 12px; background: var(--accent); color: #1a1500; border: none; border-radius: var(--r); font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s; margin-top: 4px; }
-.auth-btn:hover { background: #f0d060; }
+.auth-btn { width: 100%; padding: 12px; background: var(--accent); color: var(--accent-fg); border: none; border-radius: var(--r); font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s; margin-top: 4px; }
+.auth-btn:hover { background: var(--accent-hover); }
 .auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .auth-divider { text-align: center; margin: 20px 0; position: relative; }
 .auth-divider::before { content: ''; position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: var(--border); }
@@ -84,7 +113,7 @@ body {
 }
 .nav-item:hover { background: var(--bg3); color: var(--text); }
 .nav-item.active {
-  background: linear-gradient(90deg, rgba(234,203,87,0.14), rgba(234,203,87,0.05));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 14%, transparent), color-mix(in srgb, var(--accent) 5%, transparent));
   color: var(--accent);
   box-shadow: inset 2px 0 0 var(--accent);
 }
@@ -98,7 +127,7 @@ body {
 .goal-fill { height: 100%; border-radius: 2px; transition: width 0.5s; }
 .hamburger { display: none; position: fixed; top: 14px; left: 14px; z-index: 60; background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--r); padding: 8px 10px; cursor: pointer; flex-direction: column; gap: 4px; }
 .hamburger span { display: block; width: 18px; height: 2px; background: var(--text2); border-radius: 2px; }
-.sidebar-overlay { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 49; opacity: 0; pointer-events: none; transition: opacity 0.25s; }
+.sidebar-overlay { display: block; position: fixed; inset: 0; background: var(--overlay); z-index: 49; opacity: 0; pointer-events: none; transition: opacity 0.25s; }
 .sidebar-overlay.visible { opacity: 1; pointer-events: auto; }
 .main {
   padding: 32px 40px;
@@ -149,20 +178,20 @@ body {
   padding: 24px;
 }
 .upload-area { border: 1.5px dashed var(--border2); border-radius: var(--r); padding: 32px 20px; text-align: center; cursor: pointer; transition: all 0.2s; }
-.upload-area:hover { border-color: var(--accent2); background: rgba(232,197,71,0.03); }
-.upload-area.drag-over { border-color: var(--accent); background: rgba(232,197,71,0.06); }
+.upload-area:hover { border-color: var(--accent2); background: color-mix(in srgb, var(--accent) 3%, transparent); }
+.upload-area.drag-over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .upload-icon { font-size: 32px; margin-bottom: 10px; }
 .upload-text { font-size: 14px; color: var(--text2); margin-bottom: 4px; }
 .upload-hint { font-size: 12px; color: var(--text3); }
 .preview-img { width: 100%; border-radius: var(--r); max-height: 180px; object-fit: cover; margin-bottom: 12px; }
-.analyze-btn { width: 100%; padding: 12px; background: var(--accent); color: #1a1500; border: none; border-radius: var(--r); font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s; }
-.analyze-btn:hover { background: #f0d060; }
+.analyze-btn { width: 100%; padding: 12px; background: var(--accent); color: var(--accent-fg); border: none; border-radius: var(--r); font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+.analyze-btn:hover { background: var(--accent-hover); }
 .analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.analyzing-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(26,21,0,0.3); border-top-color: #1a1500; border-radius: 50%; animation: spin 0.7s linear infinite; margin-right: 8px; vertical-align: middle; }
+.analyzing-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid color-mix(in srgb, var(--accent-fg) 30%, transparent); border-top-color: var(--accent-fg); border-radius: 50%; animation: spin 0.7s linear infinite; margin-right: 8px; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .mode-tabs { display: flex; gap: 4px; margin-bottom: 14px; }
 .mode-tab { flex: 1; padding: 7px 10px; border-radius: var(--r); font-size: 12px; font-weight: 500; cursor: pointer; text-align: center; background: var(--bg3); color: var(--text3); border: 1px solid transparent; transition: all 0.15s; font-family: inherit; }
-.mode-tab.active { background: var(--bg4); color: var(--accent); border-color: rgba(232,197,71,0.25); }
+.mode-tab.active { background: var(--bg4); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
 .mode-panel { display: none; }
 .mode-panel.active { display: block; }
 .recipe-textarea { width: 100%; background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--r); padding: 10px 12px; color: var(--text); font-size: 13px; font-family: inherit; resize: vertical; min-height: 100px; outline: none; line-height: 1.5; }
@@ -176,7 +205,7 @@ body {
 .result-desc { font-size: 13px; color: var(--text2); line-height: 1.5; }
 .macro-pills { display: flex; gap: 8px; flex-wrap: wrap; }
 .macro-pill { padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 500; border: 1px solid; }
-.pill-cal { background: rgba(232,197,71,0.1); color: var(--cal); border-color: rgba(232,197,71,0.25); }
+.pill-cal { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--cal); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
 .pill-p { background: rgba(126,200,160,0.1); color: var(--protein); border-color: rgba(126,200,160,0.25); }
 .pill-c { background: rgba(122,180,232,0.1); color: var(--carbs); border-color: rgba(122,180,232,0.25); }
 .pill-f { background: rgba(232,154,122,0.1); color: var(--fat); border-color: rgba(232,154,122,0.25); }
@@ -275,7 +304,7 @@ body {
 .leftovers-badge { font-size: 10px; background: rgba(122,180,232,0.15); color: var(--carbs); border-radius: 4px; padding: 1px 5px; margin-left: 4px; }
 
 /* MODALS */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
+.modal-overlay { position: fixed; inset: 0; background: var(--overlay); display: none; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
 .modal-overlay.open { display: flex; }
 .modal-box { background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--r3); padding: 28px; width: 100%; max-width: 460px; position: relative; }
 .modal-box h3 { font-family: 'DM Serif Display', serif; font-size: 20px; color: var(--text); margin-bottom: 20px; }
@@ -288,21 +317,21 @@ body {
 .modal-field input { width: 100%; background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--r); padding: 10px 12px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; }
 .modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
-.btn-save { flex: 1; padding: 11px; background: var(--accent); color: #1a1500; border: none; border-radius: var(--r); font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
-.btn-save:hover { background: #f0d060; }
+.btn-save { flex: 1; padding: 11px; background: var(--accent); color: var(--accent-fg); border: none; border-radius: var(--r); font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.btn-save:hover { background: var(--accent-hover); }
 .btn-cancel { padding: 11px 20px; background: var(--bg3); border: 1px solid var(--border2); color: var(--text2); border-radius: var(--r); font-size: 14px; cursor: pointer; font-family: inherit; }
 .btn-cancel:hover { background: var(--bg4); }
 .btn-delete { padding: 11px 16px; background: rgba(217,96,96,0.1); border: 1px solid rgba(217,96,96,0.3); color: var(--red); border-radius: var(--r); font-size: 14px; cursor: pointer; font-family: inherit; }
 .btn-delete:hover { background: rgba(217,96,96,0.2); }
 .pm-tabs { display: flex; gap: 4px; margin-bottom: 14px; }
 .pm-tab { flex: 1; padding: 7px 10px; border-radius: var(--r); font-size: 12px; font-weight: 500; cursor: pointer; text-align: center; background: var(--bg3); color: var(--text3); border: 1px solid transparent; transition: all 0.15s; font-family: inherit; }
-.pm-tab.active { background: var(--bg4); color: var(--accent); border-color: rgba(232,197,71,0.25); }
+.pm-tab.active { background: var(--bg4); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
 .pm-panel { display: none; }
 .pm-panel.active { display: block; }
 .pm-textarea { width: 100%; background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--r); padding: 10px 12px; color: var(--text); font-size: 13px; font-family: inherit; resize: vertical; min-height: 90px; outline: none; line-height: 1.5; }
 .pm-textarea::placeholder { color: var(--text3); }
-.pm-analyze-btn { width: 100%; padding: 10px; background: var(--accent); color: #1a1500; border: none; border-radius: var(--r); font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; margin-top: 8px; transition: all 0.15s; }
-.pm-analyze-btn:hover { background: #f0d060; }
+.pm-analyze-btn { width: 100%; padding: 10px; background: var(--accent); color: var(--accent-fg); border: none; border-radius: var(--r); font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; margin-top: 8px; transition: all 0.15s; }
+.pm-analyze-btn:hover { background: var(--accent-hover); }
 .pm-analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .pm-result { margin-top: 10px; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--r); padding: 12px; }
 .pm-result-name { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 6px; }
@@ -356,7 +385,7 @@ body {
 }
 .pm-upload-area:hover {
   border-color: var(--accent2);
-  background: rgba(232,197,71,0.03);
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
 }
 
 /* Food mode sub-buttons */
@@ -378,7 +407,7 @@ body {
 .food-sub-btn:hover { background: var(--bg4); color: var(--text2); }
 .food-sub-btn.active {
   background: var(--bg4);
-  border-color: rgba(232,197,71,0.35);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   color: var(--accent);
 }
 

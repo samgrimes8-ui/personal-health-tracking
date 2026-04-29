@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="MacroLens — AI-powered nutrition tracker" />
-    <meta name="theme-color" content="#0f0e0d" />
-    <meta name="background-color" content="#0f0e0d" />
+    <meta name="theme-color" content="#15130f" />
+    <meta name="background-color" content="#15130f" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="MacroLens" />
@@ -17,8 +17,28 @@
     <meta property="og:description" content="AI-powered nutrition tracker" />
     <meta property="og:type" content="website" />
     <title>MacroLens</title>
+    <script>
+      // Resolve theme synchronously before any CSS evaluates so the page
+      // never flashes the wrong palette. Saved choice wins over system
+      // preference; if neither, fall back to dark (the original look).
+      // Also keeps the iOS status-bar tint in sync via theme-color meta.
+      (function () {
+        var saved = null
+        try { saved = localStorage.getItem('macrolens_theme') } catch (e) {}
+        var sysLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+        var theme = saved === 'light' || saved === 'dark' ? saved : (sysLight ? 'light' : 'dark')
+        document.documentElement.setAttribute('data-theme', theme)
+        var meta = document.querySelector('meta[name="theme-color"]')
+        if (meta) meta.content = theme === 'light' ? '#fbfaf6' : '#15130f'
+      })()
+    </script>
     <style>
-      body { background: #0f0e0d; margin: 0; }
+      /* Pre-stylesheet body background so the page doesn't flash white
+         while style.css loads. Picks per resolved theme (set by the
+         script above on <html data-theme>). Real palette tokens take
+         over once style.css applies. */
+      html[data-theme="dark"] body { background: #15130f; }
+      html[data-theme="light"] body { background: #fbfaf6; }
       :root {
         --sat: env(safe-area-inset-top);
         --sab: env(safe-area-inset-bottom);
@@ -28,7 +48,7 @@
     </style>
   </head>
   <body>
-    <div id="ai-loading-bar" style="position:fixed;top:0;left:0;right:0;height:3px;z-index:9999;background:linear-gradient(90deg,#E8C547,#f5a623,#E8C547);background-size:200% 100%;animation:ai-shimmer 1.2s linear infinite;opacity:0;transition:opacity 0.2s;pointer-events:none"></div>
+    <div id="ai-loading-bar" style="position:fixed;top:0;left:0;right:0;height:3px;z-index:9999;background:linear-gradient(90deg,var(--accent),var(--accent-hover),var(--accent));background-size:200% 100%;animation:ai-shimmer 1.2s linear infinite;opacity:0;transition:opacity 0.2s;pointer-events:none"></div>
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

@@ -610,7 +610,7 @@ function renderAnalyticsPage(container) {
 
   // Range picker pills
   const rangeBtn = (days, label) => `<button onclick="setAnalyticsRange(${days})"
-    style="padding:6px 14px;border-radius:999px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;border:1px solid ${range === days ? 'var(--accent)' : 'var(--border2)'};background:${range === days ? 'rgba(234,203,87,0.15)' : 'var(--bg3)'};color:${range === days ? 'var(--accent)' : 'var(--text2)'};transition:all 0.15s">${esc(label)}</button>`
+    style="padding:6px 14px;border-radius:999px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;border:1px solid ${range === days ? 'var(--accent)' : 'var(--border2)'};background:${range === days ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'var(--bg3)'};color:${range === days ? 'var(--accent)' : 'var(--text2)'};transition:all 0.15s">${esc(label)}</button>`
 
   container.innerHTML = `
     <div class="greeting">Analytics</div>
@@ -1085,12 +1085,12 @@ function renderShell(container) {
             </div>
           </div>
 
-          <div style="padding:10px 12px;background:rgba(232,197,71,0.08);border:1px solid rgba(232,197,71,0.2);border-radius:var(--r);font-size:11px;color:var(--text3)">
+          <div style="padding:10px 12px;background:color-mix(in srgb, var(--accent) 8%, transparent);border:1px solid color-mix(in srgb, var(--accent) 20%, transparent);border-radius:var(--r);font-size:11px;color:var(--text3)">
             <strong style="color:var(--accent)">References:</strong> Mifflin et al. (1990) AJCN; Katch-McArdle (2011); Harris-Benedict activity factors; ISSN Protein Position Stand (2017); Dietary Reference Intakes, National Academies (2005).
           </div>
 
           <button onclick="closeMethodologyModal()"
-            style="width:100%;padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+            style="width:100%;padding:10px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
             Got it
           </button>
         </div>
@@ -1130,7 +1130,7 @@ function renderShell(container) {
         </div>
 
         <button onclick="closeLimitReachedModal();switchPage('upgrade')"
-          style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:13px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:10px">
+          style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:13px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:10px">
           Upgrade to Premium
         </button>
         <div style="font-size:11px;color:var(--text3);text-align:center">Your free AI Bucks reset on the 1st of each month</div>
@@ -1323,7 +1323,7 @@ function renderUpgradePage(container, feature) {
     const isFeatured = !!tier.featured
     return `
       <div style="flex:1;background:var(--bg3);border:2px solid ${isFeatured ? 'var(--accent)' : 'var(--border2)'};border-radius:16px;padding:24px;display:flex;flex-direction:column;min-width:0;position:relative">
-        ${isFeatured ? '<div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--accent);color:#1a1500;font-size:10px;font-weight:700;padding:3px 10px;border-radius:999px;letter-spacing:0.5px">RECOMMENDED</div>' : ''}
+        ${isFeatured ? '<div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--accent);color:var(--accent-fg);font-size:10px;font-weight:700;padding:3px 10px;border-radius:999px;letter-spacing:0.5px">RECOMMENDED</div>' : ''}
         <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px">${tier.name}</div>
         <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">
           <span style="font-size:32px;font-weight:700;color:var(--text);font-family:'DM Serif Display',serif">${tier.priceLabel}</span>
@@ -1339,7 +1339,7 @@ function renderUpgradePage(container, feature) {
         </div>
         ${tier.id === 'premium' ? `
           <button onclick="handleUpgradeClick()"
-            style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:13px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;width:100%">
+            style="background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:13px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;width:100%">
             Upgrade to Premium
           </button>
         ` : `
@@ -1425,7 +1425,7 @@ function renderPage() {
             <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
               <button onclick="switchPage('analytics')" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:8px 14px;border-radius:var(--r);font-family:inherit;font-size:13px;cursor:pointer">Try analytics</button>
               <button onclick="switchPage('planner')" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:8px 14px;border-radius:var(--r);font-family:inherit;font-size:13px;cursor:pointer">Try planner</button>
-              <button onclick="location.reload()" style="background:var(--accent);border:none;color:#1a1500;padding:8px 14px;border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">Hard reload</button>
+              <button onclick="location.reload()" style="background:var(--accent);border:none;color:var(--accent-fg);padding:8px 14px;border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">Hard reload</button>
             </div>
           </div>
         </div>`
@@ -1529,7 +1529,7 @@ function renderDashboard(container) {
       <div class="upload-card">
         <div class="section-title" style="display:flex;align-items:center;gap:8px">
           <span>Analyze food</span>
-          ${state.usage?.isFree ? '<span style="font-size:10px;padding:2px 8px;background:rgba(232,197,71,0.12);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:999px;font-weight:500">⚡ Uses AI Bucks</span>' : ''}
+          ${state.usage?.isFree ? '<span style="font-size:10px;padding:2px 8px;background:color-mix(in srgb, var(--accent) 12%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:999px;font-weight:500">⚡ Uses AI Bucks</span>' : ''}
         </div>
         <!-- Top-level: just Food vs Recipe. Everything else is nested. -->
         <div class="mode-tabs">
@@ -1567,7 +1567,7 @@ function renderDashboard(container) {
 
             <!-- Active hint for private-platform URLs. Hidden by default;
                  checkRecipeWriteHint() flips display based on textarea content. -->
-            <div id="recipe-write-private-hint" style="display:none;margin-top:8px;padding:10px 12px;border-radius:var(--r);background:rgba(234,203,87,0.08);border:1px solid rgba(234,203,87,0.25);font-size:12px;color:var(--text2);line-height:1.45">
+            <div id="recipe-write-private-hint" style="display:none;margin-top:8px;padding:10px 12px;border-radius:var(--r);background:color-mix(in srgb, var(--accent) 8%, transparent);border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);font-size:12px;color:var(--text2);line-height:1.45">
               <div style="font-weight:600;color:var(--accent);margin-bottom:4px">📱 <span id="recipe-write-private-platform">Instagram</span> links are private</div>
               <div>We can't read reel content directly. Try one of these:</div>
               <ul style="margin:6px 0 0 0;padding-left:18px">
@@ -1919,7 +1919,7 @@ async function renderPlanner(container) {
 
       <button class="td-act" onclick="shiftWeek(1)" style="font-size:20px;padding:4px 12px;border:1px solid var(--border2);border-radius:var(--r)">›</button>
 
-      ${!isCurrentWeek ? `<button onclick="jumpToToday()" style="background:rgba(232,197,71,0.12);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:6px 12px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap">Today</button>` : ''}
+      ${!isCurrentWeek ? `<button onclick="jumpToToday()" style="background:color-mix(in srgb, var(--accent) 12%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:var(--r);padding:6px 12px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap">Today</button>` : ''}
     </div>
 
     <!-- Calendar picker -->
@@ -2006,7 +2006,7 @@ function renderCalendarPicker() {
               return `<button onclick="jumpToWeek('${wk}')"
                 style="aspect-ratio:1;border-radius:50%;border:none;cursor:pointer;font-size:11px;font-family:inherit;position:relative;
                   background:${isSelected ? 'var(--accent)' : 'none'};
-                  color:${isSelected ? '#1a1500' : isToday ? 'var(--accent)' : 'var(--text)'};
+                  color:${isSelected ? 'var(--accent-fg)' : isToday ? 'var(--accent)' : 'var(--text)'};
                   font-weight:${isToday || isSelected ? '600' : '400'};
                   outline:${isToday && !isSelected ? '1px solid var(--accent)' : 'none'}"
                 onmouseover="if(!${isSelected})this.style.background='var(--bg3)'"
@@ -2029,8 +2029,8 @@ function renderCalendarPicker() {
                 const label = `${d.toLocaleDateString([], {month:'short',day:'numeric'})} – ${end.toLocaleDateString([], {month:'short',day:'numeric'})}`
                 const isThisWeek = wk === getWeekStart()
                 return `<button onclick="jumpToWeek('${wk}')"
-                  style="width:100%;text-align:left;background:${isSelected ? 'rgba(232,197,71,0.12)' : 'none'};
-                    border:1px solid ${isSelected ? 'rgba(232,197,71,0.3)' : 'transparent'};
+                  style="width:100%;text-align:left;background:${isSelected ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'none'};
+                    border:1px solid ${isSelected ? 'color-mix(in srgb, var(--accent) 30%, transparent)' : 'transparent'};
                     border-radius:var(--r);padding:7px 10px;margin-bottom:4px;
                     color:${isSelected ? 'var(--accent)' : 'var(--text2)'};
                     font-size:12px;font-family:inherit;cursor:pointer;display:flex;justify-content:space-between;align-items:center"
@@ -2108,17 +2108,17 @@ function renderMealPlanView(planner) {
         const isToday = dateStr === localDateStr(new Date())
         const isPast = dateStr < localDateStr(new Date()) && !isToday
 
-        return `<div style="background:var(--bg2);border:1px solid ${isToday ? 'rgba(232,197,71,0.4)' : 'var(--border)'};border-radius:var(--r2);overflow:hidden;opacity:${isPast ? '0.7' : '1'}"
+        return `<div style="background:var(--bg2);border:1px solid ${isToday ? 'color-mix(in srgb, var(--accent) 40%, transparent)' : 'var(--border)'};border-radius:var(--r2);overflow:hidden;opacity:${isPast ? '0.7' : '1'}"
           data-planner-day="${di}" data-planner-date="${dateStr}"
           ondragover="handlePlannerDragOver(event, this)"
           ondragleave="handlePlannerDragLeave(event, this)"
           ondrop="handlePlannerDrop(event, '${dateStr}', this)">
           <!-- Day header -->
-          <div style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;background:${isToday ? 'rgba(232,197,71,0.06)' : 'var(--bg3)'}">
+          <div style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;background:${isToday ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : 'var(--bg3)'}">
             <div style="display:flex;align-items:center;gap:8px">
               <div style="font-size:14px;font-weight:600;color:${isToday ? 'var(--accent)' : 'var(--text)'}">
                 ${day}
-                ${isToday ? '<span style="font-size:10px;background:var(--accent);color:#1a1500;border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:700">TODAY</span>' : ''}
+                ${isToday ? '<span style="font-size:10px;background:var(--accent);color:var(--accent-fg);border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:700">TODAY</span>' : ''}
               </div>
               <div style="font-size:11px;color:var(--text3)">${new Date(dateStr + 'T00:00:00').toLocaleDateString([], {month:'short', day:'numeric'})}</div>
             </div>
@@ -2372,7 +2372,7 @@ const CATEGORIES = {
   protein:    { label: 'Protein',    emoji: '🥩', color: 'var(--fat)' },
   dairy:      { label: 'Dairy',      emoji: '🧀', color: 'var(--carbs)' },
   pantry:     { label: 'Pantry',     emoji: '🥫', color: 'var(--text2)' },
-  spices:     { label: 'Spices',     emoji: '🧂', color: '#c4a8f0' },
+  spices:     { label: 'Spices',     emoji: '🧂', color: 'var(--fiber)' },
   grains:     { label: 'Grains',     emoji: '🌾', color: 'var(--cal)' },
   frozen:     { label: 'Frozen',     emoji: '🧊', color: 'var(--carbs)' },
   bakery:     { label: 'Bakery',     emoji: '🍞', color: 'var(--fat)' },
@@ -2893,7 +2893,7 @@ function renderFoodCard(f) {
         <span class="macro-pill pill-f" style="font-size:11px;padding:2px 8px">${Math.round(f.fat)}g F</span>
       </div>
       <button onclick="quickLogFoodItem('${f.id}');event.stopPropagation()"
-        style="width:100%;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.25);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+        style="width:100%;background:color-mix(in srgb, var(--accent) 10%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
         + Log this
       </button>
     </div>
@@ -3176,7 +3176,7 @@ function renderRecipesPage(container) {
 
   const pill = (label, tagValue, count, isActive) => `
     <button onclick="setRecipeTag('${tagValue.replace(/'/g,"\\'")}')"
-      style="flex-shrink:0;padding:6px 14px;border-radius:999px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border2)'};background:${isActive ? 'rgba(234,203,87,0.15)' : 'var(--bg3)'};color:${isActive ? 'var(--accent)' : 'var(--text2)'};transition:all 0.15s;white-space:nowrap"
+      style="flex-shrink:0;padding:6px 14px;border-radius:999px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border2)'};background:${isActive ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'var(--bg3)'};color:${isActive ? 'var(--accent)' : 'var(--text2)'};transition:all 0.15s;white-space:nowrap"
       onmouseover="if (!${isActive}) { this.style.borderColor='var(--border2)'; this.style.color='var(--text)' }"
       onmouseout="if (!${isActive}) { this.style.borderColor='var(--border2)'; this.style.color='var(--text2)' }">
       ${esc(label)}${count != null ? ` <span style="opacity:0.6;margin-left:2px">${count}</span>` : ''}
@@ -3467,7 +3467,7 @@ function renderRecipeModalContent(recipe, mode = 'view') {
 
       ${isNew ? `
         <div onclick="document.getElementById('cookbook-file-input').click()"
-          style="background:rgba(232,197,71,0.08);border-bottom:1.5px dashed rgba(232,197,71,0.35);padding:12px 16px;display:flex;align-items:center;gap:10px;cursor:pointer">
+          style="background:color-mix(in srgb, var(--accent) 8%, transparent);border-bottom:1.5px dashed color-mix(in srgb, var(--accent) 35%, transparent);padding:12px 16px;display:flex;align-items:center;gap:10px;cursor:pointer">
           <span style="font-size:22px">📖</span>
           <div style="flex:1">
             <div style="font-size:13px;font-weight:600;color:var(--accent)">Import from cookbook</div>
@@ -3477,7 +3477,7 @@ function renderRecipeModalContent(recipe, mode = 'view') {
         </div>
         <input type="file" id="cookbook-file-input" accept="image/*" style="display:none"
           onchange="handleCookbookPhoto(this.files[0])" />
-        <div id="cookbook-status" style="font-size:11px;color:var(--text3);padding:2px 16px;text-align:center;min-height:14px;background:rgba(232,197,71,0.04)"></div>
+        <div id="cookbook-status" style="font-size:11px;color:var(--text3);padding:2px 16px;text-align:center;min-height:14px;background:color-mix(in srgb, var(--accent) 4%, transparent)"></div>
       ` : ''}
 
       <!-- Sticky header: name + plan button -->
@@ -3502,7 +3502,7 @@ function renderRecipeModalContent(recipe, mode = 'view') {
             </div>
             ${!isReadOnly ? `
               <button onclick="openPlanRecipeModal('${recipe.id}')"
-                style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:7px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
+                style="background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:7px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
                 📅 Plan
               </button>
               <button onclick="shareRecipe('${recipe.id}')"
@@ -3688,7 +3688,7 @@ function renderRecipeModalContent(recipe, mode = 'view') {
                 }).join('')}
               </ol>
               ${recipe.instructions.tips?.length ? `
-                <div style="margin-top:16px;padding:12px;background:rgba(232,197,71,0.06);border-radius:var(--r);border:1px solid rgba(232,197,71,0.15)">
+                <div style="margin-top:16px;padding:12px;background:color-mix(in srgb, var(--accent) 6%, transparent);border-radius:var(--r);border:1px solid color-mix(in srgb, var(--accent) 15%, transparent)">
                   <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:8px">Tips</div>
                   ${recipe.instructions.tips.map(t => `<div style="font-size:13px;color:var(--text2);margin-bottom:4px">• ${esc(t)}</div>`).join('')}
                 </div>` : ''}
@@ -3821,11 +3821,11 @@ function renderPlanRecipeModal(recipe) {
         ${days.map(d => `
           <button data-date="${d.dateStr}"
             onclick="togglePlanDay('${d.dateStr}')"
-            style="aspect-ratio:1;border-radius:6px;border:1px solid var(--border);background:${d.isToday ? 'rgba(232,197,71,0.12)' : 'var(--bg3)'};
+            style="aspect-ratio:1;border-radius:6px;border:1px solid var(--border);background:${d.isToday ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'var(--bg3)'};
               color:${d.isToday ? 'var(--accent)' : 'var(--text2)'};cursor:pointer;font-size:11px;font-family:inherit;
               outline:${d.isToday ? '1px solid var(--accent)' : 'none'};position:relative;padding:0"
             onmouseover="if(!this.classList.contains('plan-day-selected'))this.style.background='var(--bg4)'"
-            onmouseout="if(!this.classList.contains('plan-day-selected'))this.style.background='${d.isToday ? 'rgba(232,197,71,0.12)' : 'var(--bg3)'}'">
+            onmouseout="if(!this.classList.contains('plan-day-selected'))this.style.background='${d.isToday ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'var(--bg3)'}'">
             ${d.isFirstOfMonth ? `<span style="position:absolute;top:2px;left:3px;font-size:8px;color:var(--text3)">${d.month}</span>` : ''}
             ${d.dayNum}
           </button>`).join('')}
@@ -3874,7 +3874,7 @@ function renderPlanRecipeModal(recipe) {
         <div style="display:flex;gap:6px">
           ${[['breakfast','🌅','Breakfast'],['lunch','☀️','Lunch'],['snack','🍎','Snack'],['dinner','🌙','Dinner']].map(([val,icon,label]) =>
             `<button onclick="selectPlanRecipeMealType('${val}', this)"
-              style="flex:1;padding:8px 4px;border-radius:var(--r);font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;border:1px solid ${val === 'dinner' ? 'var(--accent)' : 'var(--border2)'};background:${val === 'dinner' ? 'rgba(232,197,71,0.15)' : 'var(--bg3)'};color:${val === 'dinner' ? 'var(--accent)' : 'var(--text3)'};display:flex;flex-direction:column;align-items:center;gap:2px">
+              style="flex:1;padding:8px 4px;border-radius:var(--r);font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;border:1px solid ${val === 'dinner' ? 'var(--accent)' : 'var(--border2)'};background:${val === 'dinner' ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'var(--bg3)'};color:${val === 'dinner' ? 'var(--accent)' : 'var(--text3)'};display:flex;flex-direction:column;align-items:center;gap:2px">
               <span style="font-size:14px">${icon}</span>${label}
             </button>`
           ).join('')}
@@ -3884,7 +3884,7 @@ function renderPlanRecipeModal(recipe) {
 
       <!-- Add button -->
       <button id="plan-recipe-add-btn" onclick="confirmPlanRecipe('${recipe.id}')"
-        style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;opacity:0.4;pointer-events:none">
+        style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;opacity:0.4;pointer-events:none">
         Add to plan
       </button>
     </div>
@@ -4238,7 +4238,7 @@ function renderBroadcastForm(b) {
           Cancel
         </button>
         <button id="bc-save-btn" onclick="saveBroadcastHandler()"
-          style="flex:2;padding:12px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:14px;font-weight:700;font-family:inherit;cursor:pointer">
+          style="flex:2;padding:12px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-size:14px;font-weight:700;font-family:inherit;cursor:pointer">
           ${b.is_published ? '✓ Save & share' : 'Save draft'}
         </button>
       </div>
@@ -4446,7 +4446,7 @@ function renderMyProviderChannel() {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
         <div class="section-title" style="margin:0">My broadcasts</div>
         <button onclick="openNewBroadcastModal()"
-          style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:8px 14px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+          style="background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:8px 14px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
           + New plan
         </button>
       </div>
@@ -4474,7 +4474,7 @@ function renderMyProviderChannel() {
           <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
             ${b.is_published && b.share_token ? `
             <button onclick="shareBroadcastLink('${b.share_token}', this)"
-              style="background:rgba(232,197,71,0.1);border:1px solid rgba(232,197,71,0.3);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--accent);cursor:pointer;font-family:inherit">
+              style="background:color-mix(in srgb, var(--accent) 10%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--accent);cursor:pointer;font-family:inherit">
               🔗 Share link
             </button>` : ''}
             <button onclick="editBroadcastHandler('${b.id}')"
@@ -4576,7 +4576,7 @@ function renderGoalsPage(container) {
     <div class="greeting-sub">Track your metrics, calculate your targets, log your progress.</div>
 
     <button onclick="openCheckinModal()"
-      style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:16px;display:flex;align-items:center;justify-content:center;gap:8px">
+      style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:16px;display:flex;align-items:center;justify-content:center;gap:8px">
       📊 Log weight
     </button>
 
@@ -4711,7 +4711,7 @@ function renderGoalsPage(container) {
             <div><div style="font-size:18px;font-weight:700;color:var(--fat)">${targets.fat}g</div><div style="font-size:10px;color:var(--text3)">fat</div></div>
           </div>
           <button onclick="applyCalculatedTargets(${targets.calories},${targets.protein},${targets.carbs},${targets.fat})"
-            style="width:100%;margin-top:10px;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+            style="width:100%;margin-top:10px;background:color-mix(in srgb, var(--accent) 10%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
             ↓ Use these targets (fills fields below)
           </button>
         </div>
@@ -4736,7 +4736,7 @@ function renderGoalsPage(container) {
             Save body metrics
           </button>
           <button onclick="saveGoalsHandler()"
-            style="padding:12px;background:var(--accent);border:none;border-radius:var(--r);color:#1a1500;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer">
+            style="padding:12px;background:var(--accent);border:none;border-radius:var(--r);color:var(--accent-fg);font-size:13px;font-weight:700;font-family:inherit;cursor:pointer">
             Save targets
           </button>
         </div>
@@ -4747,7 +4747,7 @@ function renderGoalsPage(container) {
     <div class="upload-card" style="margin-bottom:16px">
       <div class="section-title">Weekly check-in</div>
       <button onclick="openCheckinModal()"
-        style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:8px">
+        style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:8px">
         📊 Log weight
       </button>
       <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:12px">
@@ -4819,9 +4819,32 @@ function renderAccount(container) {
       ${opts.map(([v,l]) => `<option value="${v}" ${val===v?'selected':''}}>${l}</option>`).join('')}
     </select>`
 
+  const _themeSaved = (() => { try { return localStorage.getItem('macrolens_theme') } catch { return null } })()
+  const _themeCurrent = _themeSaved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+  const _themeOpt = (id, label, sub, active) => `
+    <button onclick="setTheme('${id}')"
+      style="flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 10px;background:${active ? 'var(--bg4)' : 'var(--bg3)'};border:1px solid ${active ? 'var(--accent)' : 'var(--border2)'};border-radius:var(--r);color:${active ? 'var(--accent)' : 'var(--text2)'};font-family:inherit;font-size:13px;font-weight:${active ? '600' : '500'};cursor:pointer;transition:all 0.15s">
+      <span style="font-size:20px">${id === 'light' ? '☀️' : id === 'dark' ? '🌙' : '🖥️'}</span>
+      <span>${label}</span>
+      <span style="font-size:11px;color:var(--text3);font-weight:400">${sub}</span>
+    </button>`
+
   container.innerHTML = `
     <div class="greeting">Account</div>
     <div class="greeting-sub">${state.user.email}</div>
+
+    <!-- Appearance -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title">Appearance</div>
+      <div style="display:flex;gap:8px">
+        ${_themeOpt('light',  'Light',  'Bright',        _themeSaved === 'light')}
+        ${_themeOpt('dark',   'Dark',   'Original',      _themeSaved === 'dark')}
+        ${_themeOpt('system', 'System', 'Follow device', !_themeSaved)}
+      </div>
+      <div style="font-size:12px;color:var(--text3);margin-top:10px;line-height:1.5">
+        Currently using ${_themeCurrent} mode.
+      </div>
+    </div>
 
     <!-- Data & history -->
     <div class="upload-card" style="margin-bottom:16px">
@@ -4983,7 +5006,7 @@ function renderAccount(container) {
             <div><div style="font-size:18px;font-weight:700;color:var(--fat)">${targets.fat}g</div><div style="font-size:10px;color:var(--text3)">fat</div></div>
           </div>
           <button onclick="applyCalculatedTargets(${targets.calories},${targets.protein},${targets.carbs},${targets.fat})"
-            style="width:100%;margin-top:10px;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+            style="width:100%;margin-top:10px;background:color-mix(in srgb, var(--accent) 10%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
             ↓ Use these targets (fills fields below)
           </button>
         </div>
@@ -5008,7 +5031,7 @@ function renderAccount(container) {
             Save body metrics
           </button>
           <button onclick="saveGoalsHandler()"
-            style="padding:12px;background:var(--accent);border:none;border-radius:var(--r);color:#1a1500;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer">
+            style="padding:12px;background:var(--accent);border:none;border-radius:var(--r);color:var(--accent-fg);font-size:13px;font-weight:700;font-family:inherit;cursor:pointer">
             Save targets
           </button>
         </div>
@@ -5019,7 +5042,7 @@ function renderAccount(container) {
       <div class="section-title">AI Bucks this month</div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
         ${u.role === 'admin' ? `
-          <span style="background:rgba(232,197,71,0.15);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">👑 Admin</span>
+          <span style="background:color-mix(in srgb, var(--accent) 15%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">👑 Admin</span>
           <span style="font-size:12px;color:var(--text3)">Unlimited access · All features</span>
         ` : u.role === 'provider' ? `
           <span style="background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">🩺 Provider</span>
@@ -5047,7 +5070,7 @@ function renderAccount(container) {
       ${u.role === 'free' && spentPct >= 70 ? `
       <!-- Upsell inline when they're approaching the cap -->
       <button onclick="switchPage('upgrade')"
-        style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:12px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:8px">
+        style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:12px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:8px">
         ⚡ Upgrade for ${bucksCount(10.00)} AI Bucks/mo
       </button>` : ''}
       ` : `
@@ -6324,7 +6347,7 @@ function wireGlobals() {
               <div><div style="font-size:18px;font-weight:700;color:var(--fat)">${targets.fat}g</div><div style="font-size:10px;color:var(--text3)">fat</div></div>
             </div>
             <button onclick="applyCalculatedTargets(${targets.calories},${targets.protein},${targets.carbs},${targets.fat})"
-              style="width:100%;margin-top:10px;background:rgba(232,197,71,0.1);color:var(--accent);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
+              style="width:100%;margin-top:10px;background:color-mix(in srgb, var(--accent) 10%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
               ↓ Use these targets (fills fields below)
             </button>
           </div>`
@@ -6337,6 +6360,24 @@ function wireGlobals() {
   window.setUnits = (units) => {
     state.units = units
     localStorage.setItem('macrolens_units', units)
+    renderPage()
+  }
+
+  // Theme picker. 'light'/'dark' persist an explicit choice; 'system' clears
+  // the saved value so the inline boot script falls back to prefers-color-scheme
+  // on the next load. We resolve and apply the new theme immediately so the
+  // change is visible without a reload.
+  window.setTheme = (choice) => {
+    if (choice === 'system') {
+      try { localStorage.removeItem('macrolens_theme') } catch {}
+    } else if (choice === 'light' || choice === 'dark') {
+      try { localStorage.setItem('macrolens_theme', choice) } catch {}
+    }
+    const sysLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+    const resolved = choice === 'system' ? (sysLight ? 'light' : 'dark') : choice
+    document.documentElement.setAttribute('data-theme', resolved)
+    const meta = document.querySelector('meta[name="theme-color"]')
+    if (meta) meta.content = resolved === 'light' ? '#fbfaf6' : '#15130f'
     renderPage()
   }
 
@@ -7170,7 +7211,7 @@ function wireGlobals() {
                 ${b.description ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(b.description)}</div>` : ''}
               </div>
               <button onclick="copyBroadcastHandler('${b.id}','${p.user_id}')"
-                style="flex-shrink:0;padding:7px 12px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">
+                style="flex-shrink:0;padding:7px 12px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">
                 Preview & copy
               </button>
             </div>
@@ -7314,7 +7355,7 @@ function wireGlobals() {
     const container = document.getElementById(`copy-meal-type-${idx}`)
     if (!container) return
     const typeColors = {
-      breakfast: { bg: 'rgba(232,197,71,0.15)', fg: 'var(--accent)' },
+      breakfast: { bg: 'color-mix(in srgb, var(--accent) 15%, transparent)', fg: 'var(--accent)' },
       lunch:     { bg: 'rgba(122,180,232,0.15)', fg: 'var(--carbs)' },
       dinner:    { bg: 'rgba(232,154,122,0.15)', fg: 'var(--fat)' },
       snack:     { bg: 'rgba(126,200,160,0.15)', fg: 'var(--protein)' },
@@ -7526,7 +7567,7 @@ function wireGlobals() {
       let bg = 'transparent', fg = 'var(--text)', border = '1px solid transparent'
       if (isPast) { fg = 'var(--text3)'; bg = 'transparent' }
       if (isToday) { border = '1px solid var(--accent)'; fg = 'var(--accent)' }
-      if (isSelected) { bg = 'var(--accent)'; fg = '#1a1500'; border = '1px solid var(--accent)' }
+      if (isSelected) { bg = 'var(--accent)'; fg = 'var(--accent-fg)'; border = '1px solid var(--accent)' }
 
       cells.push(`
         <button type="button" ${isPast ? 'disabled' : ''} onclick="copyCalPick('${dateStr}')"
@@ -7658,7 +7699,7 @@ function wireGlobals() {
         </div>
         <div style="max-height:300px;overflow-y:auto">${rows}</div>
         <button onclick="closeCopyBroadcastModal()"
-          style="width:100%;margin-top:12px;padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">
+          style="width:100%;margin-top:12px;padding:10px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">
           Got it
         </button>
       </div>
@@ -7701,7 +7742,7 @@ function wireGlobals() {
     const mealTypeBadge = (type) => {
       if (!type) return ''
       const colors = {
-        breakfast: 'background:rgba(232,197,71,0.15);color:var(--accent)',
+        breakfast: 'background:color-mix(in srgb, var(--accent) 15%, transparent);color:var(--accent)',
         lunch: 'background:rgba(122,180,232,0.15);color:var(--carbs)',
         dinner: 'background:rgba(232,154,122,0.15);color:var(--fat)',
         snack: 'background:rgba(126,200,160,0.15);color:var(--protein)',
@@ -7780,7 +7821,7 @@ function wireGlobals() {
             ${groups[key].map(({ origIdx, item }) => {
               const currentType = (window._copyMealTypes && window._copyMealTypes[origIdx]) || item.meal_type || 'dinner'
               const typeColors = {
-                breakfast: { bg: 'rgba(232,197,71,0.15)', fg: 'var(--accent)' },
+                breakfast: { bg: 'color-mix(in srgb, var(--accent) 15%, transparent)', fg: 'var(--accent)' },
                 lunch:     { bg: 'rgba(122,180,232,0.15)', fg: 'var(--carbs)' },
                 dinner:    { bg: 'rgba(232,154,122,0.15)', fg: 'var(--fat)' },
                 snack:     { bg: 'rgba(126,200,160,0.15)', fg: 'var(--protein)' },
@@ -7816,7 +7857,7 @@ function wireGlobals() {
                   <div id="copy-meal-type-${origIdx}" style="display:flex;gap:4px;flex-wrap:wrap">${typeOptions}</div>
                   ${item.recipe_id ? `
                     <button type="button" onclick="viewCopyRecipe('${item.recipe_id}', event)"
-                      style="margin-left:auto;padding:5px 11px;background:rgba(232,197,71,0.08);border:1px solid rgba(232,197,71,0.3);border-radius:var(--r);font-size:11px;color:var(--accent);font-family:inherit;cursor:pointer;white-space:nowrap;font-weight:500">
+                      style="margin-left:auto;padding:5px 11px;background:color-mix(in srgb, var(--accent) 8%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:var(--r);font-size:11px;color:var(--accent);font-family:inherit;cursor:pointer;white-space:nowrap;font-weight:500">
                       📖 View recipe
                     </button>
                   ` : ''}
@@ -7834,7 +7875,7 @@ function wireGlobals() {
           Cancel
         </button>
         <button id="copy-confirm-btn" onclick="confirmCopyBroadcast()"
-          style="flex:1.5;padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">
+          style="flex:1.5;padding:10px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">
           Copy selected meals
         </button>
       </div>
@@ -8209,7 +8250,7 @@ function wireGlobals() {
     if (!btn) return
     const orig = btn.innerHTML
     btn.innerHTML = '🚀 Coming soon — stay tuned!'
-    btn.style.background = 'rgba(232,197,71,0.15)'
+    btn.style.background = 'color-mix(in srgb, var(--accent) 15%, transparent)'
     btn.style.borderColor = 'var(--accent)'
     btn.style.color = 'var(--accent)'
     btn.disabled = true
@@ -8274,7 +8315,7 @@ function wireGlobals() {
       const btn = document.getElementById('meal-type-btn-' + t)
       if (!btn) return
       btn.style.background = t === type ? 'var(--accent)' : 'var(--bg3)'
-      btn.style.color = t === type ? '#1a1500' : 'var(--text3)'
+      btn.style.color = t === type ? 'var(--accent-fg)' : 'var(--text3)'
       btn.style.borderColor = t === type ? 'var(--accent)' : 'var(--border)'
       btn.style.fontWeight = t === type ? '600' : '400'
     })
@@ -8920,7 +8961,7 @@ function wireGlobals() {
     // Update button styles
     document.querySelectorAll('[data-meal-type-btn]').forEach(btn => {
       const isActive = btn.dataset.mealTypeBtn === type
-      btn.style.background = isActive ? 'rgba(232,197,71,0.15)' : 'var(--bg3)'
+      btn.style.background = isActive ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'var(--bg3)'
       btn.style.borderColor = isActive ? 'var(--accent)' : 'var(--border2)'
       btn.style.color = isActive ? 'var(--accent)' : 'var(--text3)'
     })
@@ -9412,7 +9453,7 @@ function wireGlobals() {
       <input type="date" id="move-meal-date-input" value="${currentDate}"
         style="width:100%;padding:7px 8px;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-family:inherit;font-size:12px" />
       <button onclick="confirmMovePlannerMealFromInput('${mealId}', '${currentDate}')"
-        style="width:100%;margin-top:6px;padding:8px;background:var(--accent);color:#1a1500;border:none;border-radius:6px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer">
+        style="width:100%;margin-top:6px;padding:8px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:6px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer">
         Move
       </button>
     `
@@ -9559,7 +9600,7 @@ function wireGlobals() {
           <button onclick="openNewRecipeFromLink()"
             style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
             onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
-            <div style="width:44px;height:44px;background:rgba(232,197,71,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">🔗</div>
+            <div style="width:44px;height:44px;background:color-mix(in srgb, var(--accent) 12%, transparent);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">🔗</div>
             <div>
               <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Paste a link</div>
               <div style="font-size:12px;color:var(--text3)">Recipe website, blog, or YouTube — AI extracts the recipe</div>
@@ -9632,7 +9673,7 @@ function wireGlobals() {
           <!-- Dynamic warning box — appears only when user pastes an
                Instagram or TikTok URL. Same behavior as the Write-it
                textarea hint so users learn the pattern consistently. -->
-          <div id="import-link-private-hint" style="display:none;margin-bottom:16px;padding:10px 12px;border-radius:var(--r);background:rgba(234,203,87,0.08);border:1px solid rgba(234,203,87,0.25);font-size:12px;color:var(--text2);line-height:1.45">
+          <div id="import-link-private-hint" style="display:none;margin-bottom:16px;padding:10px 12px;border-radius:var(--r);background:color-mix(in srgb, var(--accent) 8%, transparent);border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);font-size:12px;color:var(--text2);line-height:1.45">
             <div style="font-weight:600;color:var(--accent);margin-bottom:4px">📱 <span id="import-link-private-platform">Instagram</span> links are private</div>
             <div style="margin-bottom:4px">We can't read reel content directly. Instead:</div>
             <ul style="margin:0;padding-left:18px">
@@ -9646,7 +9687,7 @@ function wireGlobals() {
             style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:15px;font-family:inherit;outline:none;margin-bottom:20px"
             onkeydown="if(event.key==='Enter')importRecipeFromLink()" />
           <button onclick="importRecipeFromLink()" id="import-link-btn"
-            style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
+            style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
             Import recipe
           </button>
           <div id="import-link-status" style="font-size:12px;color:var(--text3);margin-top:10px;text-align:center;min-height:18px"></div>
@@ -9768,7 +9809,7 @@ function wireGlobals() {
 
           <div style="display:flex;flex-direction:column;gap:10px">
             <button onclick="parseAndOpenManual()" id="parse-ing-btn"
-              style="width:100%;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
+              style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
               Parse ingredients & continue →
             </button>
             <button onclick="openNewRecipeManualBlank()"
@@ -9836,7 +9877,7 @@ function wireGlobals() {
           </div>
 
           <button onclick="generateRecipeFromPrompt()" id="generate-recipe-btn"
-            style="width:100%;background:var(--fat);color:#1a1500;border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
+            style="width:100%;background:var(--fat);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
             ✨ Generate recipe
           </button>
           <div id="generate-recipe-status" style="font-size:12px;color:var(--text3);margin-top:10px;text-align:center;min-height:18px"></div>
@@ -9980,10 +10021,10 @@ function wireGlobals() {
   ul, ol { padding-left: 20px; }
   li { margin-bottom: 8px; font-size: 15px; }
   ol li { margin-bottom: 14px; line-height: 1.65; }
-  .tips { background: #fffbeb; border: 1px solid #f0d060; border-radius: 8px; padding: 14px 18px; margin-top: 24px; }
+  .tips { background: #fffbeb; border: 1px solid var(--accent-hover); border-radius: 8px; padding: 14px 18px; margin-top: 24px; }
   .tips h3 { margin: 0 0 8px; font-size: 15px; }
   .source { margin-top: 28px; font-size: 13px; color: #888; }
-  a { color: #b8860b; }
+  a { color: var(--cal); }
   @media print { body { margin: 20px; } }
 </style>
 </head>
@@ -10850,7 +10891,7 @@ function wireGlobals() {
             onkeydown="if(event.key==='Enter')addCustomTagFromManage()"
             style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:13px;font-family:inherit;outline:none" />
           <button onclick="addCustomTagFromManage()"
-            style="background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);padding:9px 14px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">
+            style="background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:9px 14px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">
             Add
           </button>
         </div>
@@ -11341,7 +11382,7 @@ function wireGlobals() {
     if (qtyEl) qtyEl.value = 1
     // Store base for scaling
     state.pendingComponent._base = { calories: c.calories, protein: c.protein, carbs: c.carbs, fat: c.fat, fiber: c.fiber || 0, sugar: c.sugar || 0 }
-    if (addBtn) { addBtn.style.opacity = '1'; addBtn.style.background = 'var(--accent)'; addBtn.style.color = '#1a1500' }
+    if (addBtn) { addBtn.style.opacity = '1'; addBtn.style.background = 'var(--accent)'; addBtn.style.color = 'var(--accent-fg)' }
   }
 
   window.confirmAddComponent = () => {
@@ -11608,7 +11649,7 @@ function wireGlobals() {
             <div style="font-size:13px;color:var(--text3);margin-bottom:16px">This food has ${components.length} components. How do you want to log it?</div>
 
             <button id="log-as-one"
-              style="width:100%;padding:14px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:10px;text-align:left;display:flex;align-items:center;gap:12px">
+              style="width:100%;padding:14px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:10px;text-align:left;display:flex;align-items:center;gap:12px">
               <span style="font-size:22px">🍽️</span>
               <div>
                 <div>Log as one food</div>
@@ -11729,8 +11770,8 @@ function wireGlobals() {
     document.querySelectorAll('#plan-day-grid button[data-date]').forEach(btn => {
       const selected = days.some(d => d.dateStr === btn.dataset.date)
       btn.classList.toggle('plan-day-selected', selected)
-      btn.style.background = selected ? 'var(--accent)' : (btn.dataset.date === localDateStr(new Date()) ? 'rgba(232,197,71,0.12)' : 'var(--bg3)')
-      btn.style.color = selected ? '#1a1500' : ''
+      btn.style.background = selected ? 'var(--accent)' : (btn.dataset.date === localDateStr(new Date()) ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'var(--bg3)')
+      btn.style.color = selected ? 'var(--accent-fg)' : ''
       btn.style.fontWeight = selected ? '600' : ''
       btn.style.border = selected ? '2px solid var(--accent)' : '1px solid var(--border)'
     })
@@ -11768,7 +11809,7 @@ function wireGlobals() {
     // Update button styles
     btn.closest('[style*="display:flex"]').querySelectorAll('button').forEach(b => {
       const isActive = b === btn
-      b.style.background = isActive ? 'rgba(232,197,71,0.15)' : 'var(--bg3)'
+      b.style.background = isActive ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'var(--bg3)'
       b.style.borderColor = isActive ? 'var(--accent)' : 'var(--border2)'
       b.style.color = isActive ? 'var(--accent)' : 'var(--text3)'
     })
@@ -12340,7 +12381,7 @@ function filterQuickLog() {
           </div>
           <div style="display:flex;flex-direction:column;gap:8px;max-width:240px;margin:0 auto">
             <button onclick="switchMode('food')"
-              style="padding:10px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+              style="padding:10px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
               📸 Analyze a meal
             </button>
             <button onclick="switchPage('recipes')"
@@ -12531,7 +12572,7 @@ function filterQuickLog() {
             <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:4px">Log ${esc(meal.name)}</div>
             <div style="font-size:13px;color:var(--text3);margin-bottom:16px">This food has ${components.length} components. How do you want to log it?</div>
             <button id="ql-log-one"
-              style="width:100%;padding:14px;background:var(--accent);color:#1a1500;border:none;border-radius:var(--r);font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:10px;text-align:left;display:flex;align-items:center;gap:12px">
+              style="width:100%;padding:14px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:10px;text-align:left;display:flex;align-items:center;gap:12px">
               <span style="font-size:22px">🍽️</span>
               <div>
                 <div>Log as one food</div>
