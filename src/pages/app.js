@@ -1019,7 +1019,7 @@ function renderShell(container) {
             <input type="checkbox" id="leftover-check" onchange="toggleLeftoverPreview(this.checked)" />
             Also add as next-day lunch (leftovers)
           </label>
-          <div id="leftover-preview" style="display:none;margin-top:8px;font-size:12px;color:var(--carbs);padding:6px 10px;background:rgba(122,180,232,0.08);border-radius:var(--r);border:1px solid rgba(122,180,232,0.2)">
+          <div id="leftover-preview" style="display:none;margin-top:8px;font-size:12px;color:var(--carbs);padding:6px 10px;background:color-mix(in srgb, var(--carbs) 8%, transparent);border-radius:var(--r);border:1px solid color-mix(in srgb, var(--carbs) 20%, transparent)">
             Will also be added to <span id="leftover-day-label">Monday</span> as lunch
           </div>
         </div>
@@ -1653,7 +1653,7 @@ function renderDashboard(container) {
          out that this doesn't burn AI Bucks. -->
     <div class="log-card" style="margin-bottom:16px">
       <div class="log-header">
-        <span class="log-header-title">Quick log ${state.usage?.isFree ? '<span style="font-size:10px;margin-left:6px;padding:2px 8px;background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;font-weight:500;letter-spacing:0">⚡ Free · No AI</span>' : ''}</span>
+        <span class="log-header-title">Quick log ${state.usage?.isFree ? '<span style="font-size:10px;margin-left:6px;padding:2px 8px;background:color-mix(in srgb, var(--green) 15%, transparent);color:var(--green);border:1px solid color-mix(in srgb, var(--green) 30%, transparent);border-radius:999px;font-weight:500;letter-spacing:0">⚡ Free · No AI</span>' : ''}</span>
         <span style="font-size:11px;color:var(--text3)">from recipes & history</span>
       </div>
       <div style="padding:12px 16px">
@@ -2163,7 +2163,7 @@ function renderMealPlanView(planner) {
                       title="Drag to another day">⋮⋮</span>
                     <div style="flex:1;min-width:0">
                       <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-                        ${isLeftover ? '<span style="font-size:10px;background:rgba(91,156,246,0.15);color:var(--carbs);border-radius:3px;padding:1px 4px;margin-right:4px">🥡 Leftover</span>' : ''}
+                        ${isLeftover ? '<span style="font-size:10px;background:color-mix(in srgb, var(--carbs) 15%, transparent);color:var(--carbs);border-radius:3px;padding:1px 4px;margin-right:4px">🥡 Leftover</span>' : ''}
                         ${esc(m.meal_name || m.name || '')}
                       </div>
                       <div style="font-size:10px;color:var(--text3);margin-top:1px">${Math.round(m.calories || 0)} kcal · P${Math.round(m.protein||0)}g C${Math.round(m.carbs||0)}g F${Math.round(m.fat||0)}g</div>
@@ -2678,7 +2678,7 @@ function renderGroceryFull(planner, rangeMeals) {
                     ${merged.length ? `
                       <button onclick="showMergeDetails(this);event.stopPropagation()"
                         title="Tap to view what got merged into this row"
-                        style="background:rgba(122,180,232,0.12);border:1px solid rgba(122,180,232,0.3);border-radius:999px;padding:2px 9px;font-size:10px;color:var(--carbs);cursor:pointer;font-family:inherit;white-space:nowrap;line-height:1.4;flex-shrink:0">
+                        style="background:color-mix(in srgb, var(--carbs) 12%, transparent);border:1px solid color-mix(in srgb, var(--carbs) 30%, transparent);border-radius:999px;padding:2px 9px;font-size:10px;color:var(--carbs);cursor:pointer;font-family:inherit;white-space:nowrap;line-height:1.4;flex-shrink:0">
                         ✨ +${merged.length} variant${merged.length === 1 ? '' : 's'}
                       </button>
                     ` : ''}
@@ -2753,7 +2753,7 @@ function renderGroceryByMeal(planner, rangeMeals) {
                           ↩ Leftovers from ${originalMealName(m)} — ingredients already on your list
                         </div>
                       </div>
-                      <span style="font-size:11px;padding:3px 8px;background:rgba(122,180,232,0.12);color:var(--carbs);border-radius:4px;border:1px solid rgba(122,180,232,0.25)">no shopping needed</span>
+                      <span style="font-size:11px;padding:3px 8px;background:color-mix(in srgb, var(--carbs) 12%, transparent);color:var(--carbs);border-radius:4px;border:1px solid color-mix(in srgb, var(--carbs) 25%, transparent)">no shopping needed</span>
                     </div>
                   ` : `
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap">
@@ -3290,7 +3290,7 @@ function renderRecipeCard(r) {
       </div>
       ${tags.length ? `
         <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">
-          ${tags.slice(0, 4).map(t => `<span style="font-size:10px;padding:2px 7px;border-radius:999px;background:rgba(122,180,232,0.1);color:var(--carbs);border:1px solid rgba(122,180,232,0.2)">${esc(t)}</span>`).join('')}
+          ${tags.slice(0, 4).map(t => `<span style="font-size:10px;padding:2px 7px;border-radius:999px;background:color-mix(in srgb, var(--carbs) 10%, transparent);color:var(--carbs);border:1px solid color-mix(in srgb, var(--carbs) 20%, transparent)">${esc(t)}</span>`).join('')}
           ${tags.length > 4 ? `<span style="font-size:10px;color:var(--text3);padding:2px 4px">+${tags.length - 4}</span>` : ''}
         </div>
       ` : ''}
@@ -3314,7 +3314,7 @@ function renderRecipeTagEditor(recipe, mode, isNew, isReadOnly) {
       <div style="margin-bottom:20px">
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px">Tags</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${tags.map(t => `<span style="font-size:12px;padding:4px 10px;border-radius:999px;background:rgba(122,180,232,0.1);color:var(--carbs);border:1px solid rgba(122,180,232,0.25)">${esc(t)}</span>`).join('')}
+          ${tags.map(t => `<span style="font-size:12px;padding:4px 10px;border-radius:999px;background:color-mix(in srgb, var(--carbs) 10%, transparent);color:var(--carbs);border:1px solid color-mix(in srgb, var(--carbs) 25%, transparent)">${esc(t)}</span>`).join('')}
         </div>
       </div>
     `
@@ -3329,7 +3329,7 @@ function renderRecipeTagEditor(recipe, mode, isNew, isReadOnly) {
   tags.forEach(t => { window._editingTagsDisplay[t.toLowerCase()] = t })
 
   const chip = (t, isOn) => `<button type="button" data-tag="${esc(t)}" onclick="toggleRecipeTag('${t.replace(/'/g,"\\'")}')"
-      style="font-size:12px;padding:4px 12px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'rgba(122,180,232,0.18)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
+      style="font-size:12px;padding:4px 12px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'color-mix(in srgb, var(--carbs) 18%, transparent)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
 
   // Collect all known tags for suggestions: visible presets ∪ other recipes' tags
   // ∪ in-memory staged customs. Hidden presets don't appear as suggestions,
@@ -3509,14 +3509,14 @@ function renderRecipeModalContent(recipe, mode = 'view') {
               </button>
               <button onclick="shareRecipe('${recipe.id}')"
                 id="share-btn-${recipe.id}"
-                style="background:${recipe.is_shared ? 'rgba(76,175,130,0.15)' : 'var(--bg3)'};color:${recipe.is_shared ? 'var(--protein)' : 'var(--text3)'};border:1px solid ${recipe.is_shared ? 'var(--protein)' : 'var(--border2)'};border-radius:var(--r);padding:7px 10px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
+                style="background:${recipe.is_shared ? 'color-mix(in srgb, var(--green) 15%, transparent)' : 'var(--bg3)'};color:${recipe.is_shared ? 'var(--green)' : 'var(--text3)'};border:1px solid ${recipe.is_shared ? 'var(--green)' : 'var(--border2)'};border-radius:var(--r);padding:7px 10px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0">
                 ${recipe.is_shared ? '🔗 Shared' : '🔗 Share'}
               </button>
             ` : ''}
           </div>
         ` : ''}
         ${isReadOnly ? `
-          <div style="margin-top:10px;padding:8px 10px;background:rgba(122,180,232,0.08);border:1px solid rgba(122,180,232,0.25);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.5">
+          <div style="margin-top:10px;padding:8px 10px;background:color-mix(in srgb, var(--carbs) 8%, transparent);border:1px solid color-mix(in srgb, var(--carbs) 25%, transparent);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.5">
             👁 Preview — this recipe belongs to another provider. Copy their meal plan to your planner to save the recipe to your library, then you'll be able to edit servings, generate instructions, and plan meals with it.
           </div>
         ` : ''}
@@ -3549,7 +3549,7 @@ function renderRecipeModalContent(recipe, mode = 'view') {
             return c.field
           }).join(' · ')
           const extraCount = Math.max(0, (latest?.changes || []).length - 3)
-          return `<div style="margin-bottom:16px;padding:10px 12px;background:rgba(122,180,232,0.08);border:1px solid rgba(122,180,232,0.25);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.5">
+          return `<div style="margin-bottom:16px;padding:10px 12px;background:color-mix(in srgb, var(--carbs) 8%, transparent);border:1px solid color-mix(in srgb, var(--carbs) 25%, transparent);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.5">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
               <span style="color:var(--carbs);font-weight:500">🔄 Provider update · ${latestDate}</span>
             </div>
@@ -4352,8 +4352,8 @@ function renderProvidersPage(container) {
 
 function renderProviderCard(p, isFollowing) {
   const avatar = p.provider_avatar_url
-    ? `<img src="${esc(p.provider_avatar_url)}" alt="${esc(p.provider_name)}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div style="display:none;width:44px;height:44px;background:rgba(76,175,130,0.15);border-radius:50%;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>`
-    : `<div style="width:44px;height:44px;background:rgba(76,175,130,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>`
+    ? `<img src="${esc(p.provider_avatar_url)}" alt="${esc(p.provider_name)}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div style="display:none;width:44px;height:44px;background:color-mix(in srgb, var(--green) 15%, transparent);border-radius:50%;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>`
+    : `<div style="width:44px;height:44px;background:color-mix(in srgb, var(--green) 15%, transparent);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">🩺</div>`
 
   // Credentials render as small accent-colored chips (think "RD · LD · CSCS").
   // We parse a comma-separated string and split on common separators. If the
@@ -4365,7 +4365,7 @@ function renderProviderCard(p, isFollowing) {
     .filter(Boolean)
   const chipsHtml = credentialChips.length
     ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin:3px 0 2px">${credentialChips.map(c =>
-        `<span style="font-size:10px;padding:2px 7px;border-radius:999px;background:rgba(76,175,130,0.12);color:var(--protein);border:1px solid rgba(76,175,130,0.3);white-space:nowrap">${esc(c)}</span>`
+        `<span style="font-size:10px;padding:2px 7px;border-radius:999px;background:color-mix(in srgb, var(--green) 12%, transparent);color:var(--green);border:1px solid color-mix(in srgb, var(--green) 30%, transparent);white-space:nowrap">${esc(c)}</span>`
       ).join('')}</div>`
     : ''
 
@@ -4380,7 +4380,7 @@ function renderProviderCard(p, isFollowing) {
           ${p.provider_bio ? `<div style="font-size:12px;color:var(--text3);line-height:1.4">${esc(p.provider_bio)}</div>` : ''}
         </div>
         <button onclick="${isFollowing ? `unfollowProviderHandler('${p.user_id}')` : `followProviderHandler('${p.user_id}')`}"
-          style="flex-shrink:0;padding:7px 14px;border-radius:var(--r);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;border:1px solid ${isFollowing ? 'var(--border2)' : 'var(--protein)'};background:${isFollowing ? 'var(--bg3)' : 'rgba(76,175,130,0.15)'};color:${isFollowing ? 'var(--text3)' : 'var(--protein)'}">
+          style="flex-shrink:0;padding:7px 14px;border-radius:var(--r);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;border:1px solid ${isFollowing ? 'var(--border2)' : 'var(--green)'};background:${isFollowing ? 'var(--bg3)' : 'color-mix(in srgb, var(--green) 15%, transparent)'};color:${isFollowing ? 'var(--text3)' : 'var(--green)'}">
           ${isFollowing ? 'Following' : '+ Follow'}
         </button>
       </div>
@@ -4402,7 +4402,7 @@ function renderMyProviderChannel() {
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
         <!-- Avatar -->
         <div style="position:relative;flex-shrink:0">
-          <div id="provider-avatar-preview" style="width:72px;height:72px;border-radius:50%;overflow:hidden;background:rgba(76,175,130,0.15);display:flex;align-items:center;justify-content:center;font-size:32px;cursor:pointer" onclick="document.getElementById('provider-avatar-input').click()">
+          <div id="provider-avatar-preview" style="width:72px;height:72px;border-radius:50%;overflow:hidden;background:color-mix(in srgb, var(--green) 15%, transparent);display:flex;align-items:center;justify-content:center;font-size:32px;cursor:pointer" onclick="document.getElementById('provider-avatar-input').click()">
             ${avatarUrl
               ? `<img src="${esc(avatarUrl)}" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='🩺'" />`
               : '🩺'}
@@ -4461,7 +4461,7 @@ function renderMyProviderChannel() {
           <div style="flex:1">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
               <span style="font-size:13px;font-weight:600;color:var(--text)">${esc(b.title)}</span>
-              <span style="font-size:10px;padding:2px 7px;border-radius:999px;font-weight:600;background:${b.is_published ? 'rgba(76,175,130,0.2)' : 'var(--bg2)'};color:${b.is_published ? 'var(--protein)' : 'var(--text3)'}">
+              <span style="font-size:10px;padding:2px 7px;border-radius:999px;font-weight:600;background:${b.is_published ? 'color-mix(in srgb, var(--green) 20%, transparent)' : 'var(--bg2)'};color:${b.is_published ? 'var(--green)' : 'var(--text3)'}">
                 ${b.is_published ? 'Live' : 'Draft'}
               </span>
             </div>
@@ -4484,7 +4484,7 @@ function renderMyProviderChannel() {
               Edit
             </button>
             <button onclick="toggleBroadcastPublished('${b.id}', ${b.is_published})"
-              style="background:${b.is_published ? 'rgba(239,68,68,0.1)' : 'rgba(76,175,130,0.15)'};border:1px solid ${b.is_published ? 'var(--red)' : 'var(--protein)'};border-radius:6px;padding:5px 10px;font-size:11px;color:${b.is_published ? 'var(--red)' : 'var(--protein)'};cursor:pointer;font-family:inherit">
+              style="background:${b.is_published ? 'rgba(239,68,68,0.1)' : 'color-mix(in srgb, var(--green) 15%, transparent)'};border:1px solid ${b.is_published ? 'var(--red)' : 'var(--green)'};border-radius:6px;padding:5px 10px;font-size:11px;color:${b.is_published ? 'var(--red)' : 'var(--green)'};cursor:pointer;font-family:inherit">
               ${b.is_published ? 'Unpublish' : 'Publish'}
             </button>
             <button onclick="deleteBroadcastHandler('${b.id}')"
@@ -5102,10 +5102,10 @@ function renderAccount(container) {
           <span style="background:color-mix(in srgb, var(--accent) 15%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">👑 Admin</span>
           <span style="font-size:12px;color:var(--text3)">Unlimited access · All features</span>
         ` : u.role === 'provider' ? `
-          <span style="background:rgba(76,175,130,0.15);color:var(--protein);border:1px solid rgba(76,175,130,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">🩺 Provider</span>
+          <span style="background:color-mix(in srgb, var(--green) 15%, transparent);color:var(--green);border:1px solid color-mix(in srgb, var(--green) 30%, transparent);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">🩺 Provider</span>
           <span style="font-size:12px;color:var(--text3)">Professional access</span>
         ` : u.role === 'premium' ? `
-          <span style="background:rgba(91,156,246,0.15);color:var(--carbs);border:1px solid rgba(91,156,246,0.3);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">⭐ Premium</span>
+          <span style="background:color-mix(in srgb, var(--carbs) 15%, transparent);color:var(--carbs);border:1px solid color-mix(in srgb, var(--carbs) 30%, transparent);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">⭐ Premium</span>
           <span style="font-size:12px;color:var(--text3)">All AI features unlocked</span>
         ` : `
           <span style="background:var(--bg3);color:var(--text3);border:1px solid var(--border2);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:500">Free</span>
@@ -5142,7 +5142,7 @@ function renderAccount(container) {
       <!-- Admin override indicator. Only shows if someone manually pinned
            this user's cap via the spending_limit_usd column. Permanent
            overrides have no expiration; time-limited ones show the date. -->
-      <div style="background:rgba(91,156,246,0.08);border:1px solid rgba(91,156,246,0.25);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div style="background:color-mix(in srgb, var(--carbs) 8%, transparent);border:1px solid color-mix(in srgb, var(--carbs) 25%, transparent);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px">
         <div style="font-size:12px;color:var(--carbs);line-height:1.4">
           <div style="font-weight:600">Custom allotment active${u.override.active ? '' : ' (expired)'}</div>
           <div style="font-size:11px;color:var(--text3);margin-top:2px">${u.override.expiresAt ? 'Expires ' + u.override.expiresAt.toLocaleDateString() : 'Permanent (no expiration)'}</div>
@@ -5251,7 +5251,7 @@ async function loadAdminPanel() {
               <div style="flex:1;min-width:0">
                 <div style="font-size:13px;font-weight:500;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                   ${esc(u.email)}
-                  ${isNew ? '<span style="font-size:10px;background:rgba(76,175,130,0.2);color:var(--protein);border-radius:4px;padding:1px 5px">🆕 new</span>' : ''}
+                  ${isNew ? '<span style="font-size:10px;background:color-mix(in srgb, var(--green) 20%, transparent);color:var(--green);border-radius:4px;padding:1px 5px">🆕 new</span>' : ''}
                 </div>
                 <div style="font-size:11px;color:var(--text3);margin-top:3px">
                   Joined ${joinDate} · Last active ${lastActive} · ${u.log_entries_total ?? 0} meals · ${u.recipe_count ?? 0} recipes
@@ -6562,7 +6562,7 @@ function wireGlobals() {
     // Visual feedback on the card button
     if (btn) {
       btn.textContent = '🔗 Shared'
-      btn.style.background = 'rgba(76,175,130,0.15)'
+      btn.style.background = 'color-mix(in srgb, var(--green) 15%, transparent)'
       btn.style.color = 'var(--protein)'
       btn.style.borderColor = 'var(--protein)'
       btn.disabled = false
@@ -6978,7 +6978,7 @@ function wireGlobals() {
     row.innerHTML = suggestions.map(t => {
       const isOn = window._editingTags.has(t.toLowerCase())
       return `<button type="button" data-tag="${esc(t)}" onclick="toggleRecipeTag('${t.replace(/'/g,"\\'")}')"
-        style="font-size:12px;padding:4px 12px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'rgba(122,180,232,0.18)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
+        style="font-size:12px;padding:4px 12px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'color-mix(in srgb, var(--carbs) 18%, transparent)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
     }).join('')
   }
 
@@ -7095,7 +7095,7 @@ function wireGlobals() {
               <div style="font-size:13px;color:var(--text2);background:var(--bg3);border-radius:var(--r);padding:10px 12px;margin-bottom:8px;line-height:1.5">
                 ${w}
               </div>`).join('')}
-            <div style="background:rgba(76,175,130,0.1);border:1px solid rgba(76,175,130,0.3);border-radius:var(--r);padding:14px;margin:12px 0 16px">
+            <div style="background:color-mix(in srgb, var(--green) 10%, transparent);border:1px solid color-mix(in srgb, var(--green) 30%, transparent);border-radius:var(--r);padding:14px;margin:12px 0 16px">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                 <span style="font-size:18px">🩺</span>
                 <div style="font-size:13px;font-weight:600;color:var(--protein)">Speak with a dietitian</div>
@@ -7105,7 +7105,7 @@ function wireGlobals() {
                 ${state.providers?.length ? `<a onclick="document.body.removeChild(document.body.lastChild);switchPage('providers')" style="color:var(--protein);cursor:pointer;text-decoration:underline"> Meet our providers →</a>` : ''}
               </div>
               <button onclick="showComingSoon(this)"
-                style="width:100%;padding:10px;background:rgba(76,175,130,0.2);border:1px solid var(--protein);border-radius:var(--r);color:var(--protein);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+                style="width:100%;padding:10px;background:color-mix(in srgb, var(--green) 20%, transparent);border:1px solid var(--green);border-radius:var(--r);color:var(--green);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
                 📅 Schedule a consultation
               </button>
             </div>
@@ -7431,9 +7431,9 @@ function wireGlobals() {
     if (!container) return
     const typeColors = {
       breakfast: { bg: 'color-mix(in srgb, var(--accent) 15%, transparent)', fg: 'var(--accent)' },
-      lunch:     { bg: 'rgba(122,180,232,0.15)', fg: 'var(--carbs)' },
-      dinner:    { bg: 'rgba(232,154,122,0.15)', fg: 'var(--fat)' },
-      snack:     { bg: 'rgba(126,200,160,0.15)', fg: 'var(--protein)' },
+      lunch:     { bg: 'color-mix(in srgb, var(--carbs) 15%, transparent)', fg: 'var(--carbs)' },
+      dinner:    { bg: 'color-mix(in srgb, var(--fat) 15%, transparent)', fg: 'var(--fat)' },
+      snack:     { bg: 'color-mix(in srgb, var(--protein) 15%, transparent)', fg: 'var(--protein)' },
     }
     container.innerHTML = ['breakfast','lunch','dinner','snack'].map(t => {
       const sel = t === type
@@ -7818,9 +7818,9 @@ function wireGlobals() {
       if (!type) return ''
       const colors = {
         breakfast: 'background:color-mix(in srgb, var(--accent) 15%, transparent);color:var(--accent)',
-        lunch: 'background:rgba(122,180,232,0.15);color:var(--carbs)',
-        dinner: 'background:rgba(232,154,122,0.15);color:var(--fat)',
-        snack: 'background:rgba(126,200,160,0.15);color:var(--protein)',
+        lunch: 'background:color-mix(in srgb, var(--carbs) 15%, transparent);color:var(--carbs)',
+        dinner: 'background:color-mix(in srgb, var(--fat) 15%, transparent);color:var(--fat)',
+        snack: 'background:color-mix(in srgb, var(--protein) 15%, transparent);color:var(--protein)',
       }
       return `<span style="font-size:10px;padding:2px 6px;border-radius:4px;text-transform:capitalize;${colors[type]||'background:var(--bg3);color:var(--text3)'}">${type}</span>`
     }
@@ -7885,7 +7885,7 @@ function wireGlobals() {
       <!-- Meals grouped by day -->
       <div style="padding:4px 0">
         ${meals.some(m => m.is_leftover) ? `
-          <div style="margin:4px 20px 8px;padding:10px 12px;background:rgba(122,180,232,0.08);border:1px solid rgba(122,180,232,0.2);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.45">
+          <div style="margin:4px 20px 8px;padding:10px 12px;background:color-mix(in srgb, var(--carbs) 8%, transparent);border:1px solid color-mix(in srgb, var(--carbs) 20%, transparent);border-radius:var(--r);font-size:11px;color:var(--text2);line-height:1.45">
             <span style="color:var(--carbs);font-weight:500">ℹ️ About leftovers:</span>
             Meals marked <span style="color:var(--text)">♻️ Leftover</span> will keep that flag when copied, so your planner knows they don't need a fresh prep. Use the toggle above to skip them all at once, or uncheck individual ones below.
           </div>
@@ -7897,9 +7897,9 @@ function wireGlobals() {
               const currentType = (window._copyMealTypes && window._copyMealTypes[origIdx]) || item.meal_type || 'dinner'
               const typeColors = {
                 breakfast: { bg: 'color-mix(in srgb, var(--accent) 15%, transparent)', fg: 'var(--accent)' },
-                lunch:     { bg: 'rgba(122,180,232,0.15)', fg: 'var(--carbs)' },
-                dinner:    { bg: 'rgba(232,154,122,0.15)', fg: 'var(--fat)' },
-                snack:     { bg: 'rgba(126,200,160,0.15)', fg: 'var(--protein)' },
+                lunch:     { bg: 'color-mix(in srgb, var(--carbs) 15%, transparent)', fg: 'var(--carbs)' },
+                dinner:    { bg: 'color-mix(in srgb, var(--fat) 15%, transparent)', fg: 'var(--fat)' },
+                snack:     { bg: 'color-mix(in srgb, var(--protein) 15%, transparent)', fg: 'var(--protein)' },
               }
               const typeOptions = ['breakfast','lunch','dinner','snack'].map(t => {
                 const sel = t === currentType
@@ -8331,7 +8331,7 @@ function wireGlobals() {
     btn.disabled = true
     setTimeout(() => {
       btn.innerHTML = orig
-      btn.style.background = 'rgba(76,175,130,0.2)'
+      btn.style.background = 'color-mix(in srgb, var(--green) 20%, transparent)'
       btn.style.borderColor = 'var(--protein)'
       btn.style.color = 'var(--protein)'
       btn.disabled = false
@@ -8885,8 +8885,8 @@ function wireGlobals() {
     // so the user can see at a glance what's happening to each.
     const sourceListHtml = sources.map(s => {
       const isRemoved = !!s.viaAi
-      const badgeBg = isRemoved ? 'rgba(225,113,103,0.15)' : 'rgba(122,180,232,0.12)'
-      const badgeBorder = isRemoved ? 'rgba(225,113,103,0.35)' : 'rgba(122,180,232,0.25)'
+      const badgeBg = isRemoved ? 'rgba(225,113,103,0.15)' : 'color-mix(in srgb, var(--carbs) 12%, transparent)'
+      const badgeBorder = isRemoved ? 'rgba(225,113,103,0.35)' : 'color-mix(in srgb, var(--carbs) 25%, transparent)'
       const badgeColor = isRemoved ? 'var(--red)' : 'var(--text3)'
       const badgeLabel = isRemoved ? 'splits out' : 'stays'
       return `
@@ -9119,7 +9119,7 @@ function wireGlobals() {
         '<span class="pm-pill pill-p">' + Math.round(r.protein) + 'g P</span>' +
         '<span class="pm-pill pill-c">' + Math.round(r.carbs) + 'g C</span>' +
         '<span class="pm-pill pill-f">' + Math.round(r.fat) + 'g F</span>' +
-        (r.ingredients && r.ingredients.length ? '<span class="pm-pill" style="background:rgba(126,200,160,0.1);color:var(--protein);border-color:rgba(126,200,160,0.25)">' + r.ingredients.length + ' ingredients</span>' : '')
+        (r.ingredients && r.ingredients.length ? '<span class="pm-pill" style="background:color-mix(in srgb, var(--protein) 10%, transparent);color:var(--protein);border-color:color-mix(in srgb, var(--protein) 25%, transparent)">' + r.ingredients.length + ' ingredients</span>' : '')
       document.getElementById('pm-photo-result').style.display = 'block'
     } catch (err) { showToast('Analysis failed: ' + err.message, 'error') }
     if (btn) { btn.disabled = false; btn.textContent = 'Analyze photo with AI' }
@@ -9180,7 +9180,7 @@ function wireGlobals() {
               <div style="font-size:11px;color:var(--text3);line-height:1.4">Shop for full ingredients again — this is a separate cooking session.</div>
             </button>
             <button type="button" data-choice="leftover"
-              style="padding:12px 14px;background:rgba(122,180,232,0.08);color:var(--text);border:1px solid rgba(122,180,232,0.3);border-radius:var(--r);font-family:inherit;font-size:13px;cursor:pointer;text-align:left;transition:border-color 0.15s">
+              style="padding:12px 14px;background:color-mix(in srgb, var(--carbs) 8%, transparent);color:var(--text);border:1px solid color-mix(in srgb, var(--carbs) 30%, transparent);border-radius:var(--r);font-family:inherit;font-size:13px;cursor:pointer;text-align:left;transition:border-color 0.15s">
               <div style="font-weight:600;margin-bottom:2px">🥡 Leftovers from ${firstMatch.dayLabel}</div>
               <div style="font-size:11px;color:var(--text3);line-height:1.4">Ingredients already covered by the ${firstMatch.dayLabel} cook — won't appear on your grocery list.</div>
             </button>
@@ -9691,7 +9691,7 @@ function wireGlobals() {
           <button onclick="document.getElementById('new-recipe-photo-input').click()"
             style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
             onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
-            <div style="width:44px;height:44px;background:rgba(76,175,130,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">📸</div>
+            <div style="width:44px;height:44px;background:color-mix(in srgb, var(--green) 12%, transparent);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">📸</div>
             <div>
               <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Upload a photo</div>
               <div style="font-size:12px;color:var(--text3)">Take a new photo or pick a screenshot — cookbook, recipe card, anything</div>
@@ -9705,7 +9705,7 @@ function wireGlobals() {
           <button onclick="openNewRecipeManual()"
             style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
             onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
-            <div style="width:44px;height:44px;background:rgba(91,156,246,0.12);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">✏️</div>
+            <div style="width:44px;height:44px;background:color-mix(in srgb, var(--carbs) 12%, transparent);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">✏️</div>
             <div>
               <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Add manually</div>
               <div style="font-size:12px;color:var(--text3)">Type or paste ingredients — AI parses them instantly</div>
@@ -10790,7 +10790,7 @@ function wireGlobals() {
           ${suggestions.map(t => {
             const isOn = currentKeys.has(t.toLowerCase())
             return `<button type="button" onclick="quickTagToggle('${t.replace(/'/g,"\\'")}')"
-              style="font-size:13px;padding:5px 13px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'rgba(122,180,232,0.18)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
+              style="font-size:13px;padding:5px 13px;border-radius:999px;cursor:pointer;font-family:inherit;border:1px solid ${isOn ? 'var(--carbs)' : 'var(--border2)'};background:${isOn ? 'color-mix(in srgb, var(--carbs) 18%, transparent)' : 'var(--bg3)'};color:${isOn ? 'var(--carbs)' : 'var(--text2)'};transition:all 0.15s">${isOn ? '✓ ' : ''}${esc(t)}</button>`
           }).join('')}
         </div>
 
@@ -10978,7 +10978,7 @@ function wireGlobals() {
         ${entries.map(entry => `
           <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
             <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px">
-              <span style="font-size:13px;padding:3px 10px;border-radius:999px;background:${entry.isPreset ? 'var(--bg3)' : 'rgba(122,180,232,0.12)'};color:${entry.isPreset ? 'var(--text2)' : 'var(--carbs)'};border:1px solid ${entry.isPreset ? 'var(--border2)' : 'rgba(122,180,232,0.3)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px">${esc(entry.display)}</span>
+              <span style="font-size:13px;padding:3px 10px;border-radius:999px;background:${entry.isPreset ? 'var(--bg3)' : 'color-mix(in srgb, var(--carbs) 12%, transparent)'};color:${entry.isPreset ? 'var(--text2)' : 'var(--carbs)'};border:1px solid ${entry.isPreset ? 'var(--border2)' : 'color-mix(in srgb, var(--carbs) 30%, transparent)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px">${esc(entry.display)}</span>
               <span style="font-size:11px;color:var(--text3);white-space:nowrap">
                 ${entry.count === 0 ? 'unused' : `${entry.count} recipe${entry.count === 1 ? '' : 's'}`}
                 ${entry.isPreset ? ' · preset' : ''}

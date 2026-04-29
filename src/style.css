@@ -19,8 +19,11 @@
   --border: rgba(255,255,255,0.09); --border2: rgba(255,255,255,0.16);
   --text: #f5f1e9; --text2: #b0aa9f; --text3: #787269;
   --accent: #eacb57; --accent2: #d4b23f; --accent-hover: #f0d060; --accent-fg: #1a1500;
-  --protein: #86d3ad; --carbs: #87bdf0; --fat: #eea682; --cal: #eacb57; --fiber: #c4a8f0;
-  --green: #67bc85; --red: #e06e6e;
+  /* Macro colors — semantic, not aesthetic. The user explicitly requested
+     protein=red, fat=yellow, carbs=green, cal=blue so the same hue means
+     the same nutrient everywhere in the app. */
+  --protein: #e06e6e; --carbs: #86d3ad; --fat: #eacb57; --cal: #87bdf0; --fiber: #c4a8f0;
+  --green: #67bc85; --red: #d95555;
   --overlay: rgba(0,0,0,0.7);
   --bg-grad-1: rgba(234,203,87,0.06);
   --bg-grad-2: rgba(135,189,240,0.04);
@@ -36,8 +39,10 @@
   --border: rgba(20,15,10,0.08); --border2: rgba(20,15,10,0.14);
   --text: #1f2118; --text2: #5b5e54; --text3: #8a8c83;
   --accent: #e8843a; --accent2: #c66a23; --accent-hover: #f0975a; --accent-fg: #ffffff;
-  --protein: #3aa377; --carbs: #3d88c6; --fat: #d96a72; --cal: #c89518; --fiber: #9870d4;
-  --green: #3aa377; --red: #c64a4a;
+  /* Macro colors — same semantic mapping as dark theme, just darkened to
+     read on white. protein=red, fat=yellow, carbs=green, cal=blue. */
+  --protein: #c64a4a; --carbs: #3aa377; --fat: #c89518; --cal: #3d88c6; --fiber: #9870d4;
+  --green: #3aa377; --red: #b03030;
   --overlay: rgba(20,15,10,0.45);
   --bg-grad-1: rgba(232,132,58,0.05);
   --bg-grad-2: rgba(58,163,119,0.04);
@@ -205,11 +210,11 @@ body {
 .result-desc { font-size: 13px; color: var(--text2); line-height: 1.5; }
 .macro-pills { display: flex; gap: 8px; flex-wrap: wrap; }
 .macro-pill { padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 500; border: 1px solid; }
-.pill-cal { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--cal); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
-.pill-p { background: rgba(126,200,160,0.1); color: var(--protein); border-color: rgba(126,200,160,0.25); }
-.pill-c { background: rgba(122,180,232,0.1); color: var(--carbs); border-color: rgba(122,180,232,0.25); }
-.pill-f { background: rgba(232,154,122,0.1); color: var(--fat); border-color: rgba(232,154,122,0.25); }
-.pill-fiber { background: rgba(170,150,220,0.1); color: #c4a8f0; border-color: rgba(170,150,220,0.25); }
+.pill-cal    { background: color-mix(in srgb, var(--cal)     10%, transparent); color: var(--cal);     border-color: color-mix(in srgb, var(--cal)     25%, transparent); }
+.pill-p      { background: color-mix(in srgb, var(--protein) 10%, transparent); color: var(--protein); border-color: color-mix(in srgb, var(--protein) 25%, transparent); }
+.pill-c      { background: color-mix(in srgb, var(--carbs)   10%, transparent); color: var(--carbs);   border-color: color-mix(in srgb, var(--carbs)   25%, transparent); }
+.pill-f      { background: color-mix(in srgb, var(--fat)     10%, transparent); color: var(--fat);     border-color: color-mix(in srgb, var(--fat)     25%, transparent); }
+.pill-fiber  { background: color-mix(in srgb, var(--fiber)   10%, transparent); color: var(--fiber);   border-color: color-mix(in srgb, var(--fiber)   25%, transparent); }
 .nutrition-detail { font-size: 12px; color: var(--text2); }
 .nutrition-detail span { color: var(--text); }
 .log-btn { padding: 10px 20px; background: var(--bg3); border: 1px solid var(--border2); color: var(--text); border-radius: var(--r); font-size: 13px; cursor: pointer; font-family: inherit; transition: all 0.15s; }
@@ -301,7 +306,7 @@ body {
     gap: 8px 14px;
   }
 }
-.leftovers-badge { font-size: 10px; background: rgba(122,180,232,0.15); color: var(--carbs); border-radius: 4px; padding: 1px 5px; margin-left: 4px; }
+.leftovers-badge { font-size: 10px; background: color-mix(in srgb, var(--carbs) 15%, transparent); color: var(--carbs); border-radius: 4px; padding: 1px 5px; margin-left: 4px; }
 
 /* MODALS */
 .modal-overlay { position: fixed; inset: 0; background: var(--overlay); display: none; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
