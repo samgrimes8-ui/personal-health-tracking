@@ -116,6 +116,7 @@ let state = {
   recipeTab: 'ingredients',
   recipeServings: null, // 'ingredients' | 'instructions'  // recipe being edited in modal
   cookingMode: null, // { recipeId, stepIndex } when in read-aloud mode; null otherwise
+  cookingVoiceOff: localStorage.getItem('macrolens_voice_off') === '1', // silent step-through mode
 }
 
 // Safe local date string — avoids UTC timezone shift from toISOString()
@@ -3914,6 +3915,70 @@ function scaleStepText(step, baseServings, targetServings) {
       return `<strong style="color:var(--accent)">${display}</strong> ${unit}`
     }
   )
+}
+
+// Spoken-form rendering for TTS. Same scaling logic as scaleStepText, but the
+// output is plain English: "0.5 tbsp" → "half a tablespoon", "350°F" →
+// "350 degrees Fahrenheit", "¾ cup" → "three quarters of a cup". Strips any
+// HTML so the speech engine doesn't pronounce tags.
+//
+// Kept in sync with speechifyStepText() in api/tts.js — if you change either
+// copy, change both.
+const _UNIT_FORMS = {
+  cup:['cup','cups'], cups:['cup','cups'],
+  tbsp:['tablespoon','tablespoons'], tbsps:['tablespoon','tablespoons'],
+  tablespoon:['tablespoon','tablespoons'], tablespoons:['tablespoon','tablespoons'],
+  tsp:['teaspoon','teaspoons'], tsps:['teaspoon','teaspoons'],
+  teaspoon:['teaspoon','teaspoons'], teaspoons:['teaspoon','teaspoons'],
+  oz:['ounce','ounces'], ounce:['ounce','ounces'], ounces:['ounce','ounces'],
+  lb:['pound','pounds'], lbs:['pound','pounds'],
+  pound:['pound','pounds'], pounds:['pound','pounds'],
+  g:['gram','grams'], kg:['kilogram','kilograms'],
+  ml:['milliliter','milliliters'], l:['liter','liters'],
+  liter:['liter','liters'], liters:['liter','liters'],
+  litre:['liter','liters'], litres:['liter','liters'],
+  clove:['clove','cloves'], cloves:['clove','cloves'],
+  slice:['slice','slices'], slices:['slice','slices'],
+  piece:['piece','pieces'], pieces:['piece','pieces'],
+  can:['can','cans'], cans:['can','cans'],
+  pint:['pint','pints'], pints:['pint','pints'],
+  quart:['quart','quarts'], quarts:['quart','quarts'],
+}
+function _phraseQty(q, unit, vowelStart) {
+  const article = vowelStart ? 'an' : 'a'
+  const r = Math.round(q * 4) / 4
+  const whole = Math.floor(r)
+  const frac = r - whole
+  if (whole === 0 && frac === 0.5)  return `half ${article} ${unit}`
+  if (whole === 0 && frac === 0.25) return `a quarter ${unit}`
+  if (whole === 0 && frac === 0.75) return `three quarters of ${article} ${unit}`
+  if (whole > 0  && frac === 0)     return `${whole} ${unit}`
+  if (whole > 0  && frac === 0.5)   return `${whole} and a half ${unit}`
+  if (whole > 0  && frac === 0.25)  return `${whole} and a quarter ${unit}`
+  if (whole > 0  && frac === 0.75)  return `${whole} and three quarters ${unit}`
+  return `${q} ${unit}`
+}
+function speechifyStepText(step, baseServings, targetServings) {
+  if (!step) return ''
+  let out = String(step).replace(/<[^>]*>/g, '')
+  out = out.replace(/½/g, '0.5').replace(/¼/g, '0.25').replace(/¾/g, '0.75')
+           .replace(/⅓/g, '0.333').replace(/⅔/g, '0.667')
+  out = out.replace(/(\d+)\s*°\s*([FC])\b/g, (_, n, u) => `${n} degrees ${u === 'F' ? 'Fahrenheit' : 'Celsius'}`)
+  const mult = (baseServings && targetServings) ? targetServings / baseServings : 1
+  const re = /(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*(cups?|tbsps?|tablespoons?|tsps?|teaspoons?|oz|ounces?|lbs?|pounds?|\bg\b|kg|ml|l|liters?|litres?|cloves?|slices?|pieces?|cans?|pints?|quarts?)?/gi
+  return out.replace(re, (match, qStr, uStr) => {
+    let q
+    const m = qStr.match(/^(\d+)\s+(\d+)\/(\d+)$/)
+    if (m) q = parseInt(m[1], 10) + Number(m[2]) / Number(m[3])
+    else if (qStr.includes('/')) { const [n, d] = qStr.split('/').map(Number); q = n / d }
+    else q = parseFloat(qStr)
+    if (!isFinite(q)) return match
+    q = q * mult
+    if (!uStr) return match  // bare numbers without a unit stay as-is
+    const forms = _UNIT_FORMS[uStr.toLowerCase()] || [uStr, uStr]
+    const unit = forms[q !== 1 ? 1 : 0]
+    return _phraseQty(q, unit, /^[aeio]/i.test(unit))
+  })
 }
 
 function renderIngredientRow(ing, idx, editable, targetServings, baseServings) {
@@ -10167,6 +10232,7 @@ function wireGlobals() {
   function speakStep(text, ctx) {
     stopAudio()
     if (!text) return
+    if (state.cookingVoiceOff) return  // silent mode — visuals only
 
     const premium = ctx ? getSelectedPremiumVoice() : null
     if (premium && ctx?.recipeId != null && ctx.instructionsVersion != null) {
@@ -10218,8 +10284,12 @@ function wireGlobals() {
 
   function speakStepFree(text) {
     if (!('speechSynthesis' in window)) return
+    // Browser path: speechify the text the same way the server does for OpenAI,
+    // so "0.5 tbsp" reads as "half a tablespoon" instead of "zero point five
+    // tee-bee-ess-pee".
+    const spoken = speechifyStepText(text, 1, 1)
     window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(text)
+    const utterance = new SpeechSynthesisUtterance(spoken)
     utterance.rate = 0.95
     utterance.pitch = 1.0
     utterance.volume = 1.0
@@ -10235,8 +10305,10 @@ function wireGlobals() {
       showToast('No instructions to read', 'error')
       return
     }
-    if (!('speechSynthesis' in window)) {
-      showToast('Read-aloud not supported in this browser', 'error')
+    // Voice-off mode doesn't need speechSynthesis — only the browser-TTS
+    // fallback does. Premium voices route through OpenAI MP3 playback.
+    if (!state.cookingVoiceOff && !('speechSynthesis' in window)) {
+      showToast('Read-aloud not supported in this browser. Toggle Voice off to step through silently.', 'error')
       return
     }
     state.cookingMode = { recipeId, stepIndex: 0 }
@@ -10278,20 +10350,27 @@ function wireGlobals() {
         <button onclick="closeCookingMode()" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);width:36px;height:36px;border-radius:50%;cursor:pointer;font-family:inherit;font-size:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0">×</button>
       </div>
 
-      <!-- Voice indicator chip — shows the currently-active voice and
-           lets the user pick a different one. Subtle since this is a
-           secondary control; the cooking flow is the primary action. -->
+      <!-- Voice controls — picker chip + on/off toggle. Both subtle: the
+           cooking flow is the primary action, audio config is secondary. -->
       ${(() => {
+        const off = !!state.cookingVoiceOff
         const premium = getSelectedPremiumVoice()
         const label = '✨ ' + (PREMIUM_VOICES.find(v => v.id === premium)?.label || premium)
         return `
-          <div style="display:flex;justify-content:center;margin-bottom:20px">
+          <div style="display:flex;justify-content:center;gap:8px;margin-bottom:20px;flex-wrap:wrap">
             <button onclick="openVoicePicker()"
-              title="Change the read-aloud voice"
-              style="background:var(--bg3);border:1px solid var(--border);color:var(--text3);padding:6px 12px;border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px">
+              title="${off ? 'Voice is off — turn it on to pick a voice' : 'Change the read-aloud voice'}"
+              ${off ? 'disabled' : ''}
+              style="background:var(--bg3);border:1px solid var(--border);color:var(--text3);padding:6px 12px;border-radius:999px;font-size:11px;cursor:${off ? 'not-allowed' : 'pointer'};font-family:inherit;display:inline-flex;align-items:center;gap:6px;opacity:${off ? '0.4' : '1'}">
               <span style="font-size:13px">🗣️</span>
               <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px">${esc(label)}</span>
               <span style="opacity:0.5">⌄</span>
+            </button>
+            <button onclick="toggleCookingVoice()"
+              title="${off ? 'Turn voice on' : 'Read silently — no audio'}"
+              style="background:${off ? 'var(--accent)' : 'var(--bg3)'};border:1px solid ${off ? 'var(--accent)' : 'var(--border)'};color:${off ? 'var(--bg)' : 'var(--text3)'};padding:6px 12px;border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px;font-weight:${off ? '600' : '400'}">
+              <span style="font-size:13px">${off ? '🔇' : '🔈'}</span>
+              <span>${off ? 'Voice off' : 'Voice on'}</span>
             </button>
           </div>
         `
@@ -10321,14 +10400,16 @@ function wireGlobals() {
             ← Back
           </button>
         ` : ''}
-        <button onclick="togglePauseCookingStep()"
-          style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:14px 20px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:500;min-width:90px">
-          ${_isPaused ? '▶ Resume' : '⏸ Pause'}
-        </button>
-        <button onclick="repeatCookingStep()"
-          style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:14px 20px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:500;min-width:90px">
-          ↻ Repeat
-        </button>
+        ${!state.cookingVoiceOff ? `
+          <button onclick="togglePauseCookingStep()"
+            style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:14px 20px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:500;min-width:90px">
+            ${_isPaused ? '▶ Resume' : '⏸ Pause'}
+          </button>
+          <button onclick="repeatCookingStep()"
+            style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:14px 20px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:500;min-width:90px">
+            ↻ Repeat
+          </button>
+        ` : ''}
         <button onclick="nextCookingStep()"
           style="background:var(--accent);border:none;color:var(--bg);padding:14px 22px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:600;min-width:120px">
           ${isLast ? '✓ Done' : 'Next →'}
@@ -10356,6 +10437,22 @@ function wireGlobals() {
   window.togglePauseCookingStep = () => {
     const changed = _isPaused ? resumeSpeech() : pauseSpeech()
     if (changed && state.cookingMode) renderCookingMode()
+  }
+
+  window.toggleCookingVoice = () => {
+    state.cookingVoiceOff = !state.cookingVoiceOff
+    localStorage.setItem('macrolens_voice_off', state.cookingVoiceOff ? '1' : '0')
+    if (state.cookingVoiceOff) {
+      stopAudio()
+    } else if (state.cookingMode) {
+      // Re-enable: speak the current step so the change is immediately
+      // perceptible.
+      const recipe = state.recipes.find(r => r.id === state.cookingMode.recipeId)
+      const steps = recipe?.instructions?.steps || []
+      const step = steps[state.cookingMode.stepIndex]
+      if (step) speakStep(step, cookingStepCtx(recipe, state.cookingMode.stepIndex))
+    }
+    if (state.cookingMode) renderCookingMode()
   }
 
   window.nextCookingStep = () => {

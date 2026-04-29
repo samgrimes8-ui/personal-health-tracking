@@ -137,7 +137,10 @@ export default async function handler(req) {
   if (!rawStep || typeof rawStep !== 'string') {
     return json({ error: 'Step not found' }, 404)
   }
-  const stepText = scaleStepText(rawStep, recipe.servings || 1, servings)
+  // Spoken form: "0.5 tbsp" → "half a tablespoon", "350°F" → "350 degrees
+  // Fahrenheit", etc. Same scaling as the display path but rendered for TTS
+  // so the OpenAI model doesn't recite "zero point five tee bee ess pee."
+  const stepText = speechifyStepText(rawStep, recipe.servings || 1, servings)
   if (!stepText.trim()) {
     return json({ error: 'Step is empty' }, 400)
   }
@@ -281,35 +284,68 @@ export default async function handler(req) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Step text scaler — kept in sync with scaleStepText() in src/pages/app.js.
-// Strips the <strong> wrapper the client adds for visual emphasis (the
-// TTS engine doesn't speak HTML tags well). Same regex, same fraction
-// rounding, same fracMap output. If you change either copy, change both.
+// Speechify — converts a recipe step into TTS-friendly English, scaling
+// quantities by servings on the way through. Strips HTML, expands unit
+// abbreviations, spells fractions, and rephrases temperatures.
+//
+// Kept in sync with speechifyStepText() in src/pages/app.js. If you
+// change either copy, change both.
 // ─────────────────────────────────────────────────────────────────────
-function scaleStepText(step, baseServings, targetServings) {
-  if (!baseServings || !targetServings || baseServings === targetServings) return step
-  const multiplier = targetServings / baseServings
-  return step.replace(
-    /(\d+(?:\.\d+)?(?:\/\d+)?)\s*(cups?|tbsp|tablespoons?|tsp|teaspoons?|oz|ounces?|lbs?|pounds?|\bg\b|kg|ml|liters?|litres?|cloves?|slices?|pieces?|cans?|pints?|quarts?)/gi,
-    (match, num, unit) => {
-      const base = num.includes('/')
-        ? (() => { const [n, d] = num.split('/').map(Number); return n / d })()
-        : parseFloat(num)
-      const scaled = base * multiplier
-      let display
-      if (scaled % 1 === 0) display = String(scaled)
-      else {
-        const rounded = Math.round(scaled * 4) / 4
-        const whole = Math.floor(rounded)
-        const frac = rounded - whole
-        const fracMap = { 0.25: 'a quarter', 0.5: 'a half', 0.75: 'three quarters' }
-        display = whole > 0
-          ? whole + (frac ? ' and ' + (fracMap[frac] || frac) : '')
-          : (fracMap[frac] || +scaled.toFixed(2))
-      }
-      return `${display} ${unit}`
-    }
-  )
+const UNIT_FORMS = {
+  cup:['cup','cups'], cups:['cup','cups'],
+  tbsp:['tablespoon','tablespoons'], tbsps:['tablespoon','tablespoons'],
+  tablespoon:['tablespoon','tablespoons'], tablespoons:['tablespoon','tablespoons'],
+  tsp:['teaspoon','teaspoons'], tsps:['teaspoon','teaspoons'],
+  teaspoon:['teaspoon','teaspoons'], teaspoons:['teaspoon','teaspoons'],
+  oz:['ounce','ounces'], ounce:['ounce','ounces'], ounces:['ounce','ounces'],
+  lb:['pound','pounds'], lbs:['pound','pounds'],
+  pound:['pound','pounds'], pounds:['pound','pounds'],
+  g:['gram','grams'], kg:['kilogram','kilograms'],
+  ml:['milliliter','milliliters'], l:['liter','liters'],
+  liter:['liter','liters'], liters:['liter','liters'],
+  litre:['liter','liters'], litres:['liter','liters'],
+  clove:['clove','cloves'], cloves:['clove','cloves'],
+  slice:['slice','slices'], slices:['slice','slices'],
+  piece:['piece','pieces'], pieces:['piece','pieces'],
+  can:['can','cans'], cans:['can','cans'],
+  pint:['pint','pints'], pints:['pint','pints'],
+  quart:['quart','quarts'], quarts:['quart','quarts'],
+}
+function phraseQty(q, unit, vowelStart) {
+  const article = vowelStart ? 'an' : 'a'
+  const r = Math.round(q * 4) / 4
+  const whole = Math.floor(r)
+  const frac = r - whole
+  if (whole === 0 && frac === 0.5)  return `half ${article} ${unit}`
+  if (whole === 0 && frac === 0.25) return `a quarter ${unit}`
+  if (whole === 0 && frac === 0.75) return `three quarters of ${article} ${unit}`
+  if (whole > 0  && frac === 0)     return `${whole} ${unit}`
+  if (whole > 0  && frac === 0.5)   return `${whole} and a half ${unit}`
+  if (whole > 0  && frac === 0.25)  return `${whole} and a quarter ${unit}`
+  if (whole > 0  && frac === 0.75)  return `${whole} and three quarters ${unit}`
+  return `${q} ${unit}`
+}
+function speechifyStepText(step, baseServings, targetServings) {
+  if (!step) return ''
+  let out = String(step).replace(/<[^>]*>/g, '')
+  out = out.replace(/½/g, '0.5').replace(/¼/g, '0.25').replace(/¾/g, '0.75')
+           .replace(/⅓/g, '0.333').replace(/⅔/g, '0.667')
+  out = out.replace(/(\d+)\s*°\s*([FC])\b/g, (_, n, u) => `${n} degrees ${u === 'F' ? 'Fahrenheit' : 'Celsius'}`)
+  const mult = (baseServings && targetServings) ? targetServings / baseServings : 1
+  const re = /(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*(cups?|tbsps?|tablespoons?|tsps?|teaspoons?|oz|ounces?|lbs?|pounds?|\bg\b|kg|ml|l|liters?|litres?|cloves?|slices?|pieces?|cans?|pints?|quarts?)?/gi
+  return out.replace(re, (match, qStr, uStr) => {
+    let q
+    const m = qStr.match(/^(\d+)\s+(\d+)\/(\d+)$/)
+    if (m) q = parseInt(m[1], 10) + Number(m[2]) / Number(m[3])
+    else if (qStr.includes('/')) { const [n, d] = qStr.split('/').map(Number); q = n / d }
+    else q = parseFloat(qStr)
+    if (!isFinite(q)) return match
+    q = q * mult
+    if (!uStr) return match
+    const forms = UNIT_FORMS[uStr.toLowerCase()] || [uStr, uStr]
+    const unit = forms[q !== 1 ? 1 : 0]
+    return phraseQty(q, unit, /^[aeio]/i.test(unit))
+  })
 }
 
 function json(data, status = 200) {
