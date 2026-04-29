@@ -18,7 +18,7 @@ import {
   followProvider, unfollowProvider, getFollowedProviders, isFollowingProvider,
   getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar,
   createMealPlanShare, getMealPlanShareByToken, getMyMealPlanShares, revokeMealPlanShare,
-  copyMealPlanShareToPlanner,
+  copyMealPlanShareToPlanner, saveSharedRecipeFromPlannerRow,
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
 import { categorizeByName, parseAmount, canonicalizeName } from '../lib/categorize.js'
@@ -2217,9 +2217,15 @@ function renderMealPlanView(planner) {
                       </div>
                       <div style="font-size:10px;color:var(--text3);margin-top:1px">${Math.round(m.calories || 0)} kcal · P${Math.round(m.protein||0)}g C${Math.round(m.carbs||0)}g F${Math.round(m.fat||0)}g</div>
                     </div>
-                    ${m.recipe_id ? `<button onclick="viewPlannerRecipe('${m.recipe_id}', event)"
-                      title="View recipe"
-                      style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1">📖</button>` : ''}
+                    ${m.recipe_id
+                      ? `<button onclick="viewPlannerRecipe('${m.recipe_id}', event)"
+                          title="View recipe"
+                          style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1">📖</button>`
+                      : (m.from_share_token
+                          ? `<button onclick="viewSharedRecipe('${m.id}', event)"
+                              title="View recipe (from a shared plan)"
+                              style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1">📖</button>`
+                          : '')}
                     <button onclick="openMovePlannerMealMenu('${m.id}', '${m.actual_date || dateStr}', this);event.stopPropagation()"
                       style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:2px 4px;flex-shrink:0;line-height:1"
                       title="Move to another day">↔</button>
@@ -9008,21 +9014,59 @@ function wireGlobals() {
           ${items.map((item, i) => {
             const dayLabel = DAY_NAMES[item.day_of_week] || ''
             const mealName = item.meal_name || item.recipe_snapshot?.name || 'Meal'
-            const cal = Math.round(Number(item.recipe_snapshot?.calories || 0))
+            const s = item.recipe_snapshot || {}
+            const cal = Math.round(Number(s.calories || 0))
+            const ingredients = Array.isArray(s.ingredients) ? s.ingredients : []
+            const steps = Array.isArray(s.instructions?.steps) ? s.instructions.steps : []
+            const hasRecipe = !item.is_leftover && (ingredients.length || steps.length || s.description)
             return `
-              <label style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer">
-                <input type="checkbox" class="share-save-recipe" data-idx="${i}"
-                  ${item.recipe_snapshot ? '' : 'disabled'}
-                  style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer" />
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:13px;color:var(--text);font-weight:500">${esc(mealName)}</div>
-                  <div style="font-size:11px;color:var(--text3);margin-top:1px">
-                    ${esc(dayLabel)} · ${esc(item.meal_type || '—')} · ${cal} kcal
-                    ${item.is_leftover ? ' · ↩ leftover' : ''}
-                    ${!item.recipe_snapshot ? ' · no recipe attached' : ''}
+              <div style="padding:8px 0;border-bottom:1px solid var(--border)">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+                  <input type="checkbox" class="share-save-recipe" data-idx="${i}"
+                    ${item.recipe_snapshot ? '' : 'disabled'}
+                    style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer" />
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:13px;color:var(--text);font-weight:500">${esc(mealName)}</div>
+                    <div style="font-size:11px;color:var(--text3);margin-top:1px">
+                      ${esc(dayLabel)} · ${esc(item.meal_type || '—')} · ${cal} kcal
+                      ${item.is_leftover ? ' · ↩ leftover' : ''}
+                      ${!item.recipe_snapshot ? ' · no recipe attached' : ''}
+                    </div>
                   </div>
-                </div>
-              </label>
+                  ${hasRecipe ? `
+                    <button type="button" onclick="event.preventDefault();toggleShareRecipePreview(${i})"
+                      style="background:none;border:1px solid var(--border2);color:var(--text3);font-size:11px;padding:4px 9px;border-radius:var(--r);font-family:inherit;cursor:pointer;white-space:nowrap"
+                      onmouseover="this.style.color='var(--accent)';this.style.borderColor='var(--accent)'"
+                      onmouseout="this.style.color='var(--text3)';this.style.borderColor='var(--border2)'">
+                      View recipe
+                    </button>
+                  ` : ''}
+                </label>
+                ${hasRecipe ? `
+                  <div id="share-recipe-${i}" style="display:none;margin-top:10px;margin-left:26px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);font-size:12px;line-height:1.55">
+                    ${s.description ? `<div style="color:var(--text2);margin-bottom:8px">${esc(s.description)}</div>` : ''}
+                    ${ingredients.length ? `
+                      <div style="margin-bottom:8px">
+                        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:4px;font-weight:600">Ingredients</div>
+                        <ul style="margin:0;padding-left:16px;color:var(--text2)">
+                          ${ingredients.map(ing => {
+                            const head = [ing.amount || '', ing.unit || ''].filter(Boolean).join(' ')
+                            return `<li style="padding:1px 0">${esc([head, ing.name].filter(Boolean).join(' '))}</li>`
+                          }).join('')}
+                        </ul>
+                      </div>
+                    ` : ''}
+                    ${steps.length ? `
+                      <div>
+                        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:4px;font-weight:600">Instructions</div>
+                        <ol style="margin:0;padding-left:18px;color:var(--text2)">
+                          ${steps.map(step => `<li style="padding:1px 0">${esc(step)}</li>`).join('')}
+                        </ol>
+                      </div>
+                    ` : ''}
+                  </div>
+                ` : ''}
+              </div>
             `
           }).join('')}
         </div>
@@ -9040,6 +9084,148 @@ function wireGlobals() {
     document.querySelectorAll('.share-save-recipe').forEach(el => {
       if (!el.disabled) el.checked = checked
     })
+  }
+
+  window.toggleShareRecipePreview = (idx) => {
+    const el = document.getElementById(`share-recipe-${idx}`)
+    if (!el) return
+    el.style.display = el.style.display === 'none' ? 'block' : 'none'
+  }
+
+  // Open a read-only view of a recipe attached to a planner row that came
+  // from a share where the recipient skipped the recipe import. The modal
+  // also surfaces a "Save to my library" button so the user can change
+  // their mind without re-opening the share link.
+  window.viewSharedRecipe = async (plannerMealId, ev) => {
+    if (ev) ev.stopPropagation()
+    // Find the planner row in state. The planner stores meals in a 7-day
+    // grid (state.planner.meals[dayIndex]), so flatten to find by id.
+    const meals = (state.planner?.meals || []).flat()
+    const meal = meals.find(m => String(m.id) === String(plannerMealId))
+    if (!meal?.from_share_token) {
+      showToast('No shared recipe linked to this meal', 'error')
+      return
+    }
+
+    // Loading placeholder while we resolve the snapshot.
+    document.getElementById('shared-recipe-modal')?.remove()
+    const modal = document.createElement('div')
+    modal.id = 'shared-recipe-modal'
+    modal.className = 'modal-overlay open'
+    modal.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:16px;z-index:200'
+    modal.innerHTML = `
+      <div class="modal-box" style="max-width:560px;width:100%;max-height:88vh;display:flex;flex-direction:column">
+        <button class="modal-close" onclick="document.getElementById('shared-recipe-modal')?.remove()">×</button>
+        <div style="padding:30px 0;text-align:center;color:var(--text3);font-size:13px">Loading recipe…</div>
+      </div>
+    `
+    document.body.appendChild(modal)
+
+    const share = await getMealPlanShareByToken(meal.from_share_token).catch(() => null)
+    const item = share?.plan_data?.[meal.from_share_index]
+    const snap = item?.recipe_snapshot
+
+    if (!snap) {
+      modal.querySelector('.modal-box').innerHTML = `
+        <button class="modal-close" onclick="document.getElementById('shared-recipe-modal')?.remove()">×</button>
+        <h3 style="font-family:'DM Serif Display',serif;font-size:18px;margin-bottom:8px">Recipe unavailable</h3>
+        <div style="font-size:13px;color:var(--text3);line-height:1.5">
+          The original share has been revoked or no longer contains this recipe. The meal will stay on your planner with its name and macros, but there's nothing to import.
+        </div>
+      `
+      return
+    }
+
+    const ingredients = Array.isArray(snap.ingredients) ? snap.ingredients : []
+    const steps = Array.isArray(snap.instructions?.steps) ? snap.instructions.steps : []
+    const tips = Array.isArray(snap.instructions?.tips) ? snap.instructions.tips : []
+
+    modal.querySelector('.modal-box').innerHTML = `
+      <button class="modal-close" onclick="document.getElementById('shared-recipe-modal')?.remove()">×</button>
+      <div style="overflow-y:auto;flex:1;padding-right:4px">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:6px;font-weight:600">From a shared plan</div>
+        <h3 style="font-family:'DM Serif Display',serif;font-size:22px;margin-bottom:6px">${esc(snap.name || meal.meal_name)}</h3>
+        ${snap.description ? `<div style="font-size:13px;color:var(--text2);line-height:1.55;margin-bottom:14px">${esc(snap.description)}</div>` : ''}
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px">
+          <span class="macro-pill pill-cal">${Math.round(Number(snap.calories || 0))} kcal</span>
+          <span class="macro-pill pill-p">${Math.round(Number(snap.protein || 0))}g protein</span>
+          <span class="macro-pill pill-c">${Math.round(Number(snap.carbs || 0))}g carbs</span>
+          <span class="macro-pill pill-f">${Math.round(Number(snap.fat || 0))}g fat</span>
+        </div>
+
+        ${ingredients.length ? `
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px;font-weight:600">Ingredients</div>
+            <ul style="list-style:none;padding:0;margin:0">
+              ${ingredients.map(ing => {
+                const head = [ing.amount || '', ing.unit || ''].filter(Boolean).join(' ')
+                return `<li style="font-size:13px;color:var(--text2);line-height:1.55;padding:3px 0 3px 14px;position:relative">
+                  <span style="position:absolute;left:0;color:var(--text3)">•</span>
+                  ${esc([head, ing.name].filter(Boolean).join(' '))}
+                </li>`
+              }).join('')}
+            </ul>
+          </div>
+        ` : ''}
+
+        ${steps.length ? `
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px;font-weight:600">Instructions</div>
+            <ol style="list-style:decimal;padding-left:22px;margin:0">
+              ${steps.map(step => `<li style="font-size:13px;color:var(--text);line-height:1.6;padding:4px 0">${esc(step)}</li>`).join('')}
+            </ol>
+          </div>
+        ` : ''}
+
+        ${tips.length ? `
+          <div style="margin-bottom:18px;padding:10px 12px;background:var(--bg3);border-radius:var(--r);border:1px solid var(--border)">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:6px;font-weight:600">💡 Tips</div>
+            ${tips.map(t => `<div style="font-size:12px;color:var(--text2);line-height:1.5;padding:2px 0">• ${esc(t)}</div>`).join('')}
+          </div>
+        ` : ''}
+
+        ${snap.source_url ? `
+          <div style="font-size:11px;color:var(--text3);margin-bottom:18px;word-break:break-all">
+            Source: <a href="${esc(snap.source_url)}" target="_blank" rel="noopener" style="color:var(--carbs)">${esc(snap.source_url)}</a>
+          </div>
+        ` : ''}
+      </div>
+
+      <div style="display:flex;gap:10px;border-top:1px solid var(--border);padding-top:14px;margin-top:6px">
+        <button class="btn-cancel" onclick="document.getElementById('shared-recipe-modal')?.remove()">Close</button>
+        <button class="btn-save" id="shared-recipe-save-btn" onclick="saveSharedRecipeHandler('${plannerMealId}')">
+          ⭐ Save to my library
+        </button>
+      </div>
+    `
+  }
+
+  window.saveSharedRecipeHandler = async (plannerMealId) => {
+    const btn = document.getElementById('shared-recipe-save-btn')
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…' }
+    try {
+      const recipe = await saveSharedRecipeFromPlannerRow(state.user.id, plannerMealId)
+      // Add the new recipe to local state and update the planner row's
+      // recipe_id so the planner re-renders with the standard 📖 (recipe_id)
+      // view-recipe button instead of the share variant.
+      state.recipes = state.recipes || []
+      if (!state.recipes.find(r => r.id === recipe.id)) state.recipes.unshift(recipe)
+      const meals = (state.planner?.meals || []).flat()
+      const meal = meals.find(m => String(m.id) === String(plannerMealId))
+      if (meal) {
+        meal.recipe_id = recipe.id
+        meal.from_share_token = null
+        meal.from_share_index = null
+      }
+      document.getElementById('shared-recipe-modal')?.remove()
+      showToast(`Saved "${recipe.name}" to your library`, 'success')
+      renderPage()
+    } catch (err) {
+      console.error('[saveSharedRecipe] failed:', err)
+      showToast('Could not save: ' + err.message, 'error')
+      if (btn) { btn.disabled = false; btn.textContent = '⭐ Save to my library' }
+    }
   }
 
   window.confirmIncomingShareCopy = async (token) => {

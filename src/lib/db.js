@@ -1884,3 +1884,82 @@ export async function copyMealPlanShareToPlanner(userId, share, targetWeekStart,
 
   return { mealsCopied: inserted?.length || 0, recipesAdded }
 }
+
+// Late-import a recipe from the share that produced a given planner row.
+// Used when the recipient skipped saving the recipe at copy time and later
+// changes their mind from the planner.
+//
+// Two-step: insert into recipes (deduping by source_recipe_id), then update
+// the planner row to point at the new recipe and clear the from_share_*
+// provenance columns. Returns the imported recipe row so the UI can refresh
+// state.recipes without a full reload.
+export async function saveSharedRecipeFromPlannerRow(userId, plannerMealId) {
+  if (!supabase) return null
+
+  // Pull the planner row's provenance.
+  const { data: meal, error: mErr } = await supabase
+    .from('meal_planner')
+    .select('id, from_share_token, from_share_index')
+    .eq('id', plannerMealId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (mErr) throw mErr
+  if (!meal?.from_share_token || meal.from_share_index == null) {
+    throw new Error('This meal is not linked to a share')
+  }
+
+  // Resolve the recipe snapshot from the share.
+  const share = await getMealPlanShareByToken(meal.from_share_token)
+  if (!share) throw new Error('The original share is no longer active')
+  const item = (share.plan_data || [])[meal.from_share_index]
+  const snap = item?.recipe_snapshot
+  if (!snap) throw new Error('The original share has no recipe for this meal')
+
+  // Dedupe: if user already imported this exact source_recipe_id, reuse.
+  let recipe
+  if (item.recipe_id) {
+    const { data: existing } = await supabase
+      .from('recipes')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('source_recipe_id', item.recipe_id)
+      .maybeSingle()
+    if (existing) recipe = existing
+  }
+
+  if (!recipe) {
+    const { data: created, error: rErr } = await supabase
+      .from('recipes')
+      .insert({
+        user_id: userId,
+        name: snap.name,
+        servings: snap.servings || 1,
+        ingredients: snap.ingredients || [],
+        instructions: snap.instructions || null,
+        calories: snap.calories,
+        protein: snap.protein,
+        carbs: snap.carbs,
+        fat: snap.fat,
+        fiber: snap.fiber,
+        sugar: snap.sugar,
+        description: snap.description,
+        tags: snap.tags || [],
+        source_url: snap.source_url,
+        source_recipe_id: item.recipe_id || null,
+      })
+      .select()
+      .single()
+    if (rErr) throw rErr
+    recipe = created
+  }
+
+  // Re-point the planner row at the imported recipe and drop provenance.
+  const { error: uErr } = await supabase
+    .from('meal_planner')
+    .update({ recipe_id: recipe.id, from_share_token: null, from_share_index: null })
+    .eq('id', plannerMealId)
+    .eq('user_id', userId)
+  if (uErr) throw uErr
+
+  return recipe
+}

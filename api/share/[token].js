@@ -132,6 +132,22 @@ export default async function handler(req, res) {
     .pill-f { background: rgba(234,203,87,0.12); color: #eacb57 }
     .servings { font-size: 11px; color: #555; margin-top: 4px }
     .leftover-tag { font-size: 10px; color: #87bdf0; margin-top: 4px }
+    .meal-card details { margin-top: 10px; border-top: 1px solid #222; padding-top: 10px }
+    .meal-card details > summary { cursor: pointer; font-size: 12px; color: #888; list-style: none; user-select: none; display: inline-flex; align-items: center; gap: 6px }
+    .meal-card details > summary::-webkit-details-marker { display: none }
+    .meal-card details > summary::before { content: '▸'; font-size: 9px; color: #666; transition: transform 0.15s; display: inline-block }
+    .meal-card details[open] > summary::before { transform: rotate(90deg) }
+    .meal-card details > summary:hover { color: #ccc }
+    .recipe-section { margin-top: 12px }
+    .recipe-section h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 6px; font-weight: 600 }
+    .recipe-section ul { list-style: none; padding: 0; margin: 0 }
+    .recipe-section li { font-size: 13px; color: #ccc; line-height: 1.55; padding: 3px 0; padding-left: 14px; position: relative }
+    .recipe-section li::before { content: '•'; position: absolute; left: 2px; color: #555 }
+    .recipe-section ol { list-style: none; padding: 0; margin: 0; counter-reset: step }
+    .recipe-section ol li { counter-increment: step; padding-left: 28px }
+    .recipe-section ol li::before { content: counter(step); position: absolute; left: 0; top: 4px; font-size: 11px; font-weight: 700; color: #E8C547; background: rgba(232,197,71,0.1); border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center }
+    .recipe-source { font-size: 11px; color: #555; margin-top: 10px; word-break: break-all }
+    .recipe-source a { color: #87bdf0; text-decoration: none }
     .cta { position: fixed; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, #0f0e0d 80%, transparent); padding: 20px 16px 28px }
     .cta-inner { max-width: 640px; margin: 0 auto; display: flex; gap: 10px }
     .btn-primary { flex: 1; background: #E8C547; color: #1a1500; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; text-align: center; text-decoration: none; display: block }
@@ -170,6 +186,53 @@ export default async function handler(req, res) {
           const typeLabel = mealTypeLabels[m.meal_type] || ''
           const mealName = m.meal_name || s.name || 'Meal'
           const srv = m.planned_servings || 1
+          // Recipe expansion: only render the details block when we actually
+          // have ingredients or instructions to show. Leftovers point at the
+          // original cook elsewhere in the week so we don't repeat the
+          // recipe content here.
+          const ingredients = Array.isArray(s.ingredients) ? s.ingredients : []
+          const steps = Array.isArray(s.instructions?.steps) ? s.instructions.steps : []
+          const tips = Array.isArray(s.instructions?.tips) ? s.instructions.tips : []
+          const hasRecipe = !m.is_leftover && (ingredients.length || steps.length || s.description)
+
+          const ingredientsHtml = ingredients.length ? `
+            <div class="recipe-section">
+              <h4>Ingredients</h4>
+              <ul>
+                ${ingredients.map(ing => {
+                  const amt = ing.amount || ''
+                  const unit = ing.unit || ''
+                  const head = [amt, unit].filter(Boolean).join(' ')
+                  return `<li>${esc([head, ing.name].filter(Boolean).join(' '))}</li>`
+                }).join('')}
+              </ul>
+            </div>` : ''
+
+          const instructionsHtml = steps.length ? `
+            <div class="recipe-section">
+              <h4>Instructions</h4>
+              <ol>
+                ${steps.map(step => `<li>${esc(step)}</li>`).join('')}
+              </ol>
+            </div>` : ''
+
+          const tipsHtml = tips.length ? `
+            <div class="recipe-section">
+              <h4>Tips</h4>
+              <ul>
+                ${tips.map(t => `<li>${esc(t)}</li>`).join('')}
+              </ul>
+            </div>` : ''
+
+          const descHtml = s.description ? `
+            <div class="recipe-section" style="font-size:13px;color:#ccc;line-height:1.55">
+              ${esc(s.description)}
+            </div>` : ''
+
+          const sourceHtml = s.source_url ? `
+            <div class="recipe-source">Source: <a href="${esc(s.source_url)}" target="_blank" rel="noopener">${esc(s.source_url)}</a></div>
+          ` : ''
+
           return `<div class="meal-card">
             ${typeLabel ? `<div class="meal-type">${typeLabel}</div>` : ''}
             <div class="meal-name">${esc(mealName)}</div>
@@ -181,6 +244,16 @@ export default async function handler(req, res) {
             </div>
             ${srv !== 1 ? `<div class="servings">${srv} serving${srv !== 1 ? 's' : ''}</div>` : ''}
             ${m.is_leftover ? `<div class="leftover-tag">↩ Planned as leftovers</div>` : ''}
+            ${hasRecipe ? `
+              <details>
+                <summary>View recipe</summary>
+                ${descHtml}
+                ${ingredientsHtml}
+                ${instructionsHtml}
+                ${tipsHtml}
+                ${sourceHtml}
+              </details>
+            ` : ''}
           </div>`
         }).join('')}
       </div>`
