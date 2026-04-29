@@ -10027,6 +10027,7 @@ function wireGlobals() {
   // mode. Volume/rate controls match the SpeechSynthesis defaults so
   // the two paths sound similar in pacing.
   let _audioEl = null
+  let _isPaused = false
   function getAudioEl() {
     if (_audioEl) return _audioEl
     _audioEl = document.createElement('audio')
@@ -10038,6 +10039,27 @@ function wireGlobals() {
   function stopAudio() {
     if (_audioEl) { _audioEl.pause(); _audioEl.removeAttribute('src'); _audioEl.load() }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+    _isPaused = false
+  }
+  // Pause/resume the active read-aloud, whether premium MP3 or browser TTS.
+  // Both helpers no-op (return false) if nothing is currently in a state we
+  // can act on, so a stray tap on Pause when audio has ended doesn't flip
+  // the UI into a phantom "Resume" mode.
+  function pauseSpeech() {
+    const audioPlaying = _audioEl && !_audioEl.paused && _audioEl.src
+    const ttsPlaying = 'speechSynthesis' in window && window.speechSynthesis.speaking && !window.speechSynthesis.paused
+    if (!audioPlaying && !ttsPlaying) return false
+    if (audioPlaying) _audioEl.pause()
+    if (ttsPlaying) window.speechSynthesis.pause()
+    _isPaused = true
+    return true
+  }
+  function resumeSpeech() {
+    if (!_isPaused) return false
+    if (_audioEl && _audioEl.paused && _audioEl.src) _audioEl.play().catch(() => {})
+    if ('speechSynthesis' in window && window.speechSynthesis.paused) window.speechSynthesis.resume()
+    _isPaused = false
+    return true
   }
 
   const KNOWN_GOOD_VOICES = [
@@ -10299,6 +10321,10 @@ function wireGlobals() {
             ← Back
           </button>
         ` : ''}
+        <button onclick="togglePauseCookingStep()"
+          style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:14px 20px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:500;min-width:90px">
+          ${_isPaused ? '▶ Resume' : '⏸ Pause'}
+        </button>
         <button onclick="repeatCookingStep()"
           style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:14px 20px;border-radius:var(--r);font-size:15px;font-family:inherit;cursor:pointer;font-weight:500;min-width:90px">
           ↻ Repeat
@@ -10325,6 +10351,11 @@ function wireGlobals() {
     const recipe = state.recipes.find(r => r.id === cm.recipeId)
     const step = recipe?.instructions?.steps?.[cm.stepIndex]
     if (step) speakStep(step, cookingStepCtx(recipe, cm.stepIndex))
+  }
+
+  window.togglePauseCookingStep = () => {
+    const changed = _isPaused ? resumeSpeech() : pauseSpeech()
+    if (changed && state.cookingMode) renderCookingMode()
   }
 
   window.nextCookingStep = () => {
