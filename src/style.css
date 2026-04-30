@@ -2,15 +2,35 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* Lock the page to vertical scroll only. Inside a Capacitor webview the
-   default behavior allows horizontal swipe-back / overscroll, which on
-   real devices feels like a UI bug — content shouldn't move sideways
-   when the user lazily swipes left/right. overscroll-behavior also
-   blocks the native pull-to-refresh / horizontal scroll-chaining. */
+/* Native-feel hardening for the iOS Capacitor webview.
+   - touch-action: pan-y is the strongest signal — it tells iOS at the
+     gesture-recognition layer "only honor vertical pans," so horizontal
+     swipes never become page scrolls regardless of CSS overflow.
+   - overscroll-behavior: none kills the rubber-band bounce + scroll
+     chaining that feels webby on iOS.
+   - -webkit-tap-highlight-color removes the blue flash on tap that
+     screams "this is a webview".
+   - -webkit-touch-callout: none disables the long-press menu (Copy,
+     Look Up, Share) on regular UI elements.
+   - user-select: none stops accidental text selection on a long press.
+     Real text inputs re-enable it below. */
 html, body {
   overflow-x: hidden;
   max-width: 100vw;
-  overscroll-behavior-x: none;
+  width: 100%;
+  touch-action: pan-y;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* Inputs, textareas, and any contenteditable need text-selection back
+   on so users can paste recipes / edit values normally. */
+input, textarea, select, [contenteditable], .recipe-textarea, .pm-textarea, .planner-search, .api-input, .link-input {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 :root {
