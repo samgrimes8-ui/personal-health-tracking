@@ -109,7 +109,54 @@ struct AuthView: View {
             .padding(.bottom, 4)
 
             primaryButton("Sign in", loading: loading) { Task { await handleSignIn() } }
+
+            HStack(spacing: 10) {
+                line()
+                Text("or")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+                line()
+            }
+            .padding(.vertical, 4)
+
+            googleButton
         }
+    }
+
+    private func line() -> some View {
+        Rectangle().fill(Theme.border).frame(height: 1)
+    }
+
+    private var googleButton: some View {
+        Button {
+            Task { await handleGoogle() }
+        } label: {
+            HStack(spacing: 10) {
+                if loading {
+                    ProgressView().tint(Theme.text)
+                } else {
+                    googleLogo
+                }
+                Text("Continue with Google")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.text)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(Theme.bg3, in: .rect(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
+        }
+        .disabled(loading)
+    }
+
+    /// Single-color "G" stand-in. Drop a real four-color Google asset
+    /// into Assets.xcassets later if we want the brand-correct logo —
+    /// for now the SF Symbol reads clearly.
+    private var googleLogo: some View {
+        Image(systemName: "g.circle.fill")
+            .resizable()
+            .frame(width: 18, height: 18)
+            .foregroundStyle(Color(hex: 0x4285F4))
     }
 
     private var signUpForm: some View {
@@ -254,6 +301,25 @@ struct AuthView: View {
             success = "Reset link sent. Check your email."
         } catch {
             self.error = error.localizedDescription
+        }
+        loading = false
+    }
+
+    private func handleGoogle() async {
+        loading = true; error = nil; success = nil
+        do {
+            try await auth.signInWithGoogle()
+            // authStateChanges → AppShell flips to SignedInShell.
+        } catch {
+            // ASWebAuthenticationSession surfaces user-cancel as an
+            // error; squash that one so the form doesn't flash a
+            // pointless "canceled" message.
+            let nsErr = error as NSError
+            let canceled = nsErr.domain == "com.apple.AuthenticationServices.WebAuthenticationSession"
+                && nsErr.code == 1
+            if !canceled {
+                self.error = error.localizedDescription
+            }
         }
         loading = false
     }

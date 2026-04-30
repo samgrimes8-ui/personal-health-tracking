@@ -42,6 +42,15 @@ targets:
         NSCameraUsageDescription: MacroLens uses the camera to capture meals, nutrition labels, barcodes, and InBody/DEXA scan reports for AI analysis.
         NSPhotoLibraryUsageDescription: MacroLens reads photos you select to analyze meals, recipes, nutrition labels, and InBody/DEXA scan reports.
         NSPhotoLibraryAddUsageDescription: MacroLens may save processed images back to your photo library.
+        # Custom URL scheme for OAuth callbacks (Google sign-in via
+        # ASWebAuthenticationSession). Supabase redirects to
+        # `app.macrolens.native://login-callback#access_token=...&refresh_token=...`,
+        # the system relaunches the app with that URL, and the auth
+        # session callback parses the tokens and signs the user in.
+        CFBundleURLTypes:
+          - CFBundleURLName: app.macrolens.native
+            CFBundleURLSchemes:
+              - app.macrolens.native
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.macrolens.native
