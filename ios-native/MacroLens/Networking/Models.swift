@@ -21,7 +21,9 @@ struct Goals: Codable, Hashable {
 /// a comment on this — same rule applies on iOS.
 struct MealLogEntry: Codable, Identifiable, Hashable {
     var id: String
-    var meal_name: String?
+    var name: String?                 // public.meal_log uses `name` (not
+                                       // `meal_name` — that's meal_planner's
+                                       // column. Easy to mix up.)
     var meal_type: String?
     var logged_at: String?            // ISO8601, may be just `YYYY-MM-DD`
     var calories: Double?

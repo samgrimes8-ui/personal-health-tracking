@@ -132,7 +132,7 @@ struct DashboardView: View {
     private func mealRow(_ entry: MealLogEntry) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.meal_name ?? "—")
+                Text(entry.name ?? "—")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Theme.text)
                 if let mealType = entry.meal_type {

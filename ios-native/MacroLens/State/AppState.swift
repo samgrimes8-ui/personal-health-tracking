@@ -43,8 +43,10 @@ final class AppState {
                  fiber: Double = 0,
                  recipeId: String? = nil) async throws {
         struct Insert: Encodable {
+            // public.meal_log column is `name` (not `meal_name` — that's
+            // meal_planner's column). Mixed those up once already.
             let user_id: String
-            let meal_name: String
+            let name: String
             let meal_type: String?
             let calories: Double
             let protein: Double
@@ -58,7 +60,7 @@ final class AppState {
         let userId = try await currentUserID()
         let payload = Insert(
             user_id: userId,
-            meal_name: name,
+            name: name,
             meal_type: mealType,
             calories: calories,
             protein: protein,

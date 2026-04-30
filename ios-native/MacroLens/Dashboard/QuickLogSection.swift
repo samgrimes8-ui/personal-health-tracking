@@ -130,7 +130,7 @@ struct QuickLogSection: View {
         var seenNames = Set<String>()
         var recentItems: [QuickLogItem] = []
         for entry in state.todayLog {
-            let name = entry.meal_name ?? ""
+            let name = entry.name ?? ""
             if name.isEmpty { continue }
             let key = name.lowercased()
             if seenNames.contains(key) { continue }
