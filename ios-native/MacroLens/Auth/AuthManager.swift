@@ -29,11 +29,20 @@ final class AuthManager {
         }
 
         // Listen for sign-in / sign-out / token refresh events.
+        // For .initialSession we now also have to verify the session
+        // isn't expired — the SDK started emitting expired stored
+        // sessions in this event under the new opt-in behavior.
         Task { [weak self] in
             for await change in SupabaseService.client.auth.authStateChanges {
                 guard let self else { return }
                 switch change.event {
-                case .signedIn, .tokenRefreshed, .userUpdated, .initialSession:
+                case .initialSession:
+                    if let session = change.session, !session.isExpired {
+                        self.state = .signedIn(session.user)
+                    } else {
+                        self.state = .signedOut
+                    }
+                case .signedIn, .tokenRefreshed, .userUpdated:
                     if let user = change.session?.user {
                         self.state = .signedIn(user)
                     }
