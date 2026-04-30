@@ -1907,6 +1907,56 @@ export async function deleteMyAccount() {
   if (error) throw error
 }
 
+// ─── Identity linking ────────────────────────────────────────────────────────
+//
+// Lets a signed-in user attach a second sign-in provider (today: Google) to
+// their existing auth.users row. Same user_id, multiple `auth.identities`
+// rows. Solves "I signed up with email; how do I sign in with Google later?"
+// and the iOS-Apple → desktop-Google use case.
+//
+// Requires `Manual Linking` to be enabled in Supabase Auth settings (off
+// by default). With it off, linkIdentity returns an
+// `manual_linking_disabled` error.
+
+export async function getMyIdentities() {
+  if (!supabase) return []
+  const { data, error } = await supabase.auth.getUserIdentities()
+  if (error) {
+    console.warn('[identities] fetch failed:', error.message)
+    return []
+  }
+  return data?.identities ?? []
+}
+
+export async function linkGoogleIdentity(redirectTo) {
+  if (!supabase) throw new Error('No backend')
+  const { data, error } = await supabase.auth.linkIdentity({
+    provider: 'google',
+    options: redirectTo ? { redirectTo } : undefined,
+  })
+  if (error) throw error
+  // Supabase JS returns the OAuth URL but doesn't auto-navigate. We hand
+  // it back so the caller can decide between window.location.href (web)
+  // and ASWebAuthenticationSession (eventual native flow).
+  return data
+}
+
+export async function unlinkIdentity(identityOrId) {
+  if (!supabase) throw new Error('No backend')
+  // unlinkIdentity expects the full identity object (it reads .id and
+  // .user_id internally). Callers pass identity objects from
+  // getMyIdentities; we accept either an object or an id string and
+  // resolve to the object if needed.
+  let identity = identityOrId
+  if (typeof identityOrId === 'string') {
+    const all = await getMyIdentities()
+    identity = all.find(i => i.identity_id === identityOrId || i.id === identityOrId)
+    if (!identity) throw new Error('Identity not found')
+  }
+  const { error } = await supabase.auth.unlinkIdentity(identity)
+  if (error) throw error
+}
+
 export async function saveSharedRecipeFromPlannerRow(userId, plannerMealId) {
   if (!supabase) return null
 

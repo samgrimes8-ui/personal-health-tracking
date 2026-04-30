@@ -20,6 +20,7 @@ import {
   createMealPlanShare, getMealPlanShareByToken, getMyMealPlanShares, revokeMealPlanShare,
   copyMealPlanShareToPlanner, saveSharedRecipeFromPlannerRow,
   deleteMyAccount,
+  getMyIdentities, linkGoogleIdentity, unlinkIdentity,
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
 import { categorizeByName, parseAmount, canonicalizeName } from '../lib/categorize.js'
@@ -5429,6 +5430,25 @@ function renderAccount(container) {
       </div>
     </div>` : ''}
 
+    ${document.body.classList.contains('embed') ? '' : `
+      <!-- Sign-in methods. Lets users add/remove ways to sign into the
+           same account. Today: Google linking. Apple linking on web is
+           deferred (needs Apple JS SDK + service ID). The card hides
+           itself inside the iOS native shell's webview tabs (embed=1) —
+           Google blocks OAuth in WKWebViews with disallowed_useragent,
+           so showing the button there would dead-end. Native iOS linking
+           arrives with the Account-page native migration. -->
+      <div class="upload-card" style="max-width:520px;margin-bottom:16px" id="signin-methods-card">
+        <div class="section-title">Sign-in methods</div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:12px;line-height:1.5">
+          <span style="color:var(--text3)">Account email:</span> <span style="color:var(--text);font-weight:500">${esc(state.user?.email || '—')}</span>
+        </div>
+        <div id="signin-methods-list" style="font-size:13px;color:var(--text3)">
+          Loading sign-in methods…
+        </div>
+      </div>
+    `}
+
     <!-- Sign out -->
     <div class="upload-card" style="max-width:520px">
       <div class="section-title">Session</div>
@@ -5479,6 +5499,95 @@ function renderAccount(container) {
   `
 
   if (u.isAdmin) loadAdminPanel()
+  if (!document.body.classList.contains('embed')) loadSigninMethods()
+}
+
+/// Fetches the user's identities (email + linked OAuth providers) and
+/// renders them inside the Sign-in methods card. Lazy-loaded after the
+/// rest of the page so a slow network call doesn't block first paint.
+async function loadSigninMethods() {
+  const list = document.getElementById('signin-methods-list')
+  if (!list) return
+
+  let identities = []
+  try {
+    identities = await getMyIdentities()
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--red)">Couldn't load sign-in methods: ${esc(e.message)}</div>`
+    return
+  }
+
+  // Per-provider lookup. Supabase identities each have `provider` (string)
+  // and `identity_data` (e.g., { email, name, picture }).
+  const has = (p) => identities.find(i => i.provider === p)
+  const providerLabel = { email: 'Email + password', google: 'Google', apple: 'Apple' }
+
+  // Render existing identities first, then offer link buttons for the
+  // ones the user doesn't have yet.
+  const rows = identities.map(i => {
+    const email = i.identity_data?.email || ''
+    const isPrimary = i.provider === 'email' && email === state.user?.email
+    return `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);margin-bottom:6px">
+        <div style="font-size:18px">${i.provider === 'google' ? '🟢' : i.provider === 'apple' ? '⚫' : '✉️'}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;color:var(--text);font-weight:500">${providerLabel[i.provider] || i.provider}</div>
+          ${email ? `<div style="font-size:11px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(email)}</div>` : ''}
+        </div>
+        ${identities.length > 1 && !isPrimary ? `
+          <button onclick="handleUnlinkIdentity('${esc(i.identity_id || i.id)}', '${i.provider}')"
+            style="background:none;border:1px solid var(--border2);color:var(--text3);font-size:11px;padding:5px 10px;border-radius:var(--r);font-family:inherit;cursor:pointer;white-space:nowrap"
+            onmouseover="this.style.color='var(--red)';this.style.borderColor='var(--red)'"
+            onmouseout="this.style.color='var(--text3)';this.style.borderColor='var(--border2)'">
+            Unlink
+          </button>
+        ` : ''}
+      </div>
+    `
+  }).join('')
+
+  // Offer to link Google if not present. Apple-on-web is deferred until
+  // we wire the Apple JS SDK; native iOS Apple Sign-In ships through the
+  // SwiftUI app, not here.
+  const linkButtons = !has('google') ? `
+    <button onclick="handleLinkGoogle()"
+      style="width:100%;padding:11px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text);font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin-top:6px"
+      onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='var(--bg3)'">
+      <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Link Google account
+    </button>
+  ` : ''
+
+  list.innerHTML = (rows || '<div style="color:var(--text3);font-size:12px">No sign-in methods on file.</div>') + linkButtons
+}
+
+window.handleLinkGoogle = async () => {
+  try {
+    const data = await linkGoogleIdentity(window.location.origin + '/?page=account')
+    if (data?.url) {
+      // The OAuth URL needs a real navigation — opening in a popup
+      // would land back in the popup, not here. window.location is
+      // the standard approach.
+      window.location.href = data.url
+    }
+  } catch (e) {
+    if (/manual_linking_disabled/i.test(e.message || '')) {
+      showToast('Linking is disabled on this project. Contact support.', 'error')
+    } else {
+      showToast('Could not link: ' + e.message, 'error')
+    }
+  }
+}
+
+window.handleUnlinkIdentity = async (identityId, provider) => {
+  if (!confirm(`Unlink ${provider}? You'll only be able to sign in with your remaining methods.`)) return
+  try {
+    await unlinkIdentity(identityId)
+    showToast(`${provider.charAt(0).toUpperCase() + provider.slice(1)} unlinked`, 'success')
+    loadSigninMethods()  // re-render with updated list
+  } catch (e) {
+    showToast('Could not unlink: ' + e.message, 'error')
+  }
 }
 
 async function loadAdminPanel() {
