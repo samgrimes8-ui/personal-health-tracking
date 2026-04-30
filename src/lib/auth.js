@@ -60,8 +60,14 @@ export function onAuthStateChange(callback) {
 }
 
 export async function resetPassword(email) {
+  // Recovery indicator goes in the QUERY STRING, not the fragment.
+  // Supabase appends auth tokens to the fragment (#access_token=…) and
+  // also strips the fragment from the URL bar after processing — so a
+  // fragment-based marker like #reset-password gets eaten. Query strings
+  // survive both the redirect AND the fragment-strip, so `?recovery=1`
+  // is still readable by the time the page is fully loaded.
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${window.location.origin}/#reset-password`,
+    redirectTo: `${window.location.origin}/?recovery=1`,
   })
   if (error) throw error
 }
@@ -69,4 +75,19 @@ export async function resetPassword(email) {
 export async function updatePassword(newPassword) {
   const { error } = await supabase.auth.updateUser({ password: newPassword })
   if (error) throw error
+}
+
+/// Polls supabase.auth.getSession() up to `timeoutMs` waiting for the
+/// SDK's async URL-fragment processing to set a session. Used by the
+/// password-reset form: the user might submit before Supabase has
+/// finished extracting the recovery tokens from the URL fragment, and
+/// updateUser() would fail with "no session." This catches that race.
+export async function waitForSession(timeoutMs = 2500) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (session) return session
+    await new Promise(r => setTimeout(r, 150))
+  }
+  return null
 }

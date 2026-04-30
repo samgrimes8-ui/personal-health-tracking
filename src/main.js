@@ -5,11 +5,21 @@ import { renderAuthPage, renderResetPasswordPage } from './pages/auth.js'
 import { initApp } from './pages/app.js'
 import { initCapacitor } from './lib/capacitor.js'
 
-// Captured before Supabase parses & clears the URL hash. The recovery email
-// link arrives as `/#reset-password&access_token=...&type=recovery`, and
-// Supabase strips the auth tokens once it processes them.
+// Recovery flow detection. We send `?recovery=1` as the query string in
+// the resetPasswordForEmail redirectTo, so the URL coming back from the
+// email link is `https://...vercel.app/?recovery=1#access_token=…`.
+// Auth tokens land in the fragment (Supabase will set the recovery
+// session when it processes the fragment async), and the query string
+// survives both the redirect and Supabase's fragment-strip — so we can
+// always tell "this is a recovery flow" no matter the timing.
+//
+// We check for `?recovery=1` first; legacy `#reset-password` / `#type=recovery`
+// stays around as a fallback for any old emails still in users' inboxes.
 const initialHash = window.location.hash || ''
-const isRecoveryUrl = initialHash.includes('reset-password') || initialHash.includes('type=recovery')
+const initialQuery = new URLSearchParams(window.location.search)
+const isRecoveryUrl = initialQuery.get('recovery') === '1'
+  || initialHash.includes('reset-password')
+  || initialHash.includes('type=recovery')
 
 const appEl = document.getElementById('app')
 
@@ -34,13 +44,21 @@ async function bootstrap() {
     await initApp({ id: 'local', email: 'local@macrolens.app' }, appEl)
     return
   }
-  let recoveryHandled = false
-  onAuthStateChange(async (user, event) => {
-    const inRecoveryFlow = !recoveryHandled && (event === 'PASSWORD_RECOVERY' || (isRecoveryUrl && user))
-    if (inRecoveryFlow) {
-      renderResetPasswordPage(appEl, () => { recoveryHandled = true })
-      return
-    }
+
+  // Recovery flow short-circuit. If we're here from a password-reset email
+  // link, render the reset form right away — don't wait for auth events.
+  // The recovery session gets established by Supabase as it processes the
+  // URL fragment in the background; by the time the user finishes typing
+  // a new password and submits, updateUser() sees the session and works.
+  // (Earlier we waited for PASSWORD_RECOVERY / INITIAL_SESSION events, but
+  // by the time onAuthStateChange's listener registered after `await
+  // initCapacitor`, those events had already fired into the void.)
+  if (isRecoveryUrl) {
+    renderResetPasswordPage(appEl, () => {})
+    return
+  }
+
+  onAuthStateChange(async (user) => {
     if (user) {
       await initApp(user, appEl)
     } else {

@@ -1,4 +1,4 @@
-import { signIn, signUp, signInWithGoogle, resetPassword, updatePassword, signOut } from '../lib/auth.js'
+import { signIn, signUp, signInWithGoogle, resetPassword, updatePassword, signOut, waitForSession } from '../lib/auth.js'
 import { isNative } from '../lib/capacitor.js'
 
 // Detect when the page is loaded inside an embedded webview that's NOT
@@ -57,17 +57,24 @@ export function renderResetPasswordPage(container, onComplete) {
 
     setAuthLoading('reset-btn', true)
     try {
+      // The recovery session may still be establishing when the user
+      // submits — Supabase's detectSessionInUrl runs async. Wait a beat
+      // for it to land before calling updateUser, otherwise we'd get
+      // "Auth session missing."
+      const session = await waitForSession(3000)
+      if (!session) {
+        showAuthError('Reset link is invalid or expired. Please request a new one.')
+        return
+      }
       await updatePassword(password)
       sessionStorage.setItem(RESET_SUCCESS_KEY, '1')
       if (typeof onComplete === 'function') onComplete()
-      // Clear the recovery hash before signing out so the next render hits the
-      // login form, not the reset form.
-      if (window.history && window.history.replaceState) {
-        window.history.replaceState(null, '', window.location.pathname + window.location.search)
-      }
       await signOut()
-      // signOut fires SIGNED_OUT → main.js renders renderAuthPage, which reads
-      // sessionStorage and shows the success message.
+      // Reload to a clean URL (no ?recovery=1) so the auth screen renders
+      // with the success banner. Doing it this way instead of trying to
+      // hand off to the auth listener avoids edge cases with the recovery
+      // short-circuit in main.js.
+      window.location.replace(window.location.pathname)
     } catch (err) {
       showAuthError(err.message)
     } finally {
