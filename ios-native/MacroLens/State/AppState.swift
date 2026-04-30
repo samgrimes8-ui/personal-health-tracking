@@ -10,6 +10,7 @@ import Supabase
 final class AppState {
     var goals: Goals = Goals()
     var todayLog: [MealLogEntry] = []
+    var recipes: [RecipeRow] = []
     var loading: Bool = false
     var lastError: String?
 
@@ -21,10 +22,61 @@ final class AppState {
         do {
             async let g = fetchGoals()
             async let log = fetchTodayLog()
+            async let r = fetchRecipes()
             self.goals = (try? await g) ?? Goals()
             self.todayLog = (try await log).sorted { ($0.logged_at ?? "") > ($1.logged_at ?? "") }
+            self.recipes = (try? await r) ?? []
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    /// Insert a new meal_log row. Used by Quick log + Analyze food's
+    /// "Log this meal" button. Today's log is updated locally so the
+    /// macro tiles refresh immediately without a round trip.
+    func logMeal(name: String,
+                 mealType: String? = nil,
+                 calories: Double = 0,
+                 protein: Double = 0,
+                 carbs: Double = 0,
+                 fat: Double = 0,
+                 fiber: Double = 0,
+                 recipeId: String? = nil) async throws {
+        struct Insert: Encodable {
+            let user_id: String
+            let meal_name: String
+            let meal_type: String?
+            let calories: Double
+            let protein: Double
+            let carbs: Double
+            let fat: Double
+            let fiber: Double
+            let recipe_id: String?
+            let logged_at: String
+            let servings_consumed: Double
+        }
+        let userId = try await currentUserID()
+        let payload = Insert(
+            user_id: userId,
+            meal_name: name,
+            meal_type: mealType,
+            calories: calories,
+            protein: protein,
+            carbs: carbs,
+            fat: fat,
+            fiber: fiber,
+            recipe_id: recipeId,
+            logged_at: ISO8601DateFormatter().string(from: Date()),
+            servings_consumed: 1.0
+        )
+        let inserted: [MealLogEntry] = try await SupabaseService.client
+            .from("meal_log")
+            .insert(payload)
+            .select()
+            .execute()
+            .value
+        if let entry = inserted.first {
+            todayLog.insert(entry, at: 0)
         }
     }
 
@@ -49,6 +101,19 @@ final class AppState {
             .eq("user_id", value: userId)
             .gte("logged_at", value: today)
             .lt("logged_at", value: tomorrowDateString())
+            .execute()
+            .value
+        return response
+    }
+
+    private func fetchRecipes() async throws -> [RecipeRow] {
+        let userId = try await currentUserID()
+        let response: [RecipeRow] = try await SupabaseService.client
+            .from("recipes")
+            .select("id, name, calories, protein, carbs, fat, fiber, servings")
+            .eq("user_id", value: userId)
+            .order("name", ascending: true)
+            .limit(200)
             .execute()
             .value
         return response

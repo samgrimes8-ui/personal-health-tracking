@@ -34,6 +34,32 @@ struct MealLogEntry: Codable, Identifiable, Hashable {
     var servings_consumed: Double?
 }
 
+/// One row of public.recipes — the user's recipe library. Only the
+/// fields Quick log needs are decoded; the recipes table is wider.
+struct RecipeRow: Codable, Identifiable, Hashable {
+    var id: String
+    var name: String
+    var calories: Double?
+    var protein: Double?
+    var carbs: Double?
+    var fat: Double?
+    var fiber: Double?
+    var servings: Double?
+}
+
+/// What `/api/analyze` returns inside its text block when called with the
+/// MACROS_ONLY_PROMPT (see src/lib/ai.js). Confidence is informational.
+struct AnalysisResult: Codable, Hashable {
+    var name: String
+    var calories: Double
+    var protein: Double
+    var carbs: Double
+    var fat: Double
+    var fiber: Double?
+    var sugar: Double?
+    var confidence: String?
+}
+
 /// Aggregate macros for a day's meal log.
 struct DailyMacroTotals: Equatable {
     var calories: Double = 0

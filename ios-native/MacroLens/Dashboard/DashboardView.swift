@@ -12,11 +12,8 @@ struct DashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 greeting
-
-                // Tier 1 sections — to be filled in:
-                placeholderCard(title: "Analyze food", subtitle: "Coming next pass")
-                placeholderCard(title: "Quick log", subtitle: "Coming next pass")
-
+                AnalyzeFoodSection()
+                QuickLogSection()
                 macroCountsRow
                 todayMealsCard
             }
@@ -24,6 +21,7 @@ struct DashboardView: View {
             .padding(.bottom, 40)
         }
         .background(Theme.bg)
+        .scrollDismissesKeyboard(.interactively)
         .refreshable { await state.loadDashboard() }
         .task { await state.loadDashboard() }
         .toolbar {
@@ -156,21 +154,4 @@ struct DashboardView: View {
         .padding(.horizontal, 20).padding(.vertical, 12)
     }
 
-    private func placeholderCard(title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Theme.text)
-            Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Theme.bg2, in: .rect(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-        )
-    }
 }
