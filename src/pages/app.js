@@ -19,6 +19,7 @@ import {
   getFollowerCount, copyBroadcastToPlanner, saveProviderProfile, uploadProviderAvatar,
   createMealPlanShare, getMealPlanShareByToken, getMyMealPlanShares, revokeMealPlanShare,
   copyMealPlanShareToPlanner, saveSharedRecipeFromPlannerRow,
+  deleteMyAccount,
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
 import { categorizeByName, parseAmount, canonicalizeName } from '../lib/categorize.js'
@@ -5433,6 +5434,48 @@ function renderAccount(container) {
       <div class="section-title">Session</div>
       <button class="btn-delete" style="width:100%;padding:12px;font-size:14px" onclick="handleSignOut()">Sign out</button>
     </div>
+
+    <!-- Danger zone — self-serve account deletion. Required by App
+         Store guideline 5.1.1(v) and just good user hygiene. The first
+         tap reveals a confirmation panel; the second confirms with
+         the user typing DELETE. Backend uses delete_my_account RPC
+         (drops every public-schema row + the auth.users entry). -->
+    <div class="upload-card" style="max-width:520px;margin-top:16px;border-color:rgba(217,96,96,0.25)">
+      <div class="section-title" style="color:var(--red)">Danger zone</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.55;margin-bottom:14px">
+        Permanently delete your account. This removes every meal log entry,
+        recipe, food item, planner row, weight check-in, body scan, and
+        meal-plan share you've created — there's no undo. You'll be signed
+        out immediately and won't be able to sign back in with this email.
+      </div>
+
+      <div id="delete-account-trigger">
+        <button class="btn-delete" style="width:100%;padding:12px;font-size:14px"
+          onclick="document.getElementById('delete-account-trigger').style.display='none';document.getElementById('delete-account-confirm').style.display='block'">
+          Delete my account
+        </button>
+      </div>
+
+      <div id="delete-account-confirm" style="display:none">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:8px">
+          Type <strong style="color:var(--red)">DELETE</strong> to confirm:
+        </div>
+        <input id="delete-account-confirmation" type="text" autocomplete="off" autocapitalize="characters"
+          oninput="window.__validateDeleteConfirmation()"
+          style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none;margin-bottom:10px;letter-spacing:2px" />
+        <div style="display:flex;gap:8px">
+          <button class="btn-cancel" style="flex:1"
+            onclick="document.getElementById('delete-account-confirm').style.display='none';document.getElementById('delete-account-trigger').style.display='block';document.getElementById('delete-account-confirmation').value=''">
+            Cancel
+          </button>
+          <button class="btn-delete" id="delete-account-final-btn" style="flex:1" disabled
+            onclick="handleDeleteAccount()">
+            Permanently delete
+          </button>
+        </div>
+        <div id="delete-account-error" style="display:none;color:var(--red);font-size:12px;margin-top:8px"></div>
+      </div>
+    </div>
   `
 
   if (u.isAdmin) loadAdminPanel()
@@ -8645,6 +8688,41 @@ function wireGlobals() {
   window.handleSignOut = async () => {
     try { await signOut() } catch (e) { console.error(e) }
     window.location.reload()
+  }
+
+  // Live-validate the typed confirmation so the destructive button only
+  // becomes clickable when "DELETE" is typed exactly. Belt & suspenders
+  // against accidental taps.
+  window.__validateDeleteConfirmation = () => {
+    const input = document.getElementById('delete-account-confirmation')
+    const btn = document.getElementById('delete-account-final-btn')
+    if (input && btn) btn.disabled = input.value.trim() !== 'DELETE'
+  }
+
+  window.handleDeleteAccount = async () => {
+    const input = document.getElementById('delete-account-confirmation')
+    if (input?.value.trim() !== 'DELETE') return  // belt-and-suspenders
+    const btn = document.getElementById('delete-account-final-btn')
+    const errEl = document.getElementById('delete-account-error')
+    if (btn) { btn.disabled = true; btn.textContent = 'Deleting…' }
+    if (errEl) errEl.style.display = 'none'
+    try {
+      await deleteMyAccount()
+      // Sign out + clear any cached state, then reload to the fresh
+      // auth screen. Don't try to render gracefully — the auth.users
+      // row is gone, any subsequent Supabase call would 401.
+      try { await signOut() } catch {}
+      try { sessionStorage.clear() } catch {}
+      try { localStorage.clear() } catch {}
+      window.location.replace('/')
+    } catch (e) {
+      console.error('[deleteAccount] failed:', e)
+      if (btn) { btn.disabled = false; btn.textContent = 'Permanently delete' }
+      if (errEl) {
+        errEl.textContent = 'Couldn\'t delete the account: ' + (e.message || 'unknown error')
+        errEl.style.display = 'block'
+      }
+    }
   }
 
   // ── Edit modal ──────────────────────────────────────────────────

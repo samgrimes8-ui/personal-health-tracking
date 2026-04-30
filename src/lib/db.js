@@ -1893,6 +1893,20 @@ export async function copyMealPlanShareToPlanner(userId, share, targetWeekStart,
 // the planner row to point at the new recipe and clear the from_share_*
 // provenance columns. Returns the imported recipe row so the UI can refresh
 // state.recipes without a full reload.
+/// Self-service account deletion. Calls the SECURITY DEFINER RPC
+/// public.delete_my_account, which removes every public-schema row
+/// owned by the user and the auth.users entry itself. Caller must
+/// be the authenticated user — the function checks auth.uid().
+///
+/// Returns when the delete completes; the caller is responsible for
+/// signing out + navigating away (the JWT is still valid for a few
+/// seconds after the row is gone, so explicit signOut is cleanest).
+export async function deleteMyAccount() {
+  if (!supabase) throw new Error('No backend')
+  const { error } = await supabase.rpc('delete_my_account')
+  if (error) throw error
+}
+
 export async function saveSharedRecipeFromPlannerRow(userId, plannerMealId) {
   if (!supabase) return null
 

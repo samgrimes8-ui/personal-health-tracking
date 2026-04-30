@@ -119,6 +119,67 @@ The native side passes session tokens via URL fragment so Supabase's
 mechanism Supabase OAuth callbacks use. Means users sign in once
 natively and the webview tabs are already authenticated.
 
+## Account linking + merge across providers
+
+Lets a user who signed up with one provider attach another (the
+typical case: Apple-on-iPhone user wants to also sign in via Google
+on their desktop). Two flavors that look similar but mean different
+things:
+
+**A. Link identity (additive — same auth.users row).**
+The user is signed in. They tap "Link Google" in Account → Sign-in
+methods. The web app calls `supabase.auth.linkIdentity({ provider:
+'google' })`, opens the Google OAuth flow in either ASWebAuthenticationSession
+(native) or a redirect (web). On success, Google becomes a linked
+identity on the current auth.users row. Same user_id, same data;
+they can now sign in with either method.
+
+Caveat for Apple-private-relay users: the Apple identity provides a
+relay address as the user's email. Linking Google adds a Google
+identity with a different email. Supabase tolerates this — auth.users
+keeps the original (relay) email as the primary, identities table
+tracks both. UX-wise the user just sees their providers list.
+
+**B. Merge two accounts (separate auth.users rows → one).**
+Rare but real: user signs up on iOS with Apple (relay@privaterelay…),
+then signs up on web with Google + a different email. They want to
+combine. Manual flow:
+  1. Sign in to the account they want to keep (account A).
+  2. Tap "Merge from another account" → modal asks them to sign in
+     to account B in a popup.
+  3. We get account B's session, transfer everything: meal_log,
+     recipes, food_items, planner, body_metrics, goals, checkins,
+     meal_plan_shares, recipe_shares, ingredient_synonyms — repoint
+     user_id from B to A.
+  4. Delete account B (reuse delete_my_account but parameterized).
+
+Conflicts to handle: same recipe name on both, overlapping planner
+rows on the same date, meal_log entries on the same `logged_at`.
+Probably let A win on conflict and keep B's row alongside (not
+deduped). Document the behavior in a confirmation step.
+
+UI sketch (Account → "Sign-in methods"):
+- Primary email shown clearly so private-relay users know their
+  identity address (lets them use it for password reset on desktop
+  if they choose).
+- List of linked providers with provider name + email per identity.
+- "Link Google" / "Link Apple" buttons (Apple only on iOS native).
+- "Unlink" per non-primary identity (with confirmation).
+- "Merge from another account" — separate flow.
+- "Delete my account" already shipped (Apr 30).
+
+Implementation notes:
+- Supabase has linkIdentity / unlinkIdentity since v2.16. Need
+  `Manual Linking` enabled at project level in Supabase Auth.
+- Native Apple Sign-In already uses signInWithIdToken — for linking
+  we'd use a different SDK call (linkIdentity isn't directly
+  exposed via the iOS SDK at time of writing; might need to call
+  the Auth REST API directly).
+- Merge step needs a SECURITY DEFINER function similar to
+  delete_my_account that takes (a_user_id, b_user_id), verifies
+  the caller has a session for both (passes refresh tokens for
+  both), and does the row-by-row repoint inside one transaction.
+
 ## Cooking mode — paid voices
 
 **Status:** ✅ SHIPPED (code) — Apr 28 session. Pending: `OPENAI_API_KEY`
