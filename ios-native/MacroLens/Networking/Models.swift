@@ -49,10 +49,25 @@ struct RecipeRow: Codable, Identifiable, Hashable {
     var servings: Double?
 }
 
-/// What `/api/analyze` returns inside its text block when called with the
-/// MACROS_ONLY_PROMPT (see src/lib/ai.js). Confidence is informational.
+/// One ingredient row inside a recipe analysis result. Matches the
+/// shape FULL_ANALYSIS_PROMPT instructs the model to return.
+struct Ingredient: Codable, Hashable {
+    var name: String
+    var amount: Double?
+    var unit: String?
+    var category: String?
+}
+
+/// What `/api/analyze` returns inside its text block. Two flavors:
+///   - MACROS_ONLY_PROMPT (planner / describe-food): just name + macros.
+///   - FULL_ANALYSIS_PROMPT (food-photo / recipe text / recipe-photo):
+///     adds description, servings, notes, ingredients, sometimes more.
+/// Decoder ignores fields the model omitted, so the same struct covers
+/// both flavors.
 struct AnalysisResult: Codable, Hashable {
     var name: String
+    var description: String?
+    var servings: Double?
     var calories: Double
     var protein: Double
     var carbs: Double
@@ -60,6 +75,8 @@ struct AnalysisResult: Codable, Hashable {
     var fiber: Double?
     var sugar: Double?
     var confidence: String?
+    var notes: String?
+    var ingredients: [Ingredient]?
 }
 
 /// Aggregate macros for a day's meal log.

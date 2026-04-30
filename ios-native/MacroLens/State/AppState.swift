@@ -82,6 +82,51 @@ final class AppState {
         }
     }
 
+    /// Insert a recipe row from an Analyze-recipe result. Used by the
+    /// "Save to library" button on the recipe-mode result card.
+    /// `ingredients` is stored as jsonb on the recipes table.
+    @discardableResult
+    func saveRecipe(_ result: AnalysisResult) async throws -> RecipeRow {
+        struct Insert: Encodable {
+            let user_id: String
+            let name: String
+            let description: String?
+            let servings: Double?
+            let calories: Double?
+            let protein: Double?
+            let carbs: Double?
+            let fat: Double?
+            let fiber: Double?
+            let sugar: Double?
+            let ingredients: [Ingredient]?
+        }
+        let userId = try await currentUserID()
+        let payload = Insert(
+            user_id: userId,
+            name: result.name,
+            description: result.description,
+            servings: result.servings,
+            calories: result.calories,
+            protein: result.protein,
+            carbs: result.carbs,
+            fat: result.fat,
+            fiber: result.fiber,
+            sugar: result.sugar,
+            ingredients: result.ingredients
+        )
+        let inserted: [RecipeRow] = try await SupabaseService.client
+            .from("recipes")
+            .insert(payload)
+            .select("id, name, calories, protein, carbs, fat, fiber, servings")
+            .execute()
+            .value
+        guard let row = inserted.first else {
+            throw NSError(domain: "AppState", code: 0, userInfo: [NSLocalizedDescriptionKey: "Recipe insert returned no rows"])
+        }
+        recipes.insert(row, at: 0)
+        return row
+    }
+
     private func fetchGoals() async throws -> Goals {
         let userId = try await currentUserID()
         let response: [Goals] = try await SupabaseService.client

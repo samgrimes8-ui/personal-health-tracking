@@ -49,6 +49,12 @@ targets:
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         ENABLE_USER_SCRIPT_SANDBOXING: YES
         TARGETED_DEVICE_FAMILY: "1,2"
+        # Apple Developer team ID — baked in here so xcodegen regenerate
+        # doesn't wipe the team selection every time. If you fork this
+        # project, change to your own team ID (Xcode → Settings → Accounts
+        # → click your team → "Team ID").
+        DEVELOPMENT_TEAM: 86T54TVCFN
+        CODE_SIGN_STYLE: Automatic
     dependencies:
       - package: Supabase
         product: Supabase
