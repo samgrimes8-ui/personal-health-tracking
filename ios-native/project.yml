@@ -1,0 +1,54 @@
+name: MacroLens
+options:
+  bundleIdPrefix: app.macrolens.native
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    DEVELOPMENT_LANGUAGE: en
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  Supabase:
+    url: https://github.com/supabase/supabase-swift
+    from: "2.0.0"
+
+targets:
+  MacroLens:
+    type: application
+    platform: iOS
+    sources:
+      - path: MacroLens
+    info:
+      path: MacroLens/Info.plist
+      properties:
+        CFBundleDisplayName: MacroLens
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: ""
+          UIImageName: ""
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSCameraUsageDescription: MacroLens uses the camera to capture meals, nutrition labels, barcodes, and InBody/DEXA scan reports for AI analysis.
+        NSPhotoLibraryUsageDescription: MacroLens reads photos you select to analyze meals, recipes, nutrition labels, and InBody/DEXA scan reports.
+        NSPhotoLibraryAddUsageDescription: MacroLens may save processed images back to your photo library.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.macrolens.native
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: Supabase
+        product: Supabase
