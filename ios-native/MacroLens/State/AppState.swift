@@ -10,7 +10,9 @@ import Supabase
 final class AppState {
     var goals: Goals = Goals()
     var todayLog: [MealLogEntry] = []
+    var last7Days: [DaySummary] = []
     var recipes: [RecipeRow] = []
+    var recentCheckins: [CheckinRow] = []
     var loading: Bool = false
     var lastError: String?
 
@@ -21,11 +23,16 @@ final class AppState {
         defer { loading = false }
         do {
             async let g = fetchGoals()
-            async let log = fetchTodayLog()
+            async let weekLog = fetchLastNDaysLog(7)
             async let r = fetchRecipes()
+            async let c = fetchRecentCheckins()
+
+            let weekEntries = try await weekLog
             self.goals = (try? await g) ?? Goals()
-            self.todayLog = (try await log).sorted { ($0.logged_at ?? "") > ($1.logged_at ?? "") }
+            self.todayLog = filterToToday(weekEntries).sorted { ($0.logged_at ?? "") > ($1.logged_at ?? "") }
+            self.last7Days = DaySummary.build(from: weekEntries, days: 7)
             self.recipes = (try? await r) ?? []
+            self.recentCheckins = (try? await c) ?? []
         } catch {
             lastError = error.localizedDescription
         }
@@ -139,18 +146,49 @@ final class AppState {
         return response.first ?? Goals()
     }
 
-    private func fetchTodayLog() async throws -> [MealLogEntry] {
+    private func fetchLastNDaysLog(_ days: Int) async throws -> [MealLogEntry] {
         let userId = try await currentUserID()
-        let today = todayDateString()
+        let cal = Calendar.current
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = .current
+        let from = cal.date(byAdding: .day, value: -(days - 1), to: cal.startOfDay(for: Date()))!
+        let fromStr = formatter.string(from: from)
         let response: [MealLogEntry] = try await SupabaseService.client
             .from("meal_log")
             .select()
             .eq("user_id", value: userId)
-            .gte("logged_at", value: today)
-            .lt("logged_at", value: tomorrowDateString())
+            .gte("logged_at", value: fromStr)
+            .order("logged_at", ascending: false)
             .execute()
             .value
         return response
+    }
+
+    private func fetchRecentCheckins() async throws -> [CheckinRow] {
+        // 60 days covers "this month" with comfortable headroom. The
+        // analytics widget filters down to the current calendar month.
+        let userId = try await currentUserID()
+        let cal = Calendar.current
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = .current
+        let from = cal.date(byAdding: .day, value: -60, to: cal.startOfDay(for: Date()))!
+        let fromStr = formatter.string(from: from)
+        let response: [CheckinRow] = try await SupabaseService.client
+            .from("checkins")
+            .select("id, weight_kg, scan_date, checked_in_at")
+            .eq("user_id", value: userId)
+            .gte("checked_in_at", value: fromStr)
+            .order("checked_in_at", ascending: true)
+            .execute()
+            .value
+        return response
+    }
+
+    private func filterToToday(_ entries: [MealLogEntry]) -> [MealLogEntry] {
+        let today = todayDateString()
+        return entries.filter { ($0.logged_at ?? "").hasPrefix(today) }
     }
 
     private func fetchRecipes() async throws -> [RecipeRow] {

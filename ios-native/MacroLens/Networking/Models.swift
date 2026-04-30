@@ -79,6 +79,53 @@ struct AnalysisResult: Codable, Hashable {
     var ingredients: [Ingredient]?
 }
 
+/// One row of public.checkins. We only decode what the dashboard
+/// analytics widget needs (weight + dates). The full table has many
+/// more body-comp columns; the Goals page can extend this when it
+/// migrates.
+struct CheckinRow: Codable, Identifiable, Hashable {
+    var id: String
+    var weight_kg: Double?
+    var scan_date: String?            // YYYY-MM-DD
+    var checked_in_at: String?        // ISO8601 timestamp
+}
+
+/// Per-day rollup of a window of meal_log rows. Drives the analytics
+/// widget's sparklines and the protein-adherence calc.
+struct DaySummary: Identifiable, Hashable {
+    let id: String                    // YYYY-MM-DD
+    let calories: Double
+    let protein: Double
+    let count: Int                    // # meal_log entries that day
+
+    static func build(from entries: [MealLogEntry], days: Int) -> [DaySummary] {
+        var bucket: [String: (cal: Double, p: Double, count: Int)] = [:]
+        for e in entries {
+            guard let raw = e.logged_at else { continue }
+            let key = String(raw.prefix(10))
+            var cur = bucket[key] ?? (0, 0, 0)
+            cur.cal += e.calories ?? 0
+            cur.p += e.protein ?? 0
+            cur.count += 1
+            bucket[key] = cur
+        }
+
+        let cal = Calendar.current
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = .current
+        let today = cal.startOfDay(for: Date())
+
+        // Oldest → newest so the sparkline reads left-to-right.
+        return (0..<days).reversed().map { offset in
+            let date = cal.date(byAdding: .day, value: -offset, to: today)!
+            let key = formatter.string(from: date)
+            let s = bucket[key] ?? (0, 0, 0)
+            return DaySummary(id: key, calories: s.cal, protein: s.p, count: s.count)
+        }
+    }
+}
+
 /// Aggregate macros for a day's meal log.
 struct DailyMacroTotals: Equatable {
     var calories: Double = 0

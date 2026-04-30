@@ -16,6 +16,8 @@ struct DashboardView: View {
                 QuickLogSection()
                 macroCountsRow
                 todayMealsCard
+                MacroBreakdownSection()
+                AnalyticsSection()
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 40)
