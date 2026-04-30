@@ -193,3 +193,22 @@ average cost per user low even with persistent caching.
   from generating a new link every time they tweak a meal. Caveat:
   the public landing page caches for ~60s, so recipients might see
   a brief lag after a refresh — acceptable.
+- **Native Google Sign-In on iOS (Capacitor)** — web OAuth opens
+  Safari and never redirects back into the app. For now we hide the
+  Google button when running natively (isNative() check in auth.js)
+  so users only see email/password. Proper fix: install
+  `@codetrix-studio/capacitor-google-auth` (or
+  `@capacitor-firebase/authentication`), register an iOS OAuth
+  client in Google Cloud Console, drop GoogleService-Info.plist
+  into `ios/App/App/`, then call signInWithIdToken() against
+  Supabase using the native id_token. Probably 1–2 hours end to
+  end. Required before App Store submission since users will
+  expect Google Sign-In on a nutrition app.
+- **Bundled web assets + configurable API base URL** — Phase 1 mobile
+  is loading the live Vercel origin via capacitor.config.json
+  `server.url`. Apple rejects "just a website wrapper" under
+  guideline 4.2, so before App Store submission we have to bundle
+  `dist/` into the app (drop `server.url`) and replace every
+  `fetch('/api/...')` with `fetch(API_BASE + '/api/...')` where
+  API_BASE is the Vercel origin. Probably a `src/lib/api.js`
+  wrapper that picks the right base based on `Capacitor.isNativePlatform()`.

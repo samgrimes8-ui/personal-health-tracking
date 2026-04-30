@@ -2,6 +2,17 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Lock the page to vertical scroll only. Inside a Capacitor webview the
+   default behavior allows horizontal swipe-back / overscroll, which on
+   real devices feels like a UI bug — content shouldn't move sideways
+   when the user lazily swipes left/right. overscroll-behavior also
+   blocks the native pull-to-refresh / horizontal scroll-chaining. */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+  overscroll-behavior-x: none;
+}
+
 :root {
   /* Layout primitives that don't change between themes. Palette tokens live
      under [data-theme] selectors below. The inline script in index.html
