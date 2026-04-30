@@ -1,6 +1,26 @@
 import { signIn, signUp, signInWithGoogle, resetPassword, updatePassword, signOut } from '../lib/auth.js'
 import { isNative } from '../lib/capacitor.js'
 
+// Detect when the page is loaded inside an embedded webview that's NOT
+// Capacitor — e.g., the SwiftUI native app's WKWebView fallback tabs.
+// Two signals:
+//   1. `?embed=1` URL param set by the native shell (intentional opt-in)
+//   2. The user-agent looks like an iOS WKWebView (no "Safari" suffix
+//      that real Mobile Safari includes), as a defensive fallback for
+//      any other embedded context (Instagram, Facebook in-app browser,
+//      etc.) — Google's OAuth blocks all of them with disallowed_useragent.
+//
+// Hiding the Google button in these contexts saves users from a dead-end
+// "Access blocked" screen they can't recover from.
+function isInEmbeddedWebview() {
+  try {
+    if (new URLSearchParams(window.location.search).get('embed') === '1') return true
+    const ua = navigator.userAgent || ''
+    const isIOSWebKit = /\biPhone|iPad|iPod\b/.test(ua) && /AppleWebKit/.test(ua) && !/\bSafari\b/.test(ua)
+    return isIOSWebKit
+  } catch { return false }
+}
+
 const RESET_SUCCESS_KEY = 'macrolens-reset-success'
 
 export function renderResetPasswordPage(container, onComplete) {
@@ -133,7 +153,7 @@ export function renderAuthPage(container) {
           </div>
         </div>
 
-        ${isNative() ? '' : `
+        ${(isNative() || isInEmbeddedWebview()) ? '' : `
           <div id="auth-divider-google" class="auth-divider"><span>or</span></div>
 
           <button id="auth-google-btn" class="auth-google-btn" onclick="handleGoogle()">
