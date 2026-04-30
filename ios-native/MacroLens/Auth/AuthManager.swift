@@ -13,6 +13,10 @@ final class AuthManager {
     }
 
     var state: State = .loading
+    /// Exposed so WebViewTab can forward tokens via URL fragment to
+    /// the embedded webview (Supabase's `detectSessionInUrl` picks them
+    /// up — same mechanism used by OAuth callbacks).
+    var currentSession: Session?
 
     init() {
         Task { await bootstrap() }
@@ -23,6 +27,7 @@ final class AuthManager {
     func bootstrap() async {
         do {
             let session = try await SupabaseService.client.auth.session
+            currentSession = session
             state = .signedIn(session.user)
         } catch {
             state = .signedOut
@@ -38,15 +43,19 @@ final class AuthManager {
                 switch change.event {
                 case .initialSession:
                     if let session = change.session, !session.isExpired {
+                        self.currentSession = session
                         self.state = .signedIn(session.user)
                     } else {
+                        self.currentSession = nil
                         self.state = .signedOut
                     }
                 case .signedIn, .tokenRefreshed, .userUpdated:
-                    if let user = change.session?.user {
-                        self.state = .signedIn(user)
+                    if let session = change.session {
+                        self.currentSession = session
+                        self.state = .signedIn(session.user)
                     }
                 case .signedOut:
+                    self.currentSession = nil
                     self.state = .signedOut
                 default:
                     break

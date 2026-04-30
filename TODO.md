@@ -2,6 +2,123 @@
 
 Living backlog. Items move out as they ship.
 
+## iOS native migration roadmap
+
+The Capacitor build at `ios/` was Phase 1 — proved we could get on a
+phone but felt like a webview wrapper (because it was). We're rewriting
+section by section in SwiftUI under `ios-native/`. Hybrid model: the
+native shell hosts both native screens and `WKWebView` fallbacks for
+not-yet-migrated pages, so the app is fully usable at every phase.
+When the last webview tab flips to native, we delete `ios/` and the
+`server.url` line from the old `capacitor.config.json`.
+
+### Definition of "done" for a screen
+
+A screen is migrated when:
+- The native view replaces its webview tab in `AppShell.SignedInShell`
+- All interactive paths the web version supports work natively (CRUD,
+  drag/drop where applicable, modals, validation)
+- It reads + writes Supabase via `supabase-swift` (no proxying through
+  the Vercel app)
+- Vercel-hosted edge functions (`/api/analyze`, `/api/tts`, etc.) it
+  needs are reached via `URLSession` with the user's Supabase JWT
+- Pull-to-refresh works
+- It honors the same color tokens (Theme.swift) so light/dark parity
+  is trivial later
+
+### Phase status
+
+- **Phase 0 — Foundation: ✅ DONE**
+  Project scaffold, supabase-swift wired, AuthManager + AuthView,
+  AppShell with auth gate, Theme.swift (light palette).
+
+- **Phase 1 — App shell + webview fallbacks: 🚧 IN PROGRESS**
+  Add a `WebViewTab` (UIViewRepresentable around WKWebView) and wire
+  TabView with: Dashboard (native, partial), Goals (webview), Planner
+  (webview), Recipes (webview), Account (webview). Webview tabs load
+  `vercel.app/?page=<name>&embed=1` so the web app picks the right
+  page and hides its own nav (sidebar/hamburger) since the native tab
+  bar replaces them. Auth is forwarded via URL fragment
+  `#access_token=...&refresh_token=...` so users don't sign in twice.
+
+- **Phase 2 — Dashboard finish:**
+  Today's Dashboard ships only the macro-counts row + Today's meals
+  list. Remaining sections, ordered by daily-use signal:
+  1. Quick log (search recipes + history → tap to log) — small
+  2. Daily charts (Charts framework, donut + goal-progress bars) — small
+  3. Analytics widget (last-7-day stat tiles + sparklines) — small
+  4. Analyze food (camera + photo picker + `/api/analyze` upload +
+     result card + Log button) — biggest single piece, probably an
+     evening on its own
+
+- **Phase 3 — Goals page:**
+  Body metrics (collapsible card), Goal settings (collapsible card),
+  weekly check-in with the tiered weekly/monthly/yearly history view
+  + scan callouts, weight chart with auto-y axis. Reads checkins,
+  body_metrics, goals from Supabase. Reuses the existing `?page=goals`
+  webview while the native version is in flight.
+
+- **Phase 4 — Planner page:**
+  Week grid (7 columns desktop / responsive on mobile), drag-and-drop
+  meal moves between days/slots, Share-week modal, Grocery-list view
+  with per-meal include/exclude toggles. The drag interaction needs
+  careful native UX — SwiftUI's `.draggable` + `.dropDestination` is
+  the right primitive but worth a focused session.
+
+- **Phase 5 — Recipes page:**
+  Recipe library list, recipe detail modal, recipe edit screen,
+  ingredient extraction (existing `/api/analyze`-backed flows),
+  read-aloud entry point.
+
+- **Phase 6 — Foods page:**
+  Food items library, barcode lookup, custom food create.
+
+- **Phase 7 — Account page:**
+  Theme picker, body metrics summary, providers/follows,
+  spending/usage display, sign-out, admin panel (admin users only).
+
+- **Phase 8 — Cooking mode:**
+  Read-aloud step navigator with the speechify text transform and
+  voice-off mode. Audio playback can still proxy through `/api/tts`
+  for premium voices. Native AVAudioPlayer for MP3 fallback.
+
+- **Phase 9 — Retire Capacitor:**
+  Delete `ios/`, remove `server.url` from `capacitor.config.json` (or
+  delete the file entirely), remove `@capacitor/*` deps from
+  package.json. Submit to App Store.
+
+### Open architectural questions for this migration
+
+- **API base URL config**: every native call to a Vercel edge function
+  uses `Config.apiBaseURL`. For App Store submission we'll likely want
+  a debug/release split so dev builds can hit a staging branch URL.
+  Defer until we set up a Vercel preview environment.
+- **Supabase realtime subscriptions**: web doesn't use them today.
+  Adding native realtime updates (e.g., live planner changes across
+  two devices) would be nice — but ties to Phase 4. Decide then.
+- **Apple Health integration**: phase 8+ or its own thing. Will need
+  a `HKHealthStore` wrapper. Real value is two-way sync (push our
+  weight/macros into Health, pull workout calories back).
+- **In-App Purchases**: required by App Store before anyone can pay
+  for Premium. StoreKit 2. Same Premium-flag-on-user logic the web
+  Stripe path will use; just a different billing source.
+
+### Webview-tab plumbing (Phase 1 details)
+
+For the hybrid model to work cleanly, two web-app changes are needed:
+
+1. `?page=<name>` URL param → `state.currentPage` on init (overrides
+   the sessionStorage `macrolens_page` restore). Tabs use this to
+   point at the right page.
+2. `?embed=1` URL param → hide the sidebar + hamburger so the native
+   tab bar isn't competing with web nav. Add a `body.embed` class
+   that `display: none`s `.sidebar`, `.sidebar-overlay`, `.hamburger`.
+
+The native side passes session tokens via URL fragment so Supabase's
+`detectSessionInUrl` auto-restores the session in the webview — same
+mechanism Supabase OAuth callbacks use. Means users sign in once
+natively and the webview tabs are already authenticated.
+
 ## Cooking mode — paid voices
 
 **Status:** ✅ SHIPPED (code) — Apr 28 session. Pending: `OPENAI_API_KEY`

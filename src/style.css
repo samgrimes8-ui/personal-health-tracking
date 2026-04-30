@@ -122,6 +122,15 @@ body {
 .auth-error { background: rgba(217,96,96,0.1); border: 1px solid rgba(217,96,96,0.3); color: var(--red); border-radius: var(--r); padding: 10px 13px; font-size: 13px; margin-bottom: 14px; }
 .auth-success { background: rgba(90,173,122,0.1); border: 1px solid rgba(90,173,122,0.3); color: var(--green); border-radius: var(--r); padding: 10px 13px; font-size: 13px; margin-bottom: 14px; }
 
+/* Embed mode — set by JS when ?embed=1 is in the URL. The native iOS
+   app loads webview tabs with this flag so the web app's own nav
+   (sidebar + hamburger) doesn't compete with the native tab bar. */
+body.embed .sidebar,
+body.embed .sidebar-overlay,
+body.embed .hamburger { display: none !important; }
+body.embed .app { grid-template-columns: 1fr !important; }
+body.embed .main { padding-top: 16px !important; }
+
 /* LAYOUT */
 .app { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
 .sidebar {

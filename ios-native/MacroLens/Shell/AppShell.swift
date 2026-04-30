@@ -22,8 +22,11 @@ struct AppShell: View {
     }
 }
 
-/// Tab bar with Dashboard as the only native tab today. Other tabs come
-/// online as we migrate each screen — see README.md migration order.
+/// Tab bar. Dashboard is native; the rest are WebViewTab fallbacks
+/// that load the existing web app inside a WKWebView. As each screen
+/// gets a native rewrite, swap that tab from WebViewTab(page:) to the
+/// new SwiftUI view. See TODO.md "iOS native migration roadmap" for
+/// the order.
 struct SignedInShell: View {
     @State private var state = AppState()
 
@@ -32,9 +35,19 @@ struct SignedInShell: View {
             NavigationStack {
                 DashboardView()
             }
-            .tabItem {
-                Label("Dashboard", systemImage: "house.fill")
-            }
+            .tabItem { Label("Dashboard", systemImage: "house.fill") }
+
+            WebViewTab(page: "goals", title: "Goals & Body")
+                .tabItem { Label("Goals", systemImage: "target") }
+
+            WebViewTab(page: "planner", title: "Planner")
+                .tabItem { Label("Planner", systemImage: "calendar") }
+
+            WebViewTab(page: "recipes", title: "Recipes")
+                .tabItem { Label("Recipes", systemImage: "book.fill") }
+
+            WebViewTab(page: "account", title: "Account")
+                .tabItem { Label("Account", systemImage: "person.crop.circle") }
         }
         .environment(state)
         .tint(Theme.accent)

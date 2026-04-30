@@ -190,6 +190,18 @@ export async function initApp(user, container) {
   const validPages = ['log','analytics','planner','history','goals','recipes','foods','account','providers']
   if (savedPage && validPages.includes(savedPage)) state.currentPage = savedPage
 
+  // Native iOS shell hosts not-yet-migrated screens via WKWebView. Two
+  // URL params drive that integration:
+  //   ?page=<name>   — initial page selector (overrides the sessionStorage
+  //                    restore above so the native tab bar can deep-link
+  //                    to the right screen)
+  //   ?embed=1       — hide the web app's own sidebar + hamburger so the
+  //                    native tab bar isn't competing with web nav.
+  const urlParams = new URLSearchParams(window.location.search)
+  const pageHint = urlParams.get('page')
+  if (pageHint && validPages.includes(pageHint)) state.currentPage = pageHint
+  if (urlParams.get('embed') === '1') document.body.classList.add('embed')
+
   // Personal meal-plan share inbound URL: /?share=<token>. Strip the param
   // first so a refresh doesn't re-fire the modal, then route to the planner
   // and open the copy flow once the page renders.
