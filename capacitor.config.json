@@ -2,6 +2,13 @@
   "appId": "app.macrolens",
   "appName": "MacroLens",
   "webDir": "dist",
+  "server": {
+    "url": "https://personal-health-tracking.vercel.app",
+    "cleartext": false,
+    "androidScheme": "https",
+    "iosScheme": "https",
+    "_comment": "Phase 1 mobile: load the live Vercel app so all relative /api/* calls resolve against the same origin we already host the web on. Native plugins (camera, haptics, status bar, splash) still attach. Switch to bundled assets + a configurable API base URL before App Store submission — Apple rejects 'just a website wrapper' under guideline 4.2."
+  },
   "plugins": {
     "SplashScreen": {
       "launchShowDuration": 1500,

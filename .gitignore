@@ -5,3 +5,15 @@ dist
 .env.test.local
 .env.production.local
 .DS_Store
+
+# Capacitor iOS — ignore generated/per-developer artifacts. Keep the
+# project files (Info.plist, .xcodeproj, .xcworkspace, Package.swift,
+# Assets.xcassets) so the project can be cloned and rebuilt.
+ios/App/App/public/
+ios/App/Pods/
+ios/DerivedData/
+ios/build/
+ios/.swiftpm/
+**/*.xcodeproj/xcuserdata/
+**/*.xcworkspace/xcuserdata/
+**/*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
