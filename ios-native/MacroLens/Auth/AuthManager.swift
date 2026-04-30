@@ -133,6 +133,22 @@ final class AuthManager {
         try await SupabaseService.client.auth.session(from: callbackURL)
         // authStateChanges listener flips us to .signedIn.
     }
+
+    /// Catches any deep link that arrives while the app is foregrounded
+    /// (e.g., OAuth callback that didn't get intercepted by the active
+    /// ASWebAuthenticationSession). Only forwards URLs on our scheme;
+    /// silently ignores anything else.
+    func handleDeepLink(_ url: URL) async {
+        guard url.scheme == "app.macrolens.native" else { return }
+        // Has an auth fragment? Then it's an OAuth callback we can finish.
+        guard url.fragment?.contains("access_token=") == true
+                || url.query?.contains("code=") == true else { return }
+        do {
+            try await SupabaseService.client.auth.session(from: url)
+        } catch {
+            print("[AuthManager] deep link sign-in failed:", error)
+        }
+    }
 }
 
 /// `ASWebAuthenticationSession` requires a presentation anchor — the
