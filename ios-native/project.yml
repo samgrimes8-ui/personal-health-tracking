@@ -64,6 +64,22 @@ targets:
         # → click your team → "Team ID").
         DEVELOPMENT_TEAM: 86T54TVCFN
         CODE_SIGN_STYLE: Automatic
+        # Sign In With Apple entitlement is gated until Apple Developer
+        # Program enrollment lands — free dev provisioning can't claim
+        # the com.apple.developer.applesignin capability and the build
+        # fails to sign without it. To enable after enrollment:
+        #   1. Uncomment the CODE_SIGN_ENTITLEMENTS line below + the
+        #      `entitlements:` block.
+        #   2. In Config.swift, set `appleSignInEnabled = true`.
+        #   3. In Supabase: Auth → Providers → Apple → enable +
+        #      add `app.macrolens.native` to Authorized Client IDs.
+        #   4. xcodegen generate; install.sh.
+        # CODE_SIGN_ENTITLEMENTS: MacroLens/MacroLens.entitlements
+    # entitlements:
+    #   path: MacroLens/MacroLens.entitlements
+    #   properties:
+    #     com.apple.developer.applesignin:
+    #       - Default
     dependencies:
       - package: Supabase
         product: Supabase

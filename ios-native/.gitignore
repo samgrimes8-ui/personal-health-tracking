@@ -14,3 +14,9 @@ DerivedData/
 # Xcode crashes / temp
 *.xcuserstate
 xcuserdata/
+
+# TestFlight upload credentials (App Store Connect API key/issuer)
+.testflight.env
+
+# Generated entitlements file (xcodegen rebuilds from project.yml)
+MacroLens/MacroLens.entitlements

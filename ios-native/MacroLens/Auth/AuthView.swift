@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 
 /// Sign-in / sign-up / forgot-password tabbed screen. Email + password
 /// only — Google native sign-in is a separate follow-up (logged in
@@ -119,8 +120,27 @@ struct AuthView: View {
             }
             .padding(.vertical, 4)
 
+            if Config.appleSignInEnabled {
+                appleButton
+            }
             googleButton
         }
+    }
+
+    @ViewBuilder
+    private var appleButton: some View {
+        SignInWithAppleButton(
+            onRequest: { request in
+                auth.configureAppleRequest(request)
+                error = nil
+            },
+            onCompletion: { result in
+                Task { await handleApple(result) }
+            }
+        )
+        .signInWithAppleButtonStyle(.black)
+        .frame(height: 44)
+        .clipShape(.rect(cornerRadius: 10))
     }
 
     private func line() -> some View {
@@ -299,6 +319,17 @@ struct AuthView: View {
         do {
             try await auth.sendPasswordReset(email: email.trimmingCharacters(in: .whitespaces))
             success = "Reset link sent. Check your email."
+        } catch {
+            self.error = error.localizedDescription
+        }
+        loading = false
+    }
+
+    private func handleApple(_ result: Result<ASAuthorization, Error>) async {
+        loading = true
+        do {
+            try await auth.handleAppleCompletion(result)
+            // authStateChanges → SignedInShell.
         } catch {
             self.error = error.localizedDescription
         }

@@ -2,6 +2,7 @@ import Foundation
 import Supabase
 import AuthenticationServices
 import UIKit
+import CryptoKit
 
 /// Source of truth for the current auth session. AppShell observes this
 /// and routes between the auth screen and the signed-in app shell.
@@ -148,6 +149,76 @@ final class AuthManager {
         } catch {
             print("[AuthManager] deep link sign-in failed:", error)
         }
+    }
+
+    // MARK: - Sign In With Apple
+    //
+    // Native flow — no web redirect. ASAuthorizationController shows the
+    // system Apple Sign-In sheet, returns an identity token, we hand that
+    // to Supabase via signInWithIdToken(provider: .apple, ...). The nonce
+    // round-trip prevents replay: we generate a random string, hash it,
+    // ship the hash to Apple, and pass the raw nonce back to Supabase
+    // which checks it against the token's `nonce` claim.
+
+    private var pendingNonce: String?
+
+    /// Builds an ASAuthorizationAppleIDRequest with the right scopes +
+    /// nonce. Pass this to `SignInWithAppleButton(onRequest:)`.
+    func configureAppleRequest(_ request: ASAuthorizationAppleIDRequest) {
+        let raw = AuthManager.randomNonceString()
+        pendingNonce = raw
+        request.requestedScopes = [.email, .fullName]
+        request.nonce = AuthManager.sha256(raw)
+    }
+
+    /// Completion path from `SignInWithAppleButton(onCompletion:)`.
+    /// Throws so the caller can surface errors in its own UI.
+    func handleAppleCompletion(_ result: Result<ASAuthorization, Error>) async throws {
+        switch result {
+        case .failure(let error):
+            // ASAuthorizationError.canceled is a normal user-back, swallow it.
+            if let asErr = error as? ASAuthorizationError, asErr.code == .canceled { return }
+            throw error
+        case .success(let auth):
+            guard let credential = auth.credential as? ASAuthorizationAppleIDCredential,
+                  let idTokenData = credential.identityToken,
+                  let idToken = String(data: idTokenData, encoding: .utf8),
+                  let nonce = pendingNonce
+            else {
+                throw NSError(domain: "AuthManager", code: -2,
+                              userInfo: [NSLocalizedDescriptionKey: "Apple didn't return an identity token"])
+            }
+            pendingNonce = nil
+            try await SupabaseService.client.auth.signInWithIdToken(
+                credentials: .init(provider: .apple, idToken: idToken, nonce: nonce)
+            )
+        }
+    }
+
+    // MARK: - Nonce helpers
+
+    private static func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        let charset: [Character] =
+            Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._")
+        var result = ""
+        var remaining = length
+        while remaining > 0 {
+            var randoms = [UInt8](repeating: 0, count: 16)
+            let status = SecRandomCopyBytes(kSecRandomDefault, randoms.count, &randoms)
+            precondition(status == errSecSuccess, "SecRandomCopyBytes failed")
+            for r in randoms where remaining > 0 && r < charset.count * (256 / charset.count) {
+                result.append(charset[Int(r) % charset.count])
+                remaining -= 1
+            }
+        }
+        return result
+    }
+
+    private static func sha256(_ input: String) -> String {
+        let data = Data(input.utf8)
+        let hash = SHA256.hash(data: data)
+        return hash.map { String(format: "%02x", $0) }.joined()
     }
 }
 

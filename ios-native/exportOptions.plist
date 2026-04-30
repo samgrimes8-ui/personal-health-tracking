@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App-store-bound build. After enrollment in the Apple Developer
+         Program, Xcode auto-creates an App Store distribution profile
+         on the first archive; -allowProvisioningUpdates lets it manage
+         that without a Mac App Store Connect login each time. -->
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>destination</key>
+    <string>export</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>teamID</key>
+    <string>86T54TVCFN</string>
+    <!-- Bitcode is deprecated and stripped from the App Store as of
+         Xcode 14, so we don't ask for it. -->
+    <key>uploadSymbols</key>
+    <true/>
+    <key>compileBitcode</key>
+    <false/>
+    <!-- Strips the symbols off the binary that Apple uses for crash
+         reports — uploadSymbols above sends them separately so we still
+         get symbolicated TestFlight crashes. -->
+    <key>stripSwiftSymbols</key>
+    <true/>
+</dict>
+</plist>
