@@ -77,6 +77,13 @@ export function renderAuthPage(container) {
         <div id="auth-error" class="auth-error" style="display:none"></div>
         <div id="auth-success" class="auth-success" style="display:none"></div>
 
+        ${isNative() ? `
+          <div style="font-size:12px;color:var(--text2);background:color-mix(in srgb, var(--carbs) 8%, transparent);border:1px solid color-mix(in srgb, var(--carbs) 25%, transparent);border-radius:var(--r);padding:10px 12px;margin-bottom:14px;line-height:1.5">
+            <strong>Signed up with Google?</strong> The mobile app uses email + password.
+            Tap <em>Forgot password</em> below to set a password for your account, then sign in here.
+          </div>
+        ` : ''}
+
         <div id="auth-form-login">
           <div class="auth-field">
             <label>Email</label>

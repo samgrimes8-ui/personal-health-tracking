@@ -19,14 +19,14 @@
     <title>MacroLens</title>
     <script>
       // Resolve theme synchronously before any CSS evaluates so the page
-      // never flashes the wrong palette. Saved choice wins over system
-      // preference; if neither, fall back to dark (the original look).
+      // never flashes the wrong palette. Saved choice wins; otherwise we
+      // default to LIGHT mode (was prefers-color-scheme — too many users
+      // on dark-mode phones were getting the dark palette unprompted).
       // Also keeps the iOS status-bar tint in sync via theme-color meta.
       (function () {
         var saved = null
         try { saved = localStorage.getItem('macrolens_theme') } catch (e) {}
-        var sysLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
-        var theme = saved === 'light' || saved === 'dark' ? saved : (sysLight ? 'light' : 'dark')
+        var theme = saved === 'light' || saved === 'dark' ? saved : 'light'
         document.documentElement.setAttribute('data-theme', theme)
         var meta = document.querySelector('meta[name="theme-color"]')
         if (meta) meta.content = theme === 'light' ? '#fbfaf6' : '#15130f'

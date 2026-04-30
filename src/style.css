@@ -74,7 +74,12 @@ body {
 #app { min-height: 100vh; }
 
 /* AUTH */
-.auth-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+/* align-items: flex-start (not center) so when the iOS keyboard pops up
+   and shrinks the visible viewport, the form sits at the top with the
+   Sign-in button still reachable above the keyboard. overflow-y: auto +
+   max-height: 100vh keeps the form scrollable as a fallback even when
+   Capacitor's body-resize keyboard mode doesn't fully shrink things. */
+.auth-wrap { min-height: 100vh; max-height: 100vh; overflow-y: auto; display: flex; align-items: flex-start; justify-content: center; padding: 40px 20px 60px; }
 .auth-card { background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--r3); padding: 40px; width: 100%; max-width: 400px; }
 .auth-logo { margin-bottom: 28px; }
 .auth-logo-text { font-family: 'DM Serif Display', serif; font-size: 26px; color: var(--accent); }
