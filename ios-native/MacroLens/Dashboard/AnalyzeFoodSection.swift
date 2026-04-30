@@ -28,6 +28,7 @@ struct AnalyzeFoodSection: View {
     @State private var photoSelection: PhotosPickerItem?
 
     @State private var analyzing: Bool = false
+    @State private var stage: String?           // status text shown under the analyze button while the pipeline runs
     @State private var result: AnalysisResult?
     @State private var error: String?
     @State private var loggingResult: Bool = false
@@ -45,6 +46,12 @@ struct AnalyzeFoodSection: View {
                 modePicker
                 sourcePicker
                 inputArea
+                if let stage, analyzing {
+                    Text(stage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 if let error { errorBanner(error) }
                 if let result { resultCard(result) }
             }
@@ -416,11 +423,12 @@ struct AnalyzeFoodSection: View {
     private func analyze() async {
         inputFocused = false
         analyzing = true
+        stage = nil
         error = nil
         result = nil
         logged = false
         saved = false
-        defer { analyzing = false }
+        defer { analyzing = false; stage = nil }
 
         do {
             let r: AnalysisResult
@@ -428,10 +436,7 @@ struct AnalyzeFoodSection: View {
             case (.food, .write):
                 r = try await AnalyzeService.describeFood(text)
             case (.food, .photo):
-                guard let b64 = imageBase64ForUpload() else {
-                    throw NSError(domain: "Analyze", code: 0, userInfo: [NSLocalizedDescriptionKey: "Couldn't encode the photo"])
-                }
-                r = try await AnalyzeService.analyzeFoodPhoto(b64)
+                r = try await runFoodPhotoPipeline()
             case (.recipe, .write):
                 r = try await AnalyzeService.analyzeRecipeText(text)
             case (.recipe, .photo):
@@ -443,6 +448,61 @@ struct AnalyzeFoodSection: View {
             result = r
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    /// Three-stage food-photo router, matching the web's handleFoodPhoto:
+    ///   1. Local barcode (Vision framework) → if found, /api/barcode lookup
+    ///   2. AI classifier → "barcode" | "label" | "food"
+    ///   3a. barcode classification → AI reads digits → /api/barcode lookup
+    ///   3b. label → analyzeNutritionLabel
+    ///   3c. food → analyzeFoodPhoto (the existing path)
+    /// Updates `stage` along the way so the user sees what's happening.
+    /// Throws if every path fails; falls back to meal-photo analysis on
+    /// classifier weirdness so we always return SOMETHING.
+    private func runFoodPhotoPipeline() async throws -> AnalysisResult {
+        guard let raw = image else {
+            throw NSError(domain: "Analyze", code: 0, userInfo: [NSLocalizedDescriptionKey: "No photo"])
+        }
+        let resized = raw.resizedForAnalysis()
+
+        // 1. Local barcode via Vision (free, fast).
+        stage = "Checking for barcode…"
+        if let code = await BarcodeService.detect(in: resized) {
+            stage = "Barcode \(code) — looking up…"
+            if let lookup = try await BarcodeService.lookup(code) {
+                return lookup
+            }
+            stage = "Barcode \(code) not in database — trying AI…"
+        }
+
+        // 2. AI classifier — figure out what kind of photo this is.
+        guard let b64 = resized.jpegBase64() else {
+            throw NSError(domain: "Analyze", code: 0, userInfo: [NSLocalizedDescriptionKey: "Couldn't encode the photo"])
+        }
+        stage = "Detecting what's in the photo…"
+        let kind = (try? await AnalyzeService.classifyFoodPhoto(b64)) ?? "food"
+
+        // 3. Branch on classification.
+        switch kind {
+        case "barcode":
+            stage = "Reading barcode digits…"
+            if let aiCode = try? await AnalyzeService.readBarcodeFromImage(b64),
+               let lookup = try await BarcodeService.lookup(aiCode) {
+                return lookup
+            }
+            // Couldn't read the bars OR product not in OFF — fall through
+            // to meal photo analysis as a soft landing rather than failing.
+            stage = "Couldn't read the barcode — analyzing as a meal…"
+            return try await AnalyzeService.analyzeFoodPhoto(b64)
+
+        case "label":
+            stage = "Reading nutrition label…"
+            return try await AnalyzeService.analyzeNutritionLabel(b64)
+
+        default: // "food" or any unexpected value
+            stage = "Analyzing meal photo…"
+            return try await AnalyzeService.analyzeFoodPhoto(b64)
         }
     }
 
