@@ -55,7 +55,7 @@ extension AppState {
         let userId = try await SupabaseService.client.auth.session.user.id.uuidString
         let response: [Goals] = try await SupabaseService.client
             .from("goals")
-            .select("calories, protein, carbs, fat, fiber")
+            .select("calories, protein, carbs, fat")
             .eq("user_id", value: userId)
             .limit(1)
             .execute()

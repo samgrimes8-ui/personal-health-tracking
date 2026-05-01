@@ -339,7 +339,9 @@ final class AppState {
     }
 
     /// Upsert daily macro targets. Mirrors upsertGoals in db.js — one
-    /// row per user, onConflict: user_id.
+    /// row per user, onConflict: user_id. Field set is exactly the
+    /// public.goals schema (calories / protein / carbs / fat). The
+    /// table has no `fiber` column; including it 400s the upsert.
     func saveGoals(_ next: Goals) async throws {
         struct Payload: Encodable {
             let user_id: String
@@ -347,7 +349,6 @@ final class AppState {
             let protein: Int?
             let carbs: Int?
             let fat: Int?
-            let fiber: Int?
         }
         let userId = try await currentUserID()
         let payload = Payload(
@@ -355,8 +356,7 @@ final class AppState {
             calories: next.calories,
             protein: next.protein,
             carbs: next.carbs,
-            fat: next.fat,
-            fiber: next.fiber
+            fat: next.fat
         )
         try await SupabaseService.client
             .from("goals")
@@ -559,7 +559,7 @@ final class AppState {
         let userId = try await currentUserID()
         let response: [Goals] = try await SupabaseService.client
             .from("goals")
-            .select("calories, protein, carbs, fat, fiber")
+            .select("calories, protein, carbs, fat")
             .eq("user_id", value: userId)
             .limit(1)
             .execute()

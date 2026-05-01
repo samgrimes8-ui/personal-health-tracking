@@ -7,12 +7,17 @@ import Foundation
 /// the keyDecodingStrategy. Where that doesn't apply, columns stay
 /// snake_case here for clarity vs. the web codebase.
 
+/// One row of public.goals — daily macro targets, one per user.
+/// Mirrors the web schema exactly: only calories / protein / carbs / fat
+/// columns exist. Fiber is tracked on individual log rows but NOT as a
+/// goal target (web never wired it as a goal either). Adding `fiber`
+/// here breaks the SELECT + upsert because the column doesn't exist on
+/// the table — keep this struct lean.
 struct Goals: Codable, Hashable {
     var calories: Int?
     var protein: Int?
     var carbs: Int?
     var fat: Int?
-    var fiber: Int?
 }
 
 /// One row of public.meal_log — what gets logged when a user records
@@ -251,8 +256,7 @@ extension BodyMetrics {
             calories: Int(targetCal),
             protein: Int(proteinG),
             carbs: Int(carbG),
-            fat: Int(fatG),
-            fiber: nil
+            fat: Int(fatG)
         )
     }
 

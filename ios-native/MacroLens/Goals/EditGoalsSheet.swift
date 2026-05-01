@@ -445,8 +445,7 @@ struct DailyTargetsDetailView: View {
                 calories: Int(calories.trimmingCharacters(in: .whitespaces)),
                 protein:  Int(protein.trimmingCharacters(in: .whitespaces)),
                 carbs:    Int(carbs.trimmingCharacters(in: .whitespaces)),
-                fat:      Int(fat.trimmingCharacters(in: .whitespaces)),
-                fiber:    state.goals.fiber
+                fat:      Int(fat.trimmingCharacters(in: .whitespaces))
             )
             try await state.saveGoals(nextGoals)
             dismiss()
