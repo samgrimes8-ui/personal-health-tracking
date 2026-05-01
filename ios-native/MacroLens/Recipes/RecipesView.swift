@@ -30,6 +30,7 @@ struct RecipesView: View {
     @State private var presented: PresentedRecipe?
     @State private var planning: RecipeFull?
     @State private var sharing: RecipeFull?
+    @State private var cooking: RecipeFull?
 
     enum PresentedRecipe: Identifiable {
         case viewExisting(RecipeFull)
@@ -82,6 +83,9 @@ struct RecipesView: View {
                                      },
                                      onShare: { recipe in
                                          sharing = recipe
+                                     },
+                                     onCook: { recipe in
+                                         cooking = recipe
                                      })
                 case .editExisting(let r):
                     RecipeEditView(recipe: r,
@@ -131,6 +135,9 @@ struct RecipesView: View {
                     library[idx].share_token = newToken ?? library[idx].share_token
                 }
             }
+        }
+        .fullScreenCover(item: $cooking) { recipe in
+            CookingModeView(recipe: recipe)
         }
     }
 
