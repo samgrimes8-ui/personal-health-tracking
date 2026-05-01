@@ -165,6 +165,11 @@ final class AppState {
     @discardableResult
     func saveCheckin(_ row: CheckinInsert) async throws -> CheckinRow {
         let userId = try await currentUserID()
+        // Wide payload — basic fields are always sent; scan-extract fields
+        // only fill in when row.scan is set. JSONEncoder writes nil as
+        // JSON null, which Postgres reads as "leave the column NULL", so
+        // a basic weigh-in still produces a clean row with the extended
+        // columns null.
         struct Payload: Encodable {
             let user_id: String
             let weight_kg: Double?
@@ -173,7 +178,46 @@ final class AppState {
             let notes: String?
             let scan_date: String?
             let checked_in_at: String
+            // Scan provenance — set when a file was uploaded
+            let scan_type: String?
+            let scan_file_path: String?
+            // Body composition (InBody-style)
+            let lean_body_mass_kg: Double?
+            let body_fat_mass_kg: Double?
+            let bone_mass_kg: Double?
+            let total_body_water_kg: Double?
+            let intracellular_water_kg: Double?
+            let extracellular_water_kg: Double?
+            let ecw_tbw_ratio: Double?
+            let protein_kg: Double?
+            let minerals_kg: Double?
+            let bmr: Int?
+            let bmi: Double?
+            let inbody_score: Int?
+            let visceral_fat_level: Double?
+            let body_cell_mass_kg: Double?
+            let smi: Double?
+            // Segmental
+            let seg_lean_left_arm_kg: Double?
+            let seg_lean_right_arm_kg: Double?
+            let seg_lean_trunk_kg: Double?
+            let seg_lean_left_leg_kg: Double?
+            let seg_lean_right_leg_kg: Double?
+            let seg_lean_left_arm_pct: Double?
+            let seg_lean_right_arm_pct: Double?
+            let seg_lean_trunk_pct: Double?
+            let seg_lean_left_leg_pct: Double?
+            let seg_lean_right_leg_pct: Double?
+            // DEXA
+            let bone_mineral_density: Double?
+            let t_score: Double?
+            let z_score: Double?
+            let android_fat_pct: Double?
+            let gynoid_fat_pct: Double?
+            let android_gynoid_ratio: Double?
+            let vat_area_cm2: Double?
         }
+        let e = row.scan?.extract
         let payload = Payload(
             user_id: userId,
             weight_kg: row.weightKg,
@@ -181,7 +225,41 @@ final class AppState {
             muscle_mass_kg: row.muscleMassKg,
             notes: row.notes,
             scan_date: row.scanDate,
-            checked_in_at: row.checkedInAt
+            checked_in_at: row.checkedInAt,
+            scan_type: e?.scan_type,
+            scan_file_path: row.scan?.filePath,
+            lean_body_mass_kg: e?.lean_body_mass_kg,
+            body_fat_mass_kg: e?.body_fat_mass_kg,
+            bone_mass_kg: e?.bone_mass_kg,
+            total_body_water_kg: e?.total_body_water_kg,
+            intracellular_water_kg: e?.intracellular_water_kg,
+            extracellular_water_kg: e?.extracellular_water_kg,
+            ecw_tbw_ratio: e?.ecw_tbw_ratio,
+            protein_kg: e?.protein_kg,
+            minerals_kg: e?.minerals_kg,
+            bmr: e?.bmr,
+            bmi: e?.bmi,
+            inbody_score: e?.inbody_score,
+            visceral_fat_level: e?.visceral_fat_level,
+            body_cell_mass_kg: e?.body_cell_mass_kg,
+            smi: e?.smi,
+            seg_lean_left_arm_kg: e?.seg_lean_left_arm_kg,
+            seg_lean_right_arm_kg: e?.seg_lean_right_arm_kg,
+            seg_lean_trunk_kg: e?.seg_lean_trunk_kg,
+            seg_lean_left_leg_kg: e?.seg_lean_left_leg_kg,
+            seg_lean_right_leg_kg: e?.seg_lean_right_leg_kg,
+            seg_lean_left_arm_pct: e?.seg_lean_left_arm_pct,
+            seg_lean_right_arm_pct: e?.seg_lean_right_arm_pct,
+            seg_lean_trunk_pct: e?.seg_lean_trunk_pct,
+            seg_lean_left_leg_pct: e?.seg_lean_left_leg_pct,
+            seg_lean_right_leg_pct: e?.seg_lean_right_leg_pct,
+            bone_mineral_density: e?.bone_mineral_density,
+            t_score: e?.t_score,
+            z_score: e?.z_score,
+            android_fat_pct: e?.android_fat_pct,
+            gynoid_fat_pct: e?.gynoid_fat_pct,
+            android_gynoid_ratio: e?.android_gynoid_ratio,
+            vat_area_cm2: e?.vat_area_cm2
         )
         let inserted: [CheckinRow] = try await SupabaseService.client
             .from("checkins")
@@ -495,10 +573,14 @@ final class AppState {
     }
 
     private func fetchAllCheckins() async throws -> [CheckinRow] {
+        // SELECT * so the extended body-composition / segmental / DEXA
+        // columns flow through. The decoder ignores any column we don't
+        // declare on CheckinRow, so we don't pay for the wider read in
+        // the basic-weigh-in case (still ~10 columns of scalars).
         let userId = try await currentUserID()
         let response: [CheckinRow] = try await SupabaseService.client
             .from("checkins")
-            .select("id, weight_kg, body_fat_pct, muscle_mass_kg, notes, scan_date, checked_in_at, scan_type, scan_file_path")
+            .select()
             .eq("user_id", value: userId)
             .order("checked_in_at", ascending: true)
             .limit(2000)
@@ -541,7 +623,10 @@ final class AppState {
 
 /// Input shape for AppState.saveCheckin / updateCheckin. Plain DTO so
 /// the views don't have to know about the underlying insert payload
-/// shape.
+/// shape. The optional `scan` payload is set when an InBody / DEXA
+/// scan was uploaded — it carries the file's storage path plus the
+/// full extracted body-comp shape so saveCheckin can persist all
+/// columns in one insert.
 struct CheckinInsert {
     var weightKg: Double?
     var bodyFatPct: Double?
@@ -549,4 +634,13 @@ struct CheckinInsert {
     var notes: String?
     var scanDate: String?       // YYYY-MM-DD
     var checkedInAt: String     // ISO8601 timestamp
+    var scan: CheckinScanPayload?
+}
+
+/// Set when a check-in row carries scan provenance + extracted metrics.
+/// `filePath` is the storage path inside the body-scans bucket; `extract`
+/// is the AI-parsed shape from ScanService.extractBodyScan.
+struct CheckinScanPayload {
+    var filePath: String?
+    var extract: BodyScanExtract
 }

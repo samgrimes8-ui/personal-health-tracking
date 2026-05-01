@@ -79,11 +79,11 @@ struct AnalysisResult: Codable, Hashable {
     var ingredients: [Ingredient]?
 }
 
-/// One row of public.checkins. Now expanded for the Goals page —
-/// body fat / muscle / scan provenance. Other extended scan fields
-/// (segmental lean, BMR, BMI, etc.) we leave on the row but don't
-/// decode here; the read paths only need the headline numbers, and
-/// editing happens through the basic-fields modal.
+/// One row of public.checkins. Carries the basic weigh-in fields plus
+/// every InBody / DEXA column we extract from a scan upload. Extended
+/// fields are optional — a manual weigh-in row only populates
+/// weight_kg / body_fat_pct / muscle_mass_kg, while a scan upload
+/// fills in the body-composition + segmental + DEXA blocks.
 struct CheckinRow: Codable, Identifiable, Hashable {
     var id: String
     var weight_kg: Double?
@@ -94,6 +94,45 @@ struct CheckinRow: Codable, Identifiable, Hashable {
     var checked_in_at: String?        // ISO8601 timestamp
     var scan_type: String?            // "INBODY" | "DEXA" | nil
     var scan_file_path: String?       // when present, a scan file is attached
+
+    // Body composition (InBody-style)
+    var lean_body_mass_kg: Double?
+    var body_fat_mass_kg: Double?
+    var bone_mass_kg: Double?
+    var total_body_water_kg: Double?
+    var intracellular_water_kg: Double?
+    var extracellular_water_kg: Double?
+    var ecw_tbw_ratio: Double?
+    var protein_kg: Double?
+    var minerals_kg: Double?
+    var bmr: Int?
+    var bmi: Double?
+    var inbody_score: Int?
+    var visceral_fat_level: Double?
+    var body_cell_mass_kg: Double?
+    var smi: Double?
+
+    // Segmental lean mass — kg + % of normal per limb
+    var seg_lean_left_arm_kg: Double?
+    var seg_lean_right_arm_kg: Double?
+    var seg_lean_trunk_kg: Double?
+    var seg_lean_left_leg_kg: Double?
+    var seg_lean_right_leg_kg: Double?
+    var seg_lean_left_arm_pct: Double?
+    var seg_lean_right_arm_pct: Double?
+    var seg_lean_trunk_pct: Double?
+    var seg_lean_left_leg_pct: Double?
+    var seg_lean_right_leg_pct: Double?
+
+    // DEXA-specific
+    var bone_mineral_density: Double?
+    var t_score: Double?
+    var z_score: Double?
+    var android_fat_pct: Double?
+    var gynoid_fat_pct: Double?
+    var android_gynoid_ratio: Double?
+    var vat_area_cm2: Double?
+
     // HealthKit dedup columns (see supabase/migrations/healthkit_columns.sql).
     // healthkit_uuid is the sample.uuid.uuidString from HKHealthStore — set
     // on rows we pushed to HK and on rows we pulled from HK; null otherwise.
@@ -101,6 +140,23 @@ struct CheckinRow: Codable, Identifiable, Hashable {
     // ("healthkit") rows so the push path never echoes pulled rows back.
     var healthkit_uuid: String?
     var source: String?
+
+    /// Has any extended body-composition value beyond weight/BF/muscle?
+    var hasExtended: Bool {
+        total_body_water_kg != nil || visceral_fat_level != nil
+            || inbody_score != nil || bmr != nil || bmi != nil
+            || body_fat_mass_kg != nil || lean_body_mass_kg != nil
+    }
+
+    /// Has segmental lean mass for the 5 body regions?
+    var hasSegmental: Bool {
+        seg_lean_trunk_kg != nil || seg_lean_left_arm_kg != nil
+    }
+
+    /// Has DEXA-specific outputs?
+    var hasDexa: Bool {
+        bone_mineral_density != nil || android_fat_pct != nil || t_score != nil
+    }
 }
 
 /// One row of public.body_metrics. One per user (upsert by user_id).
