@@ -122,34 +122,38 @@ struct DashboardView: View {
     }
 
     private func macroTile(label: String, value: Int, unit: String, goal: Int?, color: Color) -> some View {
+        // Fixed font sizes (no minimumScaleFactor) so all four cards render
+        // at the same visual weight — sized to fit the worst-case strings
+        // ("CALORIES" / "1,110" / "of 2,616 kcal") inside an iPhone-12-width
+        // card without wrapping. Subline keeps a defensive scale factor
+        // because "of 2,616 kcal" vs "of 32g" is too wide a variance to
+        // absorb at a single fixed size.
         VStack(alignment: .leading, spacing: 8) {
             Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .tracking(1.0)
+                .font(.system(size: 10, weight: .medium))
+                .tracking(0.5)
                 .textCase(.uppercase)
                 .foregroundStyle(Theme.text3)
                 .lineLimit(1)
-                .minimumScaleFactor(0.6)
             Text("\(value)\(unit == "g" ? "g" : "")")
-                .font(.system(size: 28, weight: .semibold))
+                .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(color)
                 .lineLimit(1)
-                .minimumScaleFactor(0.6)
             if let goal {
                 Text("of \(goal)\(unit == "g" ? "g" : "") \(unit == "kcal" ? "kcal" : "")")
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundStyle(Theme.text3)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.6)
+                    .minimumScaleFactor(0.7)
             } else {
                 Text("Set a goal")
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundStyle(Theme.text3)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.6)
             }
         }
-        .padding(14)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.bg2, in: .rect(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
