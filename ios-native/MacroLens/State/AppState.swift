@@ -11,6 +11,11 @@ final class AppState {
     // ─── Dashboard / Goals (pre-existing) ──────────────────────────────
     var goals: Goals = Goals()
     var todayLog: [MealLogEntry] = []
+    /// Recent meal_log slice for Quick Log suggestions on the dashboard.
+    /// Wider than `todayLog` (~last 300 entries, all dates) so the
+    /// search-and-relog path can find meals the user logged days or
+    /// weeks ago. Mirrors web's `state.log` (limit 300 in src/lib/db.js).
+    var dashboardRecentLog: [MealLogEntry] = []
     var last7Days: [DaySummary] = []
     var recipes: [RecipeRow] = []
     var recentCheckins: [CheckinRow] = []
@@ -60,6 +65,7 @@ final class AppState {
         do {
             async let g = fetchGoals()
             async let weekLog = fetchLastNDaysLog(7)
+            async let recentLog = fetchRecentLog(limit: 300)
             async let r = fetchRecipes()
             async let c = fetchRecentCheckins()
 
@@ -67,6 +73,7 @@ final class AppState {
             self.goals = (try? await g) ?? Goals()
             self.todayLog = filterToToday(weekEntries).sorted { ($0.logged_at ?? "") > ($1.logged_at ?? "") }
             self.last7Days = DaySummary.build(from: weekEntries, days: 7)
+            self.dashboardRecentLog = (try? await recentLog) ?? []
             self.recipes = (try? await r) ?? []
             self.recentCheckins = (try? await c) ?? []
         } catch {
@@ -393,6 +400,34 @@ final class AppState {
         self.bodyMetrics = next
     }
 
+    /// Apply an in-memory patch to a meal_log entry across both
+    /// dashboard slices (`todayLog` + `dashboardRecentLog`). Used after
+    /// a successful DBService.updateMealEntry round-trip so the macro
+    /// tiles + Today's meals + Quick log suggestions all refresh
+    /// without a re-fetch.
+    func updateMealLogEntry(id: String, _ patch: MealEntryPatch) async throws {
+        try await DBService.updateMealEntry(id: id, patch)
+        let apply: (inout MealLogEntry) -> Void = { entry in
+            if let v = patch.name { entry.name = v }
+            if let v = patch.mealType { entry.meal_type = v }
+            if let v = patch.calories { entry.calories = v }
+            if let v = patch.protein { entry.protein = v }
+            if let v = patch.carbs { entry.carbs = v }
+            if let v = patch.fat { entry.fat = v }
+            if let v = patch.fiber { entry.fiber = v }
+            if let v = patch.servingsConsumed { entry.servings_consumed = v }
+        }
+        if let i = todayLog.firstIndex(where: { $0.id == id }) { apply(&todayLog[i]) }
+        if let i = dashboardRecentLog.firstIndex(where: { $0.id == id }) { apply(&dashboardRecentLog[i]) }
+    }
+
+    /// Delete a meal_log entry and prune both dashboard slices locally.
+    func deleteMealLogEntry(id: String) async throws {
+        try await DBService.deleteMealEntry(id: id)
+        todayLog.removeAll { $0.id == id }
+        dashboardRecentLog.removeAll { $0.id == id }
+    }
+
     /// Insert a new meal_log row. Used by Quick log + Analyze food's
     /// "Log this meal" button. Today's log is updated locally so the
     /// macro tiles refresh immediately without a round trip.
@@ -441,6 +476,7 @@ final class AppState {
             .value
         if let entry = inserted.first {
             todayLog.insert(entry, at: 0)
+            dashboardRecentLog.insert(entry, at: 0)
             // Apple Health push: write 4 dietary samples (kcal, protein,
             // carbs, fat) per meal_log row, gated by the per-user toggle.
             // No DB writeback needed — calories are push-only (we don't
@@ -513,6 +549,23 @@ final class AppState {
             .execute()
             .value
         return response.first ?? Goals()
+    }
+
+    /// Pulls the most recent N meal_log rows across all dates. Used by
+    /// the dashboard's Quick Log suggestions so the search-and-relog
+    /// path finds meals beyond just today. Mirrors getMealLog(limit:300)
+    /// in src/lib/db.js — no date filter, capped by `limit`.
+    private func fetchRecentLog(limit: Int) async throws -> [MealLogEntry] {
+        let userId = try await currentUserID()
+        let response: [MealLogEntry] = try await SupabaseService.client
+            .from("meal_log")
+            .select()
+            .eq("user_id", value: userId)
+            .order("logged_at", ascending: false)
+            .limit(limit)
+            .execute()
+            .value
+        return response
     }
 
     private func fetchLastNDaysLog(_ days: Int) async throws -> [MealLogEntry] {

@@ -121,15 +121,17 @@ struct QuickLogSection: View {
 
     // MARK: - Data
 
-    /// Combined results: today's recent log entries (deduped by name)
-    /// first, then recipe library matches. Recent items sort to top so
-    /// "log what I had yesterday" stays one tap away.
+    /// Combined results: recent log entries across the user's full
+    /// recent history (deduped by name) first, then recipe library
+    /// matches. Sourced from `state.dashboardRecentLog` (last ~300
+    /// entries, all dates) so the search-and-relog path covers meals
+    /// from days/weeks back, mirroring web's quick-log over `state.log`.
     private var filteredResults: [QuickLogItem] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
 
         var seenNames = Set<String>()
         var recentItems: [QuickLogItem] = []
-        for entry in state.todayLog {
+        for entry in state.dashboardRecentLog {
             let name = entry.name ?? ""
             if name.isEmpty { continue }
             let key = name.lowercased()
