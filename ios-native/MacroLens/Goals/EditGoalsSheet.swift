@@ -1,16 +1,25 @@
 import SwiftUI
 
-/// Editor for the Goal Settings card on the Goals page. Touches two
-/// tables under the hood: body_metrics (direction, pace, target weight,
-/// target body-fat %) and goals (cal / protein / carbs / fat targets).
-/// Both saved in one tap — UI doesn't care which table a field lives on.
+/// Editor for the Daily Targets card on the Goals page. Pushed from
+/// the summary card on tap. Touches two tables under the hood:
+/// body_metrics (direction, pace, target weight, target body-fat %)
+/// and goals (cal / protein / carbs / fat targets). Both saved in
+/// one tap — UI doesn't care which table a field lives on.
 ///
 /// The "Use calculated" button populates the macro fields from
 /// BMR/TDEE/direction/pace via the same formula the web uses
-/// (calcTargetMacros mirrored in BodyMetrics.calculatedTargets). Lets
-/// users set a goal direction once and accept the recommended macros
-/// without doing math.
-struct EditGoalsSheet: View {
+/// (calcTargetMacros mirrored in BodyMetrics.calculatedTargets()).
+///
+/// Lock-to-balance behavior on the four macro fields mirrors web
+/// app.js:4598-4638 — pick which fields are fixed (locked) and which
+/// auto-recalculate from the rest. Defaults: calories + fat locked,
+/// carbs unlocks to balance the kcal arithmetic when the user nudges
+/// any locked field.
+///
+/// "How are these calculated?" reveals the methodology sheet (BMR
+/// formulas + TDEE multipliers + pace deficits) — same content as
+/// the web's showMethodologyModal.
+struct DailyTargetsDetailView: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
 
@@ -26,50 +35,52 @@ struct EditGoalsSheet: View {
     @State private var carbs: String = ""
     @State private var fat: String = ""
 
+    // Lock state for macro lock-to-balance. Default: calories +
+    // fat locked, carbs unlocks to balance.
+    @State private var lockCal: Bool = true
+    @State private var lockPro: Bool = false
+    @State private var lockCarb: Bool = false
+    @State private var lockFat: Bool = true
+
+    @State private var showMethodology: Bool = false
     @State private var saving = false
     @State private var errorMsg: String?
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    intro
-                    directionCard
-                    paceCard
-                    targetCard
-                    calculatedCard
-                    macroCard
-                    if let errorMsg {
-                        Text(errorMsg)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.red)
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.red.opacity(0.08), in: .rect(cornerRadius: 8))
-                    }
-                    actionRow
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                intro
+                directionCard
+                paceCard
+                targetCard
+                calculatedCard
+                macroCard
+                if let errorMsg {
+                    Text(errorMsg)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.red)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.red.opacity(0.08), in: .rect(cornerRadius: 8))
                 }
-                .padding(20)
+                actionRow
             }
-            .background(Theme.bg)
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Edit goals")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundStyle(Theme.text3)
-                }
-            }
-            .onAppear { hydrate() }
+            .padding(20)
         }
-        .presentationDetents([.large])
+        .background(Theme.bg)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle("Daily targets")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { hydrate() }
+        .sheet(isPresented: $showMethodology) {
+            MethodologySheet()
+        }
     }
 
     // MARK: - Sections
 
     private var intro: some View {
-        Text("Direction + pace drive the recommended macros. You can override the macro fields below if you're following a different plan.")
+        Text("Direction + pace drive the recommended macros. Lock individual macro fields below to override — unlocked fields auto-balance to keep the calorie math consistent.")
             .font(.system(size: 13))
             .foregroundStyle(Theme.text2)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -161,6 +172,14 @@ struct EditGoalsSheet: View {
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.text3)
                 }
+                Button {
+                    showMethodology = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.text3)
+                }
+                .buttonStyle(.plain)
             }
 
             if let c = calc {
@@ -181,6 +200,7 @@ struct EditGoalsSheet: View {
                         .background(Theme.accentSoft(), in: .rect(cornerRadius: 8))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent.opacity(0.3), lineWidth: 1))
                 }
+                .buttonStyle(.plain)
             } else {
                 Text("Add weight / age / height in body metrics to see calculated targets.")
                     .font(.system(size: 12))
@@ -198,38 +218,47 @@ struct EditGoalsSheet: View {
             HStack {
                 sectionLabel("Daily macro targets")
                 Spacer()
-                Text("Override or use calculated")
+                Text("🔒 fixed · 🔓 auto-balances")
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.text3)
             }
             HStack(spacing: 8) {
-                fieldLabeled("Calories") {
-                    TextField("2000", text: $calories)
-                        .keyboardType(.numberPad)
-                        .textInputField()
-                }
-                fieldLabeled("Protein (g)") {
-                    TextField("150", text: $protein)
-                        .keyboardType(.numberPad)
-                        .textInputField()
-                }
+                lockableField(label: "Calories", text: $calories, color: Theme.cal,
+                              isLocked: $lockCal, key: "cal")
+                lockableField(label: "Protein (g)", text: $protein, color: Theme.protein,
+                              isLocked: $lockPro, key: "pro")
             }
             HStack(spacing: 8) {
-                fieldLabeled("Carbs (g)") {
-                    TextField("220", text: $carbs)
-                        .keyboardType(.numberPad)
-                        .textInputField()
-                }
-                fieldLabeled("Fat (g)") {
-                    TextField("60", text: $fat)
-                        .keyboardType(.numberPad)
-                        .textInputField()
-                }
+                lockableField(label: "Carbs (g)", text: $carbs, color: Theme.carbs,
+                              isLocked: $lockCarb, key: "carb")
+                lockableField(label: "Fat (g)", text: $fat, color: Theme.fat,
+                              isLocked: $lockFat, key: "fat")
+            }
+            if let hint = balanceHint {
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding(14)
         .background(Theme.bg2, in: .rect(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+    }
+
+    /// One-liner showing the current macro arithmetic so the user can
+    /// see whether their lock combo balances. Mirrors the web's
+    /// `macro-balance-hint` div.
+    private var balanceHint: String? {
+        guard let cal = Int(calories), let p = Int(protein), let c = Int(carbs), let f = Int(fat) else {
+            return nil
+        }
+        let computed = p * 4 + c * 4 + f * 9
+        let delta = computed - cal
+        if abs(delta) <= 5 { return "Balanced ✓ (\(computed) kcal from macros)" }
+        return delta > 0
+            ? "Macros total \(computed) kcal — \(delta) over target"
+            : "Macros total \(computed) kcal — \(-delta) under target"
     }
 
     private var actionRow: some View {
@@ -238,7 +267,7 @@ struct EditGoalsSheet: View {
         } label: {
             HStack {
                 if saving { ProgressView().tint(Theme.accentFG) }
-                Text(saving ? "Saving…" : "Save goals")
+                Text(saving ? "Saving…" : "Save targets")
                     .font(.system(size: 14, weight: .semibold))
             }
             .foregroundStyle(Theme.accentFG)
@@ -246,10 +275,100 @@ struct EditGoalsSheet: View {
             .padding(.vertical, 14)
             .background(Theme.accent, in: .rect(cornerRadius: 12))
         }
+        .buttonStyle(.plain)
         .disabled(saving)
     }
 
-    // MARK: - Helpers
+    // MARK: - Lock-to-balance helpers
+
+    /// One macro field with a lock toggle on the trailing side. Locked
+    /// fields are read-only + slightly dimmed, and bumping any locked
+    /// field re-runs `rebalance()` to push the deltas into the
+    /// unlocked field(s).
+    private func lockableField(label: String, text: Binding<String>, color: Color,
+                                isLocked: Binding<Bool>, key: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.5)
+                    .textCase(.uppercase)
+                    .foregroundStyle(color)
+                Spacer()
+                Button {
+                    isLocked.wrappedValue.toggle()
+                    rebalance(changedKey: nil)
+                } label: {
+                    Text(isLocked.wrappedValue ? "🔒" : "🔓")
+                        .font(.system(size: 12))
+                        .opacity(isLocked.wrappedValue ? 1 : 0.4)
+                }
+                .buttonStyle(.plain)
+            }
+            TextField("0", text: text)
+                .keyboardType(.numberPad)
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Theme.bg3, in: .rect(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isLocked.wrappedValue ? Theme.border2 : color, lineWidth: 1)
+                )
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.text)
+                .opacity(isLocked.wrappedValue ? 0.7 : 1)
+                .disabled(isLocked.wrappedValue)
+                .onChange(of: text.wrappedValue) { _, _ in
+                    rebalance(changedKey: key)
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Rebalance unlocked macros to keep arithmetic consistent with the
+    /// locked ones. Mirrors web's rebalanceMacros.
+    /// Strategy: if exactly one macro field is unlocked, recompute it
+    /// from the kcal target − the locked macros' kcal contribution.
+    /// If multiple are unlocked we bail (the user gets to nudge them
+    /// freely until they pick which to lock).
+    private func rebalance(changedKey: String?) {
+        guard let cal = Int(calories) else { return }
+        let p = Int(protein) ?? 0
+        let c = Int(carbs) ?? 0
+        let f = Int(fat) ?? 0
+
+        // Calorie field unlocked? recompute calories from macros instead.
+        if !lockCal {
+            let computed = p * 4 + c * 4 + f * 9
+            calories = String(computed)
+            return
+        }
+
+        // Find the single unlocked macro field (other than cal).
+        let unlocked = [
+            ("pro", lockPro),
+            ("carb", lockCarb),
+            ("fat", lockFat),
+        ].filter { !$0.1 }.map(\.0)
+
+        guard unlocked.count == 1, let target = unlocked.first else { return }
+
+        switch target {
+        case "pro":
+            let kcalLeft = max(0, cal - (c * 4) - (f * 9))
+            protein = String(kcalLeft / 4)
+        case "carb":
+            let kcalLeft = max(0, cal - (p * 4) - (f * 9))
+            carbs = String(kcalLeft / 4)
+        case "fat":
+            let kcalLeft = max(0, cal - (p * 4) - (c * 4))
+            fat = String(kcalLeft / 9)
+        default:
+            break
+        }
+        _ = changedKey  // reserved if/when we want changedKey-aware rules
+    }
+
+    // MARK: - Building blocks
 
     private func sectionLabel(_ s: String) -> some View {
         Text(s)
@@ -285,7 +404,7 @@ struct EditGoalsSheet: View {
         .background(Theme.bg2, in: .rect(cornerRadius: 8))
     }
 
-    // MARK: - Actions
+    // MARK: - Hydration / save
 
     private func hydrate() {
         let m = state.bodyMetrics
@@ -312,9 +431,9 @@ struct EditGoalsSheet: View {
         errorMsg = nil
         defer { saving = false }
         do {
-            // Build the next body_metrics row by patching the existing
-            // one — we don't want to wipe sex/age/height/etc. that the
-            // editor doesn't touch.
+            // Patch onto the existing body_metrics row so we don't
+            // overwrite fields the body-metrics editor owns
+            // (sex/age/height/weight/BF/muscle/activity).
             var nextBM = state.bodyMetrics
             nextBM.weight_goal = direction
             nextBM.pace = pace
@@ -334,6 +453,67 @@ struct EditGoalsSheet: View {
         } catch {
             errorMsg = error.localizedDescription
         }
+    }
+}
+
+/// Methodology breakdown — explains how BMR / TDEE / target macros
+/// are derived. Same content as web's showMethodologyModal. Shown
+/// modally from the calculated targets card's info button.
+private struct MethodologySheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    block(
+                        title: "BMR (basal metabolic rate)",
+                        body: "When body fat % is known we use **Katch-McArdle**: 370 + 21.6 × lean body mass (kg). Without body fat % we fall back to **Mifflin-St Jeor**: 10 × weight + 6.25 × height − 5 × age (+5 for male, −161 for female)."
+                    )
+                    block(
+                        title: "TDEE (maintenance calories)",
+                        body: "TDEE = BMR × activity multiplier:\n• Sedentary 1.2\n• Light 1.375\n• Moderate 1.55\n• Active 1.725\n• Very active 1.9"
+                    )
+                    block(
+                        title: "Calorie target",
+                        body: "Direction shifts TDEE up or down by your pace's daily kcal:\n• Lose: −250 / −400 / −600\n• Gain: +250 / +300 / +400\n• Maintain: 0\nMinimum target is 1200 kcal regardless of pace."
+                    )
+                    block(
+                        title: "Protein target",
+                        body: "1 g per pound of lean body mass. With body fat % we compute LBM exactly; without it we estimate LBM as 75% of total body weight."
+                    )
+                    block(
+                        title: "Fat & carbs",
+                        body: "Fat is 25% of the calorie target (then ÷ 9). Carbs absorb the remainder (then ÷ 4), with a 50 g floor so very low-fat / high-protein splits don't drive carbs below sustainable levels."
+                    )
+                }
+                .padding(20)
+            }
+            .background(Theme.bg)
+            .navigationTitle("How we calculate")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func block(title: String, body: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.text)
+            Text(.init(body))
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.text2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(Theme.bg2, in: .rect(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
     }
 }
 

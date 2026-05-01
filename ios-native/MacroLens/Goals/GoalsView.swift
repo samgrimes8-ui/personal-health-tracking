@@ -18,7 +18,6 @@ import Charts
 struct GoalsView: View {
     @Environment(AppState.self) private var state
     @State private var showLogSheet = false
-    @State private var showEditGoals = false
     @State private var editingCheckin: CheckinRow?
     @State private var expandedBuckets: Set<String> = []
 
@@ -63,10 +62,6 @@ struct GoalsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showLogSheet) {
             LogWeightSheet(editing: editingCheckin)
-                .environment(state)
-        }
-        .sheet(isPresented: $showEditGoals) {
-            EditGoalsSheet()
                 .environment(state)
         }
     }
@@ -174,29 +169,37 @@ struct GoalsView: View {
             default:         return nil
             }
         }()
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                sectionTitle("Daily targets")
-                Spacer()
-                Button("Edit") { showEditGoals = true }
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.accent)
+        // Whole card pushes the full Daily Targets editor — keeps the
+        // summary clean & read-only at the top level (per UX direction).
+        return NavigationLink {
+            DailyTargetsDetailView()
+                .environment(state)
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    sectionTitle("Daily targets")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                }
+                HStack(spacing: 8) {
+                    targetTile("Calories",  g.calories.map { "\($0)" } ?? "—",  Theme.cal)
+                    targetTile("Protein",   g.protein.map { "\($0)g" } ?? "—",  Theme.protein)
+                    targetTile("Carbs",     g.carbs.map { "\($0)g" } ?? "—",    Theme.carbs)
+                    targetTile("Fat",       g.fat.map { "\($0)g" } ?? "—",      Theme.fat)
+                }
+                if let directionLabel {
+                    Text("\(directionLabel) · \(m.pace?.capitalized ?? "Moderate") pace")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text3)
+                }
             }
-            HStack(spacing: 8) {
-                targetTile("Calories",  g.calories.map { "\($0)" } ?? "—",  Theme.cal)
-                targetTile("Protein",   g.protein.map { "\($0)g" } ?? "—",  Theme.protein)
-                targetTile("Carbs",     g.carbs.map { "\($0)g" } ?? "—",    Theme.carbs)
-                targetTile("Fat",       g.fat.map { "\($0)g" } ?? "—",      Theme.fat)
-            }
-            if let directionLabel {
-                Text("\(directionLabel) · \(m.pace?.capitalized ?? "Moderate") pace")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.text3)
-            }
+            .padding(16)
+            .background(Theme.bg2, in: .rect(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
         }
-        .padding(16)
-        .background(Theme.bg2, in: .rect(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
+        .buttonStyle(.plain)
     }
 
     private var historyCard: some View {
