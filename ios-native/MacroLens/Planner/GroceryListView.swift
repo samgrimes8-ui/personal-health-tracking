@@ -151,7 +151,7 @@ struct GroceryListView: View {
                 guard !lowered.isEmpty else { continue }
                 let unit = ing.unit?.lowercased() ?? ""
                 let key = "\(lowered)|\(unit)"
-                let amount = (ing.amount ?? 0) * multiplier
+                let amount = ing.amountValue * multiplier
                 let cat = GroceryCategory.resolve(rawCategory: ing.category, name: ing.name)
                 if var existing = bucket[key] {
                     existing.totalAmount += amount
@@ -230,12 +230,14 @@ struct GroceryListView: View {
 
 /// Minimal recipe shape with ingredients jsonb. Local to the planner
 /// because the shared RecipeRow only carries name + macros — adding
-/// ingredients there would touch Models.swift.
+/// ingredients there would touch Models.swift. `RecipeIngredient` (in
+/// Recipes/RecipeFull.swift) handles the polymorphic amount column the
+/// recipes table actually stores (string or number).
 private struct GroceryRecipe: Codable, Identifiable, Hashable {
     var id: String
     var name: String
     var servings: Double?
-    var ingredients: [Ingredient]?
+    var ingredients: [RecipeIngredient]?
 }
 
 // MARK: - Items / categories

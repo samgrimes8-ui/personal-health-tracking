@@ -46,7 +46,7 @@ enum DBService {
             let fat: Double?
             let fiber: Double?
             let sugar: Double?
-            let ingredients: [Ingredient]?
+            let ingredients: [RecipeIngredient]?
             let notes: String?
             let source: String?
             let source_url: String?
@@ -417,7 +417,7 @@ struct RecipeUpsert {
     var fat: Double?
     var fiber: Double?
     var sugar: Double?
-    var ingredients: [Ingredient]?
+    var ingredients: [RecipeIngredient]?
     var notes: String?
     var source: String?
     var sourceUrl: String?

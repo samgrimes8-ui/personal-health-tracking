@@ -226,7 +226,7 @@ struct RecipeEditView: View {
                     fieldLabel("Ingredients\(ings.isEmpty ? "" : " (\(ings.count))")")
                     Spacer()
                     Button {
-                        recipe.ingredients = ings + [Ingredient(name: "", amount: nil, unit: "", category: nil)]
+                        recipe.ingredients = ings + [RecipeIngredient(name: "", amount: nil, unit: "", category: nil)]
                     } label: {
                         Label("Add", systemImage: "plus")
                             .font(.system(size: 12, weight: .medium))
@@ -375,7 +375,7 @@ struct RecipeEditView: View {
         do {
             let result = try await AnalyzeService.analyzeRecipeText(prompt, hint: name)
             if let ings = result.ingredients, !ings.isEmpty {
-                recipe.ingredients = ings
+                recipe.ingredients = ings.map(RecipeIngredient.fromAI)
             } else {
                 aiError = "AI didn't return any ingredients — try with more detail."
             }
@@ -394,7 +394,7 @@ struct RecipeEditView: View {
         aiError = nil
         defer { aiBusy = nil }
         let lines = ings.map { ing in
-            let amt = ing.amount.map { AmountParser.format($0) } ?? ""
+            let amt = ing.amount ?? ""
             let unit = ing.unit ?? ""
             return "\(amt) \(unit) \(ing.name)".trimmingCharacters(in: .whitespaces)
         }.joined(separator: "\n")
@@ -428,7 +428,7 @@ struct RecipeEditView: View {
         recipe.fiber = a.fiber ?? recipe.fiber
         recipe.sugar = a.sugar ?? recipe.sugar
         if fillIngredients, let ings = a.ingredients, !ings.isEmpty {
-            recipe.ingredients = ings
+            recipe.ingredients = ings.map(RecipeIngredient.fromAI)
         }
     }
 
@@ -591,14 +591,13 @@ struct RecipeEditView: View {
         Binding(
             get: {
                 guard let ings = recipe.ingredients, idx < ings.count else { return "" }
-                if let a = ings[idx].amount { return AmountParser.format(a) }
-                return ""
+                return ings[idx].amount ?? ""
             },
             set: { newVal in
                 var ings = recipe.ingredients ?? []
                 guard idx < ings.count else { return }
-                let parsed = AmountParser.parse(newVal)
-                ings[idx].amount = parsed == 0 ? nil : parsed
+                let trimmed = newVal.trimmingCharacters(in: .whitespaces)
+                ings[idx].amount = trimmed.isEmpty ? nil : trimmed
                 recipe.ingredients = ings
             }
         )

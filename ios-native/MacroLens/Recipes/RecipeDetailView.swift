@@ -217,13 +217,12 @@ struct RecipeDetailView: View {
         }
     }
 
-    private func ingredientRow(_ ing: Ingredient, multiplier: Double, isLast: Bool) -> some View {
-        let raw = AmountParser.parse(ing.amount.map { String($0) })
+    private func ingredientRow(_ ing: RecipeIngredient, multiplier: Double, isLast: Bool) -> some View {
+        let raw = ing.amountValue
         let scaled = raw * multiplier
         let amtText: String = {
             if scaled == 0 {
-                if let a = ing.amount { return AmountParser.format(a) }
-                return ""
+                return ing.amount ?? ""
             }
             return AmountParser.format(scaled)
         }()

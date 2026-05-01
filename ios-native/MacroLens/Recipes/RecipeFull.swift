@@ -24,11 +24,66 @@ struct RecipeFull: Codable, Identifiable, Hashable {
     var fat: Double?
     var fiber: Double?
     var sugar: Double?
-    var ingredients: [Ingredient]?
+    var ingredients: [RecipeIngredient]?
     var tags: [String]?
     var source_url: String?
     var notes: String?
     var updated_at: String?
+}
+
+/// Recipe-table ingredient row.
+///
+/// Lives separately from `Networking.Ingredient` because the recipes.ingredients
+/// jsonb column stores `amount` as a free-text **string** ("1/2", "1 ½",
+/// "2 1/2"), not a number — see `upsertRecipe()` in src/lib/db.js. The
+/// shared Ingredient struct types `amount` as Double, which can't decode
+/// the existing rows the web has been writing for years (the entire row
+/// fails, so the library returns empty). Polymorphic decoder below accepts
+/// either shape so older iOS-written rows (which used Double) keep working.
+struct RecipeIngredient: Codable, Hashable {
+    var name: String
+    var amount: String?
+    var unit: String?
+    var category: String?
+
+    init(name: String, amount: String? = nil, unit: String? = nil, category: String? = nil) {
+        self.name = name
+        self.amount = amount
+        self.unit = unit
+        self.category = category
+    }
+
+    /// Build from the shared `Ingredient` shape used by AnalyzeService /
+    /// AnalysisResult. AI returns numeric amounts; we coerce to the
+    /// string form the recipes table already stores.
+    static func fromAI(_ ai: Ingredient) -> RecipeIngredient {
+        RecipeIngredient(
+            name: ai.name,
+            amount: ai.amount.map { AmountParser.format($0) },
+            unit: ai.unit,
+            category: ai.category
+        )
+    }
+
+    enum CodingKeys: String, CodingKey { case name, amount, unit, category }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.unit = try c.decodeIfPresent(String.self, forKey: .unit)
+        self.category = try c.decodeIfPresent(String.self, forKey: .category)
+        if let s = try? c.decodeIfPresent(String.self, forKey: .amount) {
+            self.amount = s
+        } else if let d = try? c.decodeIfPresent(Double.self, forKey: .amount) {
+            self.amount = AmountParser.format(d)
+        } else {
+            self.amount = nil
+        }
+    }
+
+    /// Convenience: parse the free-text amount into a Double for math
+    /// (scaling, grocery list aggregation). Empty / unparseable → 0.
+    var amountValue: Double { AmountParser.parse(amount) }
 }
 
 extension RecipeFull {
@@ -49,7 +104,7 @@ extension RecipeFull {
             fat: 0,
             fiber: 0,
             sugar: 0,
-            ingredients: [],
+            ingredients: [] as [RecipeIngredient],
             tags: [],
             source_url: "",
             notes: "",
