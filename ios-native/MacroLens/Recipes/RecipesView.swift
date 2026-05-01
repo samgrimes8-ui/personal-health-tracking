@@ -68,27 +68,45 @@ struct RecipesView: View {
             if library.isEmpty { await refresh() }
         }
         .sheet(item: $presented) { which in
-            NavigationStack {
-                switch which {
-                case .viewExisting(let r):
-                    RecipeDetailView(recipe: r,
-                                     onEdit: { editing in
-                                         presented = .editExisting(editing)
-                                     },
-                                     onDeleted: {
-                                         presented = nil
-                                         Task { await refresh() }
-                                     },
-                                     onPlan: { recipe in
-                                         planning = recipe
-                                     },
-                                     onShare: { recipe in
-                                         sharing = recipe
-                                     },
-                                     onCook: { recipe in
-                                         cooking = recipe
-                                     })
-                case .editExisting(let r):
+            switch which {
+            case .viewExisting(let r):
+                // Pager wraps the detail view so horizontal swipes pan
+                // through the same filtered list the user is browsing.
+                // Snapshot is taken at present-time, so a debounced search
+                // typing while the sheet is open won't yank pages out from
+                // under the user.
+                let snapshot = filtered()
+                let startIdx = snapshot.firstIndex(where: { $0.id == r.id }) ?? 0
+                RecipeDetailPager(
+                    recipes: snapshot,
+                    initialIndex: startIdx,
+                    onEdit: { editing in
+                        presented = .editExisting(editing)
+                    },
+                    onDeleted: {
+                        presented = nil
+                        Task { await refresh() }
+                    },
+                    onPlan: { recipe in
+                        planning = recipe
+                    },
+                    onShare: { recipe in
+                        sharing = recipe
+                    },
+                    onCook: { recipe in
+                        cooking = recipe
+                    },
+                    onChanged: { updated in
+                        // Mid-swipe in-pager mutations (e.g. instructions
+                        // generated and saved) splice back into the library
+                        // so re-entering the sheet shows the latest data.
+                        if let idx = library.firstIndex(where: { $0.id == updated.id }) {
+                            library[idx] = updated
+                        }
+                    }
+                )
+            case .editExisting(let r):
+                NavigationStack {
                     RecipeEditView(recipe: r,
                                    onSaved: { saved in
                                        presented = .viewExisting(saved)
@@ -101,7 +119,9 @@ struct RecipesView: View {
                                        presented = nil
                                        Task { await refresh() }
                                    })
-                case .newDraft(let r):
+                }
+            case .newDraft(let r):
+                NavigationStack {
                     RecipeEditView(recipe: r,
                                    onSaved: { saved in
                                        presented = .viewExisting(saved)

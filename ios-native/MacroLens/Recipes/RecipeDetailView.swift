@@ -19,6 +19,15 @@ struct RecipeDetailView: View {
     var onPlan: ((RecipeFull) -> Void)? = nil
     var onShare: ((RecipeFull) -> Void)? = nil
     var onCook: ((RecipeFull) -> Void)? = nil
+    /// Notified when in-page state mutates (e.g. instructions get
+    /// generated and saved). Lets a parent pager keep its array snapshot
+    /// in sync so the toolbar's "Edit" button picks up the latest data.
+    var onChanged: ((RecipeFull) -> Void)? = nil
+    /// When true, the view emits no NavigationStack title/toolbar. Used
+    /// by RecipeDetailPager so the pager's NavigationStack owns the
+    /// toolbar and the toolbar reflects the *currently visible* page
+    /// rather than every page racing to declare its own.
+    var embedded: Bool = false
 
     @Environment(\.dismiss) private var dismiss
     @State private var working: RecipeFull
@@ -37,13 +46,17 @@ struct RecipeDetailView: View {
          onDeleted: @escaping () -> Void,
          onPlan: ((RecipeFull) -> Void)? = nil,
          onShare: ((RecipeFull) -> Void)? = nil,
-         onCook: ((RecipeFull) -> Void)? = nil) {
+         onCook: ((RecipeFull) -> Void)? = nil,
+         onChanged: ((RecipeFull) -> Void)? = nil,
+         embedded: Bool = false) {
         self.recipe = recipe
         self.onEdit = onEdit
         self.onDeleted = onDeleted
         self.onPlan = onPlan
         self.onShare = onShare
         self.onCook = onCook
+        self.onChanged = onChanged
+        self.embedded = embedded
         _working = State(initialValue: recipe)
         _scaledServings = State(initialValue: recipe.servings ?? 1)
         // Default tab matches the web's openRecipeModal: Instructions when
@@ -85,17 +98,10 @@ struct RecipeDetailView: View {
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
-        .navigationTitle(working.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Close") { dismiss() }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { onEdit(working) }
-                    .foregroundStyle(Theme.accent)
-            }
-        }
+        .modifier(NavToolbarIfNeeded(embedded: embedded,
+                                     title: working.name,
+                                     onClose: { dismiss() },
+                                     onEdit: { onEdit(working) }))
     }
 
     // MARK: - Header
@@ -583,6 +589,10 @@ struct RecipeDetailView: View {
             working.instructions = result
             working.instructions_version = saved.instructions_version
             tab = .instructions
+            // Propagate to the parent (pager + library) so the toolbar's
+            // Edit button picks up the latest instructions and the cooking-
+            // mode launcher uses the new instructions_version cache key.
+            onChanged?(working)
         } catch {
             generateError = error.localizedDescription
         }
@@ -662,6 +672,37 @@ struct RecipeDetailView: View {
 
     private func plural(_ word: String, _ count: Double) -> String {
         count == 1 ? word : "\(word)s"
+    }
+}
+
+/// Toolbar/title application gated on `embedded`. When the detail view is
+/// inside a pager, the pager owns the NavigationStack toolbar (so the title
+/// reflects whichever page is currently visible) and we apply nothing here.
+/// Standalone uses (legacy callers, plus future surfaces) keep the original
+/// title + Close + Edit toolbar by passing embedded:false.
+private struct NavToolbarIfNeeded: ViewModifier {
+    let embedded: Bool
+    let title: String
+    let onClose: () -> Void
+    let onEdit: () -> Void
+
+    func body(content: Content) -> some View {
+        if embedded {
+            content
+        } else {
+            content
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Close", action: onClose)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Edit", action: onEdit)
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
+        }
     }
 }
 
