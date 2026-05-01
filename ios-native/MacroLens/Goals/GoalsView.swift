@@ -20,6 +20,7 @@ struct GoalsView: View {
     @State private var showLogSheet = false
     @State private var editingCheckin: CheckinRow?
     @State private var expandedBuckets: Set<String> = []
+    @State private var pendingDelete: CheckinRow?
 
     var body: some View {
         ScrollView {
@@ -64,6 +65,36 @@ struct GoalsView: View {
             LogWeightSheet(editing: editingCheckin)
                 .environment(state)
         }
+        .confirmationDialog(
+            pendingDelete.map { confirmDeleteTitle(for: $0) } ?? "",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete check-in", role: .destructive) {
+                if let target = pendingDelete {
+                    Task { try? await state.deleteCheckin(id: target.id) }
+                }
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text("This can't be undone.")
+        }
+    }
+
+    private func confirmDeleteTitle(for entry: CheckinRow) -> String {
+        let raw = entry.scan_date ?? entry.checked_in_at?.prefix(10).description ?? ""
+        guard raw.count >= 10 else { return "Delete this check-in?" }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .current
+        guard let d = f.date(from: String(raw.prefix(10))) else { return "Delete this check-in?" }
+        let out = DateFormatter()
+        out.dateFormat = "MMM d, yyyy"
+        return "Delete check-in from \(out.string(from: d))?"
     }
 
     // MARK: - Sections
@@ -345,9 +376,7 @@ struct GoalsView: View {
                     .background(Theme.bg2, in: .rect(cornerRadius: 6))
             }
             Button {
-                Task {
-                    try? await state.deleteCheckin(id: entry.id)
-                }
+                pendingDelete = entry
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 12))
