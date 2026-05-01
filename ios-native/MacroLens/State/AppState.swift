@@ -111,21 +111,23 @@ final class AppState {
     /// responsible for snapping arbitrary input to a Sunday. Stores
     /// results in `plannerWeekStart` + `plannerByDay`.
     func loadPlanner(weekStart: String) async {
-        // Worker: implement.
+        await plannerLoadImpl(weekStart: weekStart)
     }
 
     /// Recipes tab. Full library load — populates `recipesFull` and
     /// the narrower dashboard `recipes` slice (so dashboard refreshes
-    /// stay cheap after this fans out).
+    /// stay cheap after this fans out). Forwards to the Planner
+    /// worker's recipe-library helper since both tabs need the same
+    /// projection (dashboard `recipes`, planner `recipesFull`).
     func loadRecipesFull() async {
-        // Worker: implement.
+        await plannerLoadRecipesFullImpl()
     }
 
     /// Providers tab. Pulls the directory + the user's follow set so
     /// the worker can render the "Following" badge inline without a
     /// per-row roundtrip.
     func loadProviders() async {
-        // Worker: implement.
+        await providersLoadImpl()
     }
 
     /// Foods tab. Loads the user's saved food_items library into
@@ -153,7 +155,7 @@ final class AppState {
     /// rows; the worker derives spend totals + role-based UI from the
     /// loaded data rather than from a precomputed summary.
     func loadAccount() async {
-        // Worker: implement.
+        await accountLoadImpl()
     }
 
     /// Insert a weight check-in. Used by the native log-weight sheet.

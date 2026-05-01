@@ -22,11 +22,11 @@ struct AppShell: View {
     }
 }
 
-/// Tab bar. Dashboard + Goals are native; the rest are WebViewTab
-/// placeholders that load the existing web app inside a WKWebView.
-/// As each screen gets a native rewrite, swap that tab from
-/// WebViewTab(page:) to the new SwiftUI view. See TODO.md "iOS native
-/// migration roadmap" for the order.
+/// Tab bar. All 8 tabs are native after Phase 2 — Dashboard, Goals,
+/// Analytics, Planner, Recipes, Providers, Foods, Account. WebViewTab
+/// remains in the codebase as a fallback if any future tab needs to
+/// fall back to the web app inside a WKWebView, but is not currently
+/// used here.
 ///
 /// SwiftUI's TabView caps at 5 visible tabs on iPhone before collapsing
 /// the rest into a "More" overflow — the extra three (Providers, Foods,
@@ -47,23 +47,35 @@ struct SignedInShell: View {
             }
             .tabItem { Label("Goals", systemImage: "target") }
 
-            WebViewTab(page: "analytics", title: "Analytics")
-                .tabItem { Label("Analytics", systemImage: "chart.bar.fill") }
+            NavigationStack {
+                AnalyticsView()
+            }
+            .tabItem { Label("Analytics", systemImage: "chart.bar.fill") }
 
-            WebViewTab(page: "planner", title: "Planner")
-                .tabItem { Label("Planner", systemImage: "calendar") }
+            NavigationStack {
+                PlannerView()
+            }
+            .tabItem { Label("Planner", systemImage: "calendar") }
 
-            WebViewTab(page: "recipes", title: "Recipes")
-                .tabItem { Label("Recipes", systemImage: "book.fill") }
+            NavigationStack {
+                RecipesView()
+            }
+            .tabItem { Label("Recipes", systemImage: "book.fill") }
 
-            WebViewTab(page: "providers", title: "Providers")
-                .tabItem { Label("Providers", systemImage: "person.2.fill") }
+            NavigationStack {
+                ProvidersView()
+            }
+            .tabItem { Label("Providers", systemImage: "person.2.fill") }
 
-            WebViewTab(page: "foods", title: "Foods")
-                .tabItem { Label("Foods", systemImage: "fork.knife") }
+            NavigationStack {
+                FoodsView()
+            }
+            .tabItem { Label("Foods", systemImage: "fork.knife") }
 
-            WebViewTab(page: "account", title: "Account")
-                .tabItem { Label("Account", systemImage: "person.crop.circle") }
+            NavigationStack {
+                AccountView()
+            }
+            .tabItem { Label("Account", systemImage: "person.crop.circle") }
         }
         .environment(state)
         .tint(Theme.accent)
