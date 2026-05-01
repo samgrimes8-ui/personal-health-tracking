@@ -100,9 +100,11 @@ final class AppState {
 
     /// Analytics tab. Pulls a wider window of meal_log (default 30 days,
     /// honoring `analyticsRangeDays`) plus supporting goals/checkins so
-    /// the page can render adherence + trend charts.
+    /// the page can render adherence + trend charts. Body lives on the
+    /// extension in Analytics/AnalyticsLoad.swift to keep parallel
+    /// workers from clashing on this file.
     func loadAnalytics() async {
-        // Worker: implement.
+        await analyticsLoadImpl()
     }
 
     /// Planner tab. `weekStart` is YYYY-MM-DD (Sunday) — the worker is
