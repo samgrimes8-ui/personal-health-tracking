@@ -23,11 +23,8 @@ struct AppShell: View {
 }
 
 /// Tabs in the same order as the desktop sidebar
-/// (`src/pages/app.js` ~L924–953). Splitting into "primary" (bottom bar)
-/// vs "secondary" (More sheet) keeps the four most-trafficked screens
-/// one tap away while avoiding the SwiftUI TabView "More" overflow,
-/// which collapses everything past the fifth tab into an ugly system
-/// list on iPhone.
+/// (`src/pages/app.js` ~L924–953). All eight live in a single
+/// horizontally-scrollable bar at the bottom — no More overflow.
 enum AppTab: Hashable, CaseIterable {
     case dashboard, analytics, planner, goals, recipes, providers, foods, account
 
@@ -56,50 +53,32 @@ enum AppTab: Hashable, CaseIterable {
         case .account:   return "person.crop.circle"
         }
     }
-
-    /// Tabs in the bottom bar. Picked for traffic — Dashboard and
-    /// Planner drive most sessions, Analytics is the second-most-opened
-    /// surface, Account holds settings/sign-out. The other four (Goals,
-    /// Recipes, Providers, Foods) live behind the More button. Order
-    /// within each list mirrors the desktop sidebar so the surfaces
-    /// feel like the same app.
-    static let primary: [AppTab] = [.dashboard, .analytics, .planner, .account]
-    static let secondary: [AppTab] = [.goals, .recipes, .providers, .foods]
 }
 
-/// Signed-in shell. Hosts a `TabView` with its system tab bar hidden
-/// and overlays a custom bottom bar + slide-up "More" sheet so all
-/// eight tabs are reachable without the SwiftUI More overflow. TabView
-/// is kept (rather than swapped for a ZStack of NavigationStacks)
-/// because it preserves per-tab navigation and scroll state for free.
+/// Signed-in shell. Hosts a `TabView` in `.page` style for swipe-to-page
+/// navigation between tabs, with a custom horizontally-scrollable bar
+/// pinned to the bottom safe-area inset. Page style preserves per-tab
+/// navigation/scroll state automatically (each child is held alive in
+/// the underlying UIPageViewController).
 struct SignedInShell: View {
     @State private var state = AppState()
     @State private var selected: AppTab = .dashboard
-    @State private var showMore: Bool = false
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            TabView(selection: $selected) {
-                ForEach(AppTab.allCases, id: \.self) { tab in
-                    NavigationStack {
-                        rootView(for: tab)
-                    }
-                    .tag(tab)
-                    .toolbar(.hidden, for: .tabBar)
+        TabView(selection: $selected) {
+            ForEach(AppTab.allCases, id: \.self) { tab in
+                NavigationStack {
+                    rootView(for: tab)
                 }
+                .tag(tab)
             }
-
-            BottomBar(selected: $selected, showMore: $showMore)
         }
-        .background(Theme.bg.ignoresSafeArea())
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            ScrollableTabBar(selected: $selected)
+        }
         .environment(state)
         .tint(Theme.accent)
-        .sheet(isPresented: $showMore) {
-            MoreSheet(selected: $selected, isPresented: $showMore)
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(Theme.bg)
-        }
     }
 
     @ViewBuilder
@@ -117,48 +96,54 @@ struct SignedInShell: View {
     }
 }
 
-// MARK: - Bottom bar
+// MARK: - Scrollable bottom tab bar
 
-private struct BottomBar: View {
+/// Horizontally-scrollable tab bar. All eight tabs are present in a
+/// single HStack; the user swipes the bar L/R, and a selection change
+/// auto-scrolls the new tab to center via ScrollViewReader. Background
+/// uses `.bar` material so the surface matches the system tab bar
+/// chrome (translucent blur). Only the icon/label tint is themed.
+private struct ScrollableTabBar: View {
     @Binding var selected: AppTab
-    @Binding var showMore: Bool
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(AppTab.primary, id: \.self) { tab in
-                BottomBarButton(
-                    title: tab.title,
-                    systemImage: tab.systemImage,
-                    isActive: selected == tab && !showMore
-                ) {
-                    selected = tab
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(AppTab.allCases, id: \.self) { tab in
+                        TabBarButton(
+                            title: tab.title,
+                            systemImage: tab.systemImage,
+                            isActive: selected == tab
+                        ) {
+                            selected = tab
+                        }
+                        .id(tab)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+            .background(.bar)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Theme.border)
+                    .frame(height: 0.5)
+            }
+            .onAppear {
+                // Land the initial selection in view without animation
+                // so first paint isn't a visible scroll.
+                proxy.scrollTo(selected, anchor: .center)
+            }
+            .onChange(of: selected) { _, newValue in
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    proxy.scrollTo(newValue, anchor: .center)
                 }
             }
-            BottomBarButton(
-                title: "More",
-                systemImage: "ellipsis",
-                isActive: AppTab.secondary.contains(selected) || showMore
-            ) {
-                showMore = true
-            }
         }
-        .padding(.horizontal, 4)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
-        .background(
-            Theme.bg2
-                .overlay(
-                    Rectangle()
-                        .fill(Theme.border)
-                        .frame(height: 1),
-                    alignment: .top
-                )
-                .ignoresSafeArea(edges: .bottom)
-        )
     }
 }
 
-private struct BottomBarButton: View {
+private struct TabBarButton: View {
     let title: String
     let systemImage: String
     let isActive: Bool
@@ -171,90 +156,12 @@ private struct BottomBarButton: View {
                     .font(.system(size: 19, weight: .regular))
                 Text(title)
                     .font(.system(size: 10, weight: .medium))
+                    .lineLimit(1)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
+            .frame(minWidth: 78)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
             .foregroundStyle(isActive ? Theme.accent : Theme.text2)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - More sheet
-
-/// Slide-up sheet listing the secondary tabs. Mirrors the desktop
-/// sidebar styling — left-aligned icon + label, accent highlight on
-/// the active row.
-private struct MoreSheet: View {
-    @Binding var selected: AppTab
-    @Binding var isPresented: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("More")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Theme.text)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 4)
-            .padding(.bottom, 12)
-
-            VStack(spacing: 0) {
-                ForEach(Array(AppTab.secondary.enumerated()), id: \.element) { idx, tab in
-                    MoreRow(tab: tab, isActive: selected == tab) {
-                        selected = tab
-                        isPresented = false
-                    }
-                    if idx < AppTab.secondary.count - 1 {
-                        Rectangle()
-                            .fill(Theme.border)
-                            .frame(height: 1)
-                            .padding(.leading, 56)
-                    }
-                }
-            }
-            .background(Theme.bg2)
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(Theme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .padding(.horizontal, 16)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 8)
-    }
-}
-
-private struct MoreRow: View {
-    let tab: AppTab
-    let isActive: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: tab.systemImage)
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(isActive ? Theme.accent : Theme.text2)
-                    .frame(width: 28, alignment: .center)
-                Text(tab.title)
-                    .font(.system(size: 16, weight: isActive ? .semibold : .regular))
-                    .foregroundStyle(isActive ? Theme.accent : Theme.text)
-                Spacer()
-                if isActive {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                }
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
-            .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
