@@ -29,6 +29,32 @@ struct RecipeFull: Codable, Identifiable, Hashable {
     var source_url: String?
     var notes: String?
     var updated_at: String?
+    var instructions: RecipeInstructions?
+    var instructions_version: Int?
+    var is_shared: Bool?
+    var share_token: String?
+    var og_cache: OGCache?
+}
+
+/// Cooking instructions blob — matches the shape `generateRecipeInstructions`
+/// in src/lib/ai.js returns and `saveRecipeInstructions` in src/lib/db.js
+/// persists into `recipes.instructions` jsonb.
+struct RecipeInstructions: Codable, Hashable {
+    var steps: [String]
+    var prep_time: String?
+    var cook_time: String?
+    var tips: [String]?
+}
+
+/// Cached OpenGraph metadata for `recipes.source_url`. Populated lazily by
+/// /api/og on the web; we read whatever's already cached on the row but
+/// don't refetch on iOS — the source link still works without a preview.
+struct OGCache: Codable, Hashable {
+    var title: String?
+    var description: String?
+    var image: String?
+    var siteName: String?
+    var blocked: Bool?
 }
 
 /// Recipe-table ingredient row.
@@ -108,7 +134,12 @@ extension RecipeFull {
             tags: [],
             source_url: "",
             notes: "",
-            updated_at: nil
+            updated_at: nil,
+            instructions: nil,
+            instructions_version: nil,
+            is_shared: nil,
+            share_token: nil,
+            og_cache: nil
         )
     }
 }
@@ -121,7 +152,7 @@ enum RecipeService {
     private static var client: SupabaseClient { SupabaseService.client }
 
     private static let columns =
-        "id, user_id, name, description, servings, serving_label, calories, protein, carbs, fat, fiber, sugar, ingredients, tags, source_url, notes, updated_at"
+        "id, user_id, name, description, servings, serving_label, calories, protein, carbs, fat, fiber, sugar, ingredients, tags, source_url, notes, updated_at, instructions, instructions_version, is_shared, share_token, og_cache"
 
     /// All recipes belonging to the current user, ordered by name. 500-row
     /// cap matches what AppState.loadRecipesFull pulls — anyone above that
@@ -266,5 +297,89 @@ enum AmountParser {
             return String(Int(value))
         }
         return String(format: "%g", (value * 100).rounded() / 100)
+    }
+}
+
+/// Scales numeric quantities inside a free-text instruction step. Mirrors
+/// `scaleStepText` in src/pages/app.js — same regex, same rounding (quarter
+/// fractions), same unit set. Returns plain text with the substituted
+/// quantities; the caller can wrap them in attributed spans if it wants
+/// them highlighted.
+enum StepTextScaler {
+    private static let pattern: NSRegularExpression? = try? NSRegularExpression(
+        pattern: #"(\d+(?:\.\d+)?(?:\/\d+)?)\s*(cups?|tbsp|tablespoons?|tsp|teaspoons?|oz|ounces?|lbs?|pounds?|\bg\b|kg|ml|liters?|litres?|cloves?|slices?|pieces?|cans?|pints?|quarts?)"#,
+        options: [.caseInsensitive]
+    )
+
+    /// Scale every "<qty> <unit>" mention in `step` by `target / base`.
+    /// Returns the rewritten string; if base or target is zero/nil, returns
+    /// the original step unchanged.
+    static func scale(_ step: String, base: Double?, target: Double?) -> String {
+        guard let base, base > 0, let target, target > 0, base != target else { return step }
+        let multiplier = target / base
+        guard let regex = pattern else { return step }
+
+        let nsStep = step as NSString
+        let matches = regex.matches(in: step, range: NSRange(location: 0, length: nsStep.length))
+        guard !matches.isEmpty else { return step }
+
+        var out = ""
+        var lastIdx = 0
+        for m in matches {
+            let full = nsStep.substring(with: m.range)
+            let numStr = nsStep.substring(with: m.range(at: 1))
+            let unit = nsStep.substring(with: m.range(at: 2))
+            let baseQty: Double
+            if numStr.contains("/") {
+                let parts = numStr.split(separator: "/")
+                if parts.count == 2, let n = Double(parts[0]), let d = Double(parts[1]), d != 0 {
+                    baseQty = n / d
+                } else {
+                    baseQty = Double(numStr) ?? 0
+                }
+            } else {
+                baseQty = Double(numStr) ?? 0
+            }
+            let scaled = baseQty * multiplier
+            let display = renderQuarter(scaled)
+            // Append untouched chunk before the match
+            if m.range.location > lastIdx {
+                out.append(nsStep.substring(with: NSRange(location: lastIdx, length: m.range.location - lastIdx)))
+            }
+            // The match was "<num><whitespace><unit>" — preserve the unit verbatim.
+            // We don't try to reproduce the exact whitespace; one space is fine.
+            _ = full
+            out.append("\(display) \(unit)")
+            lastIdx = m.range.location + m.range.length
+        }
+        if lastIdx < nsStep.length {
+            out.append(nsStep.substring(with: NSRange(location: lastIdx, length: nsStep.length - lastIdx)))
+        }
+        return out
+    }
+
+    /// Round to nearest quarter and render as `"1¼"` / `"½"` / `"3"` etc.
+    /// Mirrors the inline formatter in `scaleStepText`.
+    private static func renderQuarter(_ v: Double) -> String {
+        if v.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(Int(v))
+        }
+        let rounded = (v * 4).rounded() / 4
+        let whole = Int(floor(rounded))
+        let frac = rounded - Double(whole)
+        let glyph: String? = {
+            switch frac {
+            case 0.25: return "¼"
+            case 0.5:  return "½"
+            case 0.75: return "¾"
+            default:   return nil
+            }
+        }()
+        if whole > 0 {
+            if let g = glyph { return "\(whole)\(g)" }
+            return String(format: "%g", rounded)
+        }
+        if let g = glyph { return g }
+        return String(format: "%g", (v * 100).rounded() / 100)
     }
 }

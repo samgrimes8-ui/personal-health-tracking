@@ -94,6 +94,74 @@ enum DBService {
             .execute()
     }
 
+    /// Targeted update that only touches `instructions` + `updated_at`.
+    /// Mirrors `saveRecipeInstructions` in src/lib/db.js — kept narrow so
+    /// editing instructions doesn't risk clobbering ingredients/macros.
+    /// Returns the new `instructions_version` (DB trigger bumps it on
+    /// instructions change) so the caller can splice it into local state
+    /// for cache-key parity with the TTS endpoint.
+    @discardableResult
+    static func saveRecipeInstructions(recipeId: String, instructions: RecipeInstructions) async throws -> SaveInstructionsResult {
+        struct Payload: Encodable {
+            let instructions: RecipeInstructions
+            let updated_at: String
+        }
+        let userId = try await currentUserID()
+        let payload = Payload(
+            instructions: instructions,
+            updated_at: ISO8601DateFormatter().string(from: Date())
+        )
+        let rows: [SaveInstructionsResult] = try await client
+            .from("recipes")
+            .update(payload)
+            .eq("id", value: recipeId)
+            .eq("user_id", value: userId)
+            .select("id, instructions_version")
+            .execute()
+            .value
+        guard let row = rows.first else {
+            throw DBServiceError.invalidInput("Can't save to this recipe — it isn't in your library.")
+        }
+        return row
+    }
+
+    /// Public sharing on/off. Mirrors enableRecipeSharing/disableRecipeSharing
+    /// in src/lib/db.js. Returns the share token on enable so the caller can
+    /// build the public URL and feed UIActivityViewController.
+    @discardableResult
+    static func enableRecipeSharing(recipeId: String) async throws -> String {
+        struct Payload: Encodable {
+            let share_token: String
+            let is_shared: Bool
+        }
+        struct Result: Decodable { let share_token: String }
+        let userId = try await currentUserID()
+        let token = UUID().uuidString.lowercased()
+        let rows: [Result] = try await client
+            .from("recipes")
+            .update(Payload(share_token: token, is_shared: true))
+            .eq("id", value: recipeId)
+            .eq("user_id", value: userId)
+            .select("share_token")
+            .execute()
+            .value
+        guard let first = rows.first else {
+            throw DBServiceError.invalidInput("Couldn't enable sharing — recipe not found in your library.")
+        }
+        return first.share_token
+    }
+
+    static func disableRecipeSharing(recipeId: String) async throws {
+        struct Payload: Encodable { let is_shared: Bool }
+        let userId = try await currentUserID()
+        try await client
+            .from("recipes")
+            .update(Payload(is_shared: false))
+            .eq("id", value: recipeId)
+            .eq("user_id", value: userId)
+            .execute()
+    }
+
     // ─── Planner ───────────────────────────────────────────────────────
     //
     // savePlannerEntry mirrors addPlannerMeal() in db.js: the caller
@@ -497,6 +565,14 @@ struct RecipeUpsert {
     var source: String?
     var sourceUrl: String?
     var tags: [String]?
+}
+
+/// Returned by `saveRecipeInstructions` so the caller can pick up the new
+/// `instructions_version` (DB trigger increments it) and use it as the
+/// cache key when calling `/api/tts`.
+struct SaveInstructionsResult: Decodable {
+    var id: String
+    var instructions_version: Int
 }
 
 struct PlannerInsert {

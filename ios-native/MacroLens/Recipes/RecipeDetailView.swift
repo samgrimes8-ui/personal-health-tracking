@@ -1,50 +1,81 @@
 import SwiftUI
 
 /// View-mode recipe detail. Mirrors the right-side "view" mode of the
-/// web `renderRecipeModalContent`. Read-only — to edit, the user taps
-/// "Edit" which the parent reroutes to RecipeEditView.
+/// web `renderRecipeModalContent`: macros, source link, ingredient list
+/// with serving scaler, and an Instructions tab that wraps AI-generated
+/// step-by-step cooking instructions.
 ///
-/// Cooking-mode read-aloud is intentionally out of scope (web-only
-/// SpeechSynthesis). Sharing is also deferred — the view-mode header
-/// keeps the macro pills front-and-center so the day-to-day "what does
-/// this make?" lookup is fast.
+/// `working` is a local mutable copy of the inbound `recipe` so AI-generated
+/// instructions surface immediately after the API call resolves. The parent
+/// refreshes the library from the database when this sheet dismisses, so
+/// changes also propagate up.
 struct RecipeDetailView: View {
     let recipe: RecipeFull
     let onEdit: (RecipeFull) -> Void
     let onDeleted: () -> Void
+    /// Hooks for the per-feature actions — wired by the parent so the
+    /// detail view stays presentation-only. Defaulted to no-ops while the
+    /// owning features are being built out commit-by-commit.
+    var onPlan: ((RecipeFull) -> Void)? = nil
+    var onShare: ((RecipeFull) -> Void)? = nil
+    var onCook: ((RecipeFull) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @State private var working: RecipeFull
     @State private var scaledServings: Double
+    @State private var tab: DetailTab = .ingredients
     @State private var isDeleting = false
     @State private var deleteError: String?
 
+    @State private var generatingInstructions = false
+    @State private var generateError: String?
+
+    enum DetailTab { case ingredients, instructions }
+
     init(recipe: RecipeFull,
          onEdit: @escaping (RecipeFull) -> Void,
-         onDeleted: @escaping () -> Void) {
+         onDeleted: @escaping () -> Void,
+         onPlan: ((RecipeFull) -> Void)? = nil,
+         onShare: ((RecipeFull) -> Void)? = nil,
+         onCook: ((RecipeFull) -> Void)? = nil) {
         self.recipe = recipe
         self.onEdit = onEdit
         self.onDeleted = onDeleted
+        self.onPlan = onPlan
+        self.onShare = onShare
+        self.onCook = onCook
+        _working = State(initialValue: recipe)
         _scaledServings = State(initialValue: recipe.servings ?? 1)
+        // Default tab matches the web's openRecipeModal: Instructions when
+        // they exist, Ingredients otherwise. Users were getting confused
+        // when a generate completed but the modal stayed on Ingredients.
+        _tab = State(initialValue: (recipe.instructions?.steps.isEmpty == false) ? .instructions : .ingredients)
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                if let desc = recipe.description, !desc.isEmpty {
+                if let desc = working.description, !desc.isEmpty {
                     Text(desc)
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.text2)
                 }
-                if let url = recipe.source_url, !url.isEmpty {
+                if let url = working.source_url, !url.isEmpty {
                     sourceLink(url)
                 }
+                quickActionsRow
                 servingsRow
                 macrosRow
-                if !(recipe.tags ?? []).isEmpty {
+                if !(working.tags ?? []).isEmpty {
                     tagsRow
                 }
-                ingredientsCard
+                tabSegment
+                if tab == .instructions {
+                    instructionsCard
+                } else {
+                    ingredientsCard
+                }
                 if let err = deleteError {
                     Text(err).font(.system(size: 12)).foregroundStyle(Theme.red)
                 }
@@ -54,14 +85,14 @@ struct RecipeDetailView: View {
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
-        .navigationTitle(recipe.name)
+        .navigationTitle(working.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button("Close") { dismiss() }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { onEdit(recipe) }
+                Button("Edit") { onEdit(working) }
                     .foregroundStyle(Theme.accent)
             }
         }
@@ -71,12 +102,54 @@ struct RecipeDetailView: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(recipe.name)
+            Text(working.name)
                 .font(.system(size: 24, weight: .semibold, design: .serif))
                 .foregroundStyle(Theme.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.top, 6)
+    }
+
+    /// Plan / Share row — shown above the macros so the two most-tapped
+    /// actions on a recipe are reachable without scrolling. Mirrors the
+    /// pill row in the web sticky header.
+    @ViewBuilder
+    private var quickActionsRow: some View {
+        let hasPlan = onPlan != nil
+        let hasShare = onShare != nil
+        if hasPlan || hasShare {
+            HStack(spacing: 8) {
+                if hasPlan {
+                    Button {
+                        onPlan?(working)
+                    } label: {
+                        Label("Plan", systemImage: "calendar.badge.plus")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.accentFG)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(Theme.accent, in: .rect(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                }
+                if hasShare {
+                    Button {
+                        onShare?(working)
+                    } label: {
+                        let isShared = working.is_shared == true
+                        Label(isShared ? "Shared" : "Share",
+                              systemImage: isShared ? "checkmark.circle.fill" : "square.and.arrow.up")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(isShared ? Theme.protein : Theme.text2)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(Theme.bg3, in: .rect(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(isShared ? Theme.protein : Theme.border2, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private func sourceLink(_ url: String) -> some View {
@@ -110,8 +183,8 @@ struct RecipeDetailView: View {
     }
 
     private var servingsRow: some View {
-        let base = recipe.servings ?? 1
-        let label = recipe.serving_label ?? "serving"
+        let base = working.servings ?? 1
+        let label = working.serving_label ?? "serving"
         return HStack(spacing: 12) {
             Text("Servings:")
                 .font(.system(size: 13))
@@ -130,11 +203,11 @@ struct RecipeDetailView: View {
 
     private var macrosRow: some View {
         HStack(spacing: 6) {
-            MacroChip(.calories, label: "Cal", amount: recipe.calories ?? 0)
-            MacroChip(.protein, label: "P", amount: recipe.protein ?? 0)
-            MacroChip(.carbs, label: "C", amount: recipe.carbs ?? 0)
-            MacroChip(.fat, label: "F", amount: recipe.fat ?? 0)
-            if let fiber = recipe.fiber, fiber > 0 {
+            MacroChip(.calories, label: "Cal", amount: working.calories ?? 0)
+            MacroChip(.protein, label: "P", amount: working.protein ?? 0)
+            MacroChip(.carbs, label: "C", amount: working.carbs ?? 0)
+            MacroChip(.fat, label: "F", amount: working.fat ?? 0)
+            if let fiber = working.fiber, fiber > 0 {
                 MacroChip(.fiber, label: "Fbr", amount: fiber)
             }
             Spacer(minLength: 0)
@@ -148,7 +221,7 @@ struct RecipeDetailView: View {
                 .tracking(1.0).textCase(.uppercase)
                 .foregroundStyle(Theme.text3)
             FlowLayout(spacing: 6) {
-                ForEach(recipe.tags ?? [], id: \.self) { tag in
+                ForEach(working.tags ?? [], id: \.self) { tag in
                     Text(tag)
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.carbs)
@@ -160,41 +233,51 @@ struct RecipeDetailView: View {
         }
     }
 
+    // MARK: - Tab segment
+
+    private var tabSegment: some View {
+        let hasSteps = (working.instructions?.steps.isEmpty == false)
+        return HStack(spacing: 0) {
+            tabPill(title: "Ingredients", isActive: tab == .ingredients) {
+                tab = .ingredients
+            }
+            tabPill(title: "Instructions",
+                    isActive: hasSteps && tab == .instructions,
+                    enabled: hasSteps || true /* always tappable so user can see "Generate" CTA */) {
+                tab = .instructions
+            }
+        }
+        .padding(3)
+        .background(Theme.bg3, in: .rect(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
+    }
+
+    private func tabPill(title: String, isActive: Bool, enabled: Bool = true, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isActive ? Theme.accent : Theme.text3)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(isActive ? Theme.accent.opacity(0.18) : Color.clear,
+                            in: .rect(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isActive ? Theme.accent.opacity(0.35) : Color.clear, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    // MARK: - Ingredients
+
     private var ingredientsCard: some View {
-        let base = recipe.servings ?? 1
-        let ingredients = recipe.ingredients ?? []
+        let base = working.servings ?? 1
+        let ingredients = working.ingredients ?? []
         let multiplier = (base > 0 && scaledServings > 0) ? scaledServings / base : 1.0
         return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Ingredients")
-                    .font(.system(size: 11, weight: .medium))
-                    .tracking(1.0).textCase(.uppercase)
-                    .foregroundStyle(Theme.text3)
-                Spacer()
-            }
-            // Servings scaler
-            HStack(spacing: 8) {
-                Text("Base:")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.text3)
-                Text("\(formatServings(base)) \(plural(recipe.serving_label ?? "serving", base))")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text)
-                Text("→ Scale to:")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.text3)
-                Stepper(value: $scaledServings, in: 0.5...64, step: 0.5) {
-                    Text(formatServings(scaledServings))
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(minWidth: 36, alignment: .leading)
-                }
-                .labelsHidden()
-                Text(formatServings(scaledServings))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(Theme.bg3, in: .rect(cornerRadius: 10))
+            scalerRow(label: "Scale to:")
 
             // Rows
             if ingredients.isEmpty {
@@ -244,6 +327,233 @@ struct RecipeDetailView: View {
         }
     }
 
+    // MARK: - Instructions
+
+    @ViewBuilder
+    private var instructionsCard: some View {
+        let steps = working.instructions?.steps ?? []
+        let base = working.servings ?? 1
+        let target = scaledServings
+        VStack(alignment: .leading, spacing: 10) {
+            if !steps.isEmpty {
+                instructionsHeaderRow
+                scalerRow(label: "Making:")
+                if let prep = working.instructions?.prep_time, !prep.isEmpty {
+                    timeRow(prep: prep, cook: working.instructions?.cook_time)
+                } else if let cook = working.instructions?.cook_time, !cook.isEmpty {
+                    timeRow(prep: nil, cook: cook)
+                }
+                instructionsList(steps: steps, base: base, target: target)
+                if let tips = working.instructions?.tips, !tips.isEmpty {
+                    tipsBlock(tips)
+                }
+                regenerateButton
+            } else {
+                noInstructionsBlock
+            }
+
+            if let err = generateError {
+                Text(err).font(.system(size: 12)).foregroundStyle(Theme.red)
+            }
+        }
+    }
+
+    private var instructionsHeaderRow: some View {
+        HStack(spacing: 8) {
+            Spacer()
+            if onCook != nil {
+                Button { onCook?(working) } label: {
+                    Label("Read aloud", systemImage: "speaker.wave.2.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Theme.bg3, in: .rect(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border2, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func timeRow(prep: String?, cook: String?) -> some View {
+        HStack(spacing: 16) {
+            if let prep, !prep.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "timer").font(.system(size: 11))
+                    Text("Prep ").foregroundStyle(Theme.text3)
+                    Text(prep).fontWeight(.semibold)
+                }
+            }
+            if let cook, !cook.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "flame").font(.system(size: 11))
+                    Text("Cook ").foregroundStyle(Theme.text3)
+                    Text(cook).fontWeight(.semibold)
+                }
+            }
+            Spacer()
+        }
+        .font(.system(size: 13))
+        .foregroundStyle(Theme.text2)
+    }
+
+    private func instructionsList(steps: [String], base: Double, target: Double) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { idx, step in
+                let scaled = StepTextScaler.scale(step, base: base, target: target)
+                HStack(alignment: .top, spacing: 10) {
+                    Text("\(idx + 1).")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(minWidth: 22, alignment: .trailing)
+                    Text(scaled)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.text)
+                        .lineSpacing(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func tipsBlock(_ tips: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Tips")
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(1.0).textCase(.uppercase)
+                .foregroundStyle(Theme.accent)
+            ForEach(Array(tips.enumerated()), id: \.offset) { _, t in
+                HStack(alignment: .top, spacing: 6) {
+                    Text("•").foregroundStyle(Theme.accent)
+                    Text(t)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(12)
+        .background(Theme.accent.opacity(0.06), in: .rect(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.accent.opacity(0.18), lineWidth: 1))
+    }
+
+    private var regenerateButton: some View {
+        Button {
+            Task { await generateInstructions() }
+        } label: {
+            HStack(spacing: 6) {
+                if generatingInstructions { ProgressView().controlSize(.small) }
+                else { Image(systemName: "sparkles") }
+                Text(generatingInstructions ? "Regenerating..." : "Regenerate instructions")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .foregroundStyle(Theme.text3)
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(generatingInstructions || !canEditInstructions)
+    }
+
+    private var noInstructionsBlock: some View {
+        VStack(spacing: 12) {
+            Text("No instructions yet")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.text2)
+            if canEditInstructions {
+                Button {
+                    Task { await generateInstructions() }
+                } label: {
+                    HStack(spacing: 6) {
+                        if generatingInstructions { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "sparkles") }
+                        Text(generatingInstructions ? "Generating..." : "Generate cooking instructions with AI")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(Theme.accentFG)
+                    .background(Theme.accent, in: .rect(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                .disabled(generatingInstructions)
+            } else {
+                Text("Read-only recipe — copy this to your library to generate instructions.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text3)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(20)
+        .background(Theme.bg2, in: .rect(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Theme.border, style: .init(lineWidth: 1, dash: [5, 4]))
+        )
+    }
+
+    /// Generate-instructions is a `recipes`-row UPDATE under the user's
+    /// own user_id. Other-provider recipes injected for read-only viewing
+    /// fail server-side, so we gate the CTA up front. Currently we don't
+    /// surface other-provider recipes in the iOS app at all, so this is
+    /// effectively `true` — but we keep the gate so the parity is exact
+    /// when the providers tab lands.
+    private var canEditInstructions: Bool {
+        // No user check available locally; the AppState would need to
+        // expose currentUserID. Conservative default: allow everything,
+        // since the iOS Recipes tab only loads recipes the current user
+        // owns (RecipeService.fetchLibrary filters on user_id).
+        true
+    }
+
+    private func generateInstructions() async {
+        generatingInstructions = true
+        generateError = nil
+        defer { generatingInstructions = false }
+        do {
+            let result = try await AnalyzeService.generateRecipeInstructions(working)
+            // Persist via the targeted update so we don't risk clobbering
+            // ingredients/macros, then splice the bumped version in.
+            let saved = try await DBService.saveRecipeInstructions(recipeId: working.id, instructions: result)
+            working.instructions = result
+            working.instructions_version = saved.instructions_version
+            tab = .instructions
+        } catch {
+            generateError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Servings scaler shared by both tabs
+
+    private func scalerRow(label: String) -> some View {
+        let base = working.servings ?? 1
+        return HStack(spacing: 8) {
+            Text("Base:")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text3)
+            Text("\(formatServings(base)) \(plural(working.serving_label ?? "serving", base))")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.text)
+            Text("→ \(label)")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text3)
+            Stepper(value: $scaledServings, in: 0.5...64, step: 0.5) {
+                EmptyView()
+            }
+            .labelsHidden()
+            Text(formatServings(scaledServings))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Theme.bg3, in: .rect(cornerRadius: 10))
+    }
+
+    // MARK: - Bottom actions
+
     private var actionsRow: some View {
         HStack(spacing: 10) {
             Button(role: .destructive) {
@@ -261,7 +571,7 @@ struct RecipeDetailView: View {
             .disabled(isDeleting)
 
             Button {
-                onEdit(recipe)
+                onEdit(working)
             } label: {
                 Text("Edit").frame(maxWidth: .infinity)
             }
@@ -276,7 +586,7 @@ struct RecipeDetailView: View {
         isDeleting = true
         defer { isDeleting = false }
         do {
-            try await DBService.deleteRecipe(id: recipe.id)
+            try await DBService.deleteRecipe(id: working.id)
             onDeleted()
         } catch {
             deleteError = error.localizedDescription

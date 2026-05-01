@@ -158,6 +158,51 @@ enum AnalyzeService {
         )
     }
 
+    /// Generates step-by-step cooking instructions for an existing recipe.
+    /// Mirrors `generateRecipeInstructions` in src/lib/ai.js — same prompt,
+    /// same JSON contract: `{ steps: [...], prep_time, cook_time, tips: [...] }`.
+    static func generateRecipeInstructions(_ recipe: RecipeFull) async throws -> RecipeInstructions {
+        let ingredientList: String = (recipe.ingredients ?? [])
+            .map { ing in
+                let amt = ing.amount ?? ""
+                let unit = ing.unit ?? ""
+                return "\(amt) \(unit) \(ing.name)".trimmingCharacters(in: .whitespaces)
+            }
+            .joined(separator: "\n")
+
+        var prompt = "Write clear, step-by-step cooking instructions for this recipe.\n\n"
+        prompt += "Recipe: \(recipe.name)\n"
+        if let d = recipe.description, !d.isEmpty { prompt += "Description: \(d)\n" }
+        prompt += "Servings: \(Int(recipe.servings ?? 4))\n"
+        if !ingredientList.isEmpty {
+            prompt += "\nIngredients:\n\(ingredientList)\n"
+        }
+        if let url = recipe.source_url, !url.isEmpty {
+            prompt += "\nSource: \(url)\n"
+        }
+        prompt += "\nWrite numbered steps that are concise and easy to follow on a phone while cooking.\n"
+        prompt += "Include timing, temperatures, and visual cues (e.g. \"until golden brown\").\n"
+        prompt += "If no ingredients are provided, estimate based on the recipe name.\n\n"
+        prompt += "Return ONLY the steps as a JSON array:\n"
+        prompt += #"{"steps": ["Step 1 text", "Step 2 text", ...], "prep_time": "X mins", "cook_time": "X mins", "tips": ["optional tip 1", ...]}"#
+
+        let raw = try await rawTextResponse(
+            feature: "recipe",
+            action: "generate_recipe_instructions",
+            inputType: "text",
+            content: .text(prompt),
+            maxTokens: 1500
+        )
+        let cleaned = extractJSON(from: raw)
+        guard let data = cleaned.data(using: .utf8),
+              let result = try? JSONDecoder().decode(RecipeInstructions.self, from: data),
+              !result.steps.isEmpty
+        else {
+            throw AnalyzeError.parse
+        }
+        return result
+    }
+
     static func analyzeRecipePhoto(_ imageBase64: String, hint: String? = nil) async throws -> AnalysisResult {
         let promptText = """
         This image contains a written recipe — from a cookbook, a recipe card, a blog post, or a social media screenshot.
