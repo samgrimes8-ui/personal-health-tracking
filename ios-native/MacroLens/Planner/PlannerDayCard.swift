@@ -12,6 +12,19 @@ struct PlannerDayCard: View {
 
     @State private var isTargeted = false
     @State private var moveErr: String?
+    @State private var pendingPrompt: PendingMove?
+
+    /// Pending state for rule B3 — leftover dragged AFTER its source main.
+    /// We capture the rows + the leftover's intended new date and surface
+    /// a confirmation dialog so the user picks between sliding the main
+    /// meal forward (preserves the +1 chronology) or just relocating the
+    /// leftover and decoupling the pair visually.
+    private struct PendingMove: Identifiable {
+        let id = UUID()
+        let leftover: PlannerRow
+        let main: PlannerRow
+        let leftoverNewDate: String
+    }
 
     private var dayMeals: [PlannerRow] {
         guard dayIndex >= 0, dayIndex < state.plannerByDay.count else { return [] }
@@ -49,6 +62,24 @@ struct PlannerDayCard: View {
         )) {
             Button("OK", role: .cancel) {}
         } message: { Text(moveErr ?? "") }
+        .confirmationDialog(
+            "Move leftovers after main meal?",
+            isPresented: Binding(
+                get: { pendingPrompt != nil },
+                set: { if !$0 { pendingPrompt = nil } }
+            ),
+            presenting: pendingPrompt
+        ) { target in
+            Button("Keep leftovers +1 day after main meal") {
+                Task { await resolvePendingPrompt(target, mode: .keepPlusOne) }
+            }
+            Button("Just relocate leftovers") {
+                Task { await resolvePendingPrompt(target, mode: .justRelocate) }
+            }
+            Button("Cancel", role: .cancel) { pendingPrompt = nil }
+        } message: { _ in
+            Text("This leftover is being moved past its source meal. Slide the main meal along, or just place the leftover on its own?")
+        }
     }
 
     // MARK: - Subviews
@@ -198,19 +229,129 @@ struct PlannerDayCard: View {
 
     // MARK: - Actions
 
+    /// Drop handler — classifies the move and routes through the smart
+    /// paired-meal rules. See spec block at top of file for the matrix.
     private func moveMeal(id: String) async {
         guard let meal = findMeal(id: id) else { return }
-        // Skip if already on this day.
+        // Same-day drop is a no-op; bucketing already matches.
         if meal.actual_date == dateString { return }
+        let isLeftover = meal.is_leftover == true
+
+        if !isLeftover {
+            // Rule A1 — main meal dragged. Move it, then shift any linked
+            // leftovers by the same delta so the +N day gap is preserved.
+            await moveMainAndShiftLeftovers(meal: meal, newDate: dateString)
+            return
+        }
+
+        // Leftover dragged. Find its linked main meal (closest preceding,
+        // same recipe, not a leftover). If none in view, treat as a
+        // standalone relocate.
+        guard let main = state.linkedMain(of: meal),
+              let mainDate = main.actual_date else {
+            await singleMove(id: id, to: dateString)
+            return
+        }
+
+        if dateString < mainDate {
+            // Rule A2 — leftover landed BEFORE main. Slide main back to
+            // (newDate - 1) so the +1 chronology stays intact. Silent.
+            let mainNewDate = PlannerDateMath.addDays(dateString, -1)
+            await applyPairedMove(
+                leftoverId: meal.id,
+                leftoverNewDate: dateString,
+                mainId: main.id,
+                mainNewDate: mainNewDate
+            )
+        } else if dateString > mainDate {
+            // Rule B3 — leftover landed AFTER main. Ambiguous; ask.
+            pendingPrompt = PendingMove(
+                leftover: meal,
+                main: main,
+                leftoverNewDate: dateString
+            )
+        } else {
+            // Same day as the source main — just place it. The pair link
+            // (recipe_id) survives so the user can re-pair by moving later.
+            await singleMove(id: id, to: dateString)
+        }
+    }
+
+    private func resolvePendingPrompt(_ target: PendingMove, mode: PromptResolution) async {
+        defer { pendingPrompt = nil }
+        switch mode {
+        case .keepPlusOne:
+            let mainNewDate = PlannerDateMath.addDays(target.leftoverNewDate, -1)
+            await applyPairedMove(
+                leftoverId: target.leftover.id,
+                leftoverNewDate: target.leftoverNewDate,
+                mainId: target.main.id,
+                mainNewDate: mainNewDate
+            )
+        case .justRelocate:
+            await singleMove(id: target.leftover.id, to: target.leftoverNewDate)
+        }
+    }
+
+    private enum PromptResolution { case keepPlusOne, justRelocate }
+
+    private func singleMove(id: String, to newDate: String) async {
         do {
-            try await DBService.movePlannerEntry(id: id, to: dateString)
-            // Refresh the visible week so the row re-buckets.
-            if let weekStart = state.plannerWeekStart {
-                await state.plannerLoadImpl(weekStart: weekStart)
-            }
+            try await DBService.movePlannerEntry(id: id, to: newDate)
+            await refreshVisibleWeek()
         } catch {
             moveErr = error.localizedDescription
         }
+    }
+
+    private func moveMainAndShiftLeftovers(meal: PlannerRow, newDate: String) async {
+        let oldDate = meal.actual_date
+        let linked = state.linkedLeftovers(of: meal)
+        do {
+            try await DBService.movePlannerEntry(id: meal.id, to: newDate)
+            if !linked.isEmpty,
+               let oldDate,
+               let delta = dayDelta(from: oldDate, to: newDate) {
+                for lo in linked {
+                    guard let lOld = lo.actual_date,
+                          let parsed = PlannerDateMath.parse(lOld),
+                          let shifted = PlannerDateMath.calendar.date(
+                              byAdding: .day, value: delta, to: parsed) else { continue }
+                    let lNew = PlannerDateMath.format(shifted)
+                    // Best-effort: don't abort the whole batch if one
+                    // leftover row fails. Surface the first error only.
+                    do { try await DBService.movePlannerEntry(id: lo.id, to: lNew) }
+                    catch { moveErr = error.localizedDescription }
+                }
+            }
+            await refreshVisibleWeek()
+        } catch {
+            moveErr = error.localizedDescription
+        }
+    }
+
+    private func applyPairedMove(leftoverId: String, leftoverNewDate: String,
+                                 mainId: String, mainNewDate: String) async {
+        do {
+            try await DBService.movePlannerEntry(id: leftoverId, to: leftoverNewDate)
+            try await DBService.movePlannerEntry(id: mainId, to: mainNewDate)
+            await refreshVisibleWeek()
+        } catch {
+            moveErr = error.localizedDescription
+        }
+    }
+
+    private func refreshVisibleWeek() async {
+        if let weekStart = state.plannerWeekStart {
+            await state.plannerLoadImpl(weekStart: weekStart)
+        }
+    }
+
+    private func dayDelta(from old: String, to new: String) -> Int? {
+        guard let a = PlannerDateMath.parse(old),
+              let b = PlannerDateMath.parse(new) else { return nil }
+        let comps = PlannerDateMath.calendar.dateComponents([.day], from: a, to: b)
+        return comps.day
     }
 
     private func deleteMeal(_ meal: PlannerRow) async {

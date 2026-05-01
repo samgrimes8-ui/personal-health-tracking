@@ -38,6 +38,48 @@ extension AppState {
         }
     }
 
+    /// Linked leftovers for a main meal (same recipe, marked is_leftover,
+    /// scheduled later). Mirrors findLinkedLeftovers() in app.js — searches
+    /// the currently-loaded week, since leftover/main pairs typically land
+    /// within the same Sunday-week.
+    func linkedLeftovers(of main: PlannerRow) -> [PlannerRow] {
+        guard main.is_leftover != true,
+              let recipeId = main.recipe_id,
+              let mainDate = main.actual_date else { return [] }
+        var results: [PlannerRow] = []
+        for day in plannerByDay {
+            for m in day {
+                if m.id == main.id { continue }
+                if m.is_leftover != true { continue }
+                if m.recipe_id != recipeId { continue }
+                guard let d = m.actual_date, d > mainDate else { continue }
+                results.append(m)
+            }
+        }
+        return results
+    }
+
+    /// Linked main meal for a leftover (same recipe, NOT a leftover,
+    /// scheduled earlier). Returns the closest preceding match. Used to
+    /// classify a leftover-drag as before/after the source cook.
+    func linkedMain(of leftover: PlannerRow) -> PlannerRow? {
+        guard leftover.is_leftover == true,
+              let recipeId = leftover.recipe_id,
+              let loDate = leftover.actual_date else { return nil }
+        var best: PlannerRow?
+        for day in plannerByDay {
+            for m in day {
+                if m.id == leftover.id { continue }
+                if m.is_leftover == true { continue }
+                if m.recipe_id != recipeId { continue }
+                guard let d = m.actual_date, d < loDate else { continue }
+                if let cur = best?.actual_date, d <= cur { continue }
+                best = m
+            }
+        }
+        return best
+    }
+
     /// Recipes library projection used by the planner picker + grocery
     /// list (the dashboard's `recipes` slice already covers the same
     /// columns; we populate both to keep the dashboard cheap after a
