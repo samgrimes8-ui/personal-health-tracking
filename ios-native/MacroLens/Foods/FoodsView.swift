@@ -297,13 +297,19 @@ struct FoodsView: View {
         var logged = 0
         for c in comps {
             do {
+                // Component macros are already scaled to its `qty` (see
+                // FoodComponent doc in Models.swift), so pass them through
+                // unmodified and record `qty` as servings_consumed — matches
+                // src/pages/app.js:12732 (the web source of truth).
                 try await state.logMeal(
                     name: c.name ?? item.name,
                     calories: c.calories ?? 0,
                     protein: c.protein ?? 0,
                     carbs: c.carbs ?? 0,
                     fat: c.fat ?? 0,
-                    fiber: c.fiber ?? 0
+                    fiber: c.fiber ?? 0,
+                    foodItemId: item.id,
+                    servingsConsumed: c.qty ?? 1
                 )
                 logged += 1
             } catch {

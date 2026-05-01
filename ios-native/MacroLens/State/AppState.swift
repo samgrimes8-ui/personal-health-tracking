@@ -446,7 +446,8 @@ final class AppState {
                  fat: Double = 0,
                  fiber: Double = 0,
                  recipeId: String? = nil,
-                 foodItemId: String? = nil) async throws {
+                 foodItemId: String? = nil,
+                 servingsConsumed: Double = 1.0) async throws {
         struct Insert: Encodable {
             // public.meal_log column is `name` (not `meal_name` — that's
             // meal_planner's column). Mixed those up once already.
@@ -476,7 +477,7 @@ final class AppState {
             recipe_id: recipeId,
             food_item_id: foodItemId,
             logged_at: ISO8601DateFormatter().string(from: Date()),
-            servings_consumed: 1.0
+            servings_consumed: servingsConsumed
         )
         let inserted: [MealLogEntry] = try await SupabaseService.client
             .from("meal_log")
