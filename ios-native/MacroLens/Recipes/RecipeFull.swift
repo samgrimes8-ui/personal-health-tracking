@@ -1,0 +1,215 @@
+import Foundation
+import Supabase
+
+/// Richer recipe shape than Networking/Models.swift's RecipeRow projection.
+/// Models.swift is locked off-limits during the parallel native port, so
+/// the Recipes tab decodes the wider columns it needs (description,
+/// ingredients, tags, source_url, …) into this local type. Field names
+/// match the public.recipes columns one-to-one for cross-referencing
+/// against src/lib/db.js.
+///
+/// `serving_label` is per-recipe ("serving" / "slice" / "cup") — the
+/// edit form lets the user pick. `tags` is a Postgres text[]; `ingredients`
+/// is jsonb (the same shape as Networking.Ingredient).
+struct RecipeFull: Codable, Identifiable, Hashable {
+    var id: String
+    var user_id: String?
+    var name: String
+    var description: String?
+    var servings: Double?
+    var serving_label: String?
+    var calories: Double?
+    var protein: Double?
+    var carbs: Double?
+    var fat: Double?
+    var fiber: Double?
+    var sugar: Double?
+    var ingredients: [Ingredient]?
+    var tags: [String]?
+    var source_url: String?
+    var notes: String?
+    var updated_at: String?
+}
+
+extension RecipeFull {
+    /// Empty draft used by the "+ New" path. Pre-populates the same
+    /// defaults the web modal uses (4 servings, "serving" label, all
+    /// macro fields zero so the input boxes show 0 not blank).
+    static func newDraft() -> RecipeFull {
+        RecipeFull(
+            id: "",
+            user_id: nil,
+            name: "",
+            description: "",
+            servings: 4,
+            serving_label: "serving",
+            calories: 0,
+            protein: 0,
+            carbs: 0,
+            fat: 0,
+            fiber: 0,
+            sugar: 0,
+            ingredients: [],
+            tags: [],
+            source_url: "",
+            notes: "",
+            updated_at: nil
+        )
+    }
+}
+
+/// Fetcher for the Recipes tab. AppState.loadRecipesFull() populates the
+/// dashboard's narrow `recipesFull` slice; this service hits the same
+/// table with the wider projection the tab needs. Kept separate so the
+/// shared AppState slice stays compatible with the dashboard.
+enum RecipeService {
+    private static var client: SupabaseClient { SupabaseService.client }
+
+    private static let columns =
+        "id, user_id, name, description, servings, serving_label, calories, protein, carbs, fat, fiber, sugar, ingredients, tags, source_url, notes, updated_at"
+
+    /// All recipes belonging to the current user, ordered by name. 500-row
+    /// cap matches what AppState.loadRecipesFull pulls — anyone above that
+    /// already needs paging on the web side, and we'll add it here when web
+    /// gets it too.
+    static func fetchLibrary() async throws -> [RecipeFull] {
+        let userId = try await client.auth.session.user.id.uuidString
+        let rows: [RecipeFull] = try await client
+            .from("recipes")
+            .select(columns)
+            .eq("user_id", value: userId)
+            .order("name", ascending: true)
+            .limit(500)
+            .execute()
+            .value
+        return rows
+    }
+}
+
+/// Tag presets baked into the web app (state.recipeTagPresets). Mirrored
+/// here so the chip editor + filter bar surface a sensible default set
+/// even before the user has tagged anything. Order matches the web list.
+enum RecipeTagPresets {
+    static let all: [String] = [
+        "high-protein",
+        "quick",
+        "freezer",
+        "vegetarian",
+        "low-carb",
+        "meal-prep",
+        "one-pot",
+        "kid-friendly",
+        "comfort",
+        "healthy",
+    ]
+}
+
+/// Search ranking for the recipes library. Mirrors rankRecipeMatch in
+/// src/pages/app.js — same five buckets, same tiebreakers.
+enum RecipeSearch {
+    static func filter(_ list: [RecipeFull], query: String) -> [RecipeFull] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return list }
+        let scored: [(RecipeFull, Int)] = list.compactMap { r in
+            let score = rank(r, q: q)
+            return score > 0 ? (r, score) : nil
+        }
+        return scored.sorted { a, b in
+            if a.1 != b.1 { return a.1 > b.1 }
+            let an = a.0.name.lowercased()
+            let bn = b.0.name.lowercased()
+            if an.count != bn.count { return an.count < bn.count }
+            return an < bn
+        }.map(\.0)
+    }
+
+    private static func rank(_ r: RecipeFull, q: String) -> Int {
+        let name = r.name.lowercased()
+        let desc = (r.description ?? "").lowercased()
+        if name.hasPrefix(q) { return 100 }
+        // "whole word" match — preceded by start-of-string or non-letter
+        if matchesWord(name, q: q) { return 80 }
+        if name.contains(q) { return 70 }
+        if desc.contains(q) { return 40 }
+        if (r.ingredients ?? []).contains(where: { ($0.name).lowercased().contains(q) }) { return 20 }
+        return 0
+    }
+
+    private static func matchesWord(_ haystack: String, q: String) -> Bool {
+        // Find q at a word boundary (start, or preceded by non-alphanumeric).
+        var idx = haystack.startIndex
+        while let r = haystack.range(of: q, range: idx..<haystack.endIndex) {
+            if r.lowerBound == haystack.startIndex {
+                return true
+            }
+            let prev = haystack[haystack.index(before: r.lowerBound)]
+            if !prev.isLetter && !prev.isNumber { return true }
+            idx = haystack.index(after: r.lowerBound)
+            if idx >= haystack.endIndex { break }
+        }
+        return false
+    }
+}
+
+/// Amount parser matching parseAmount in src/lib/categorize.js. Recipes
+/// store amounts as free-text strings ("1/2", "1 ½", "0.75") so the
+/// scaler needs to coerce whatever the user typed back into a number.
+enum AmountParser {
+    private static let unicodeFractions: [Character: Double] = [
+        "½": 0.5, "¼": 0.25, "¾": 0.75,
+        "⅓": 1.0/3, "⅔": 2.0/3,
+        "⅕": 0.2, "⅖": 0.4, "⅗": 0.6, "⅘": 0.8,
+        "⅙": 1.0/6, "⅚": 5.0/6,
+        "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875,
+    ]
+
+    static func parse(_ raw: String?) -> Double {
+        guard let raw, !raw.isEmpty else { return 0 }
+        // Replace unicode fraction glyphs with " <decimal>"
+        var s = raw
+        for (glyph, val) in unicodeFractions where s.contains(glyph) {
+            s = s.replacingOccurrences(of: String(glyph), with: " \(val)")
+        }
+        s = s.trimmingCharacters(in: .whitespaces)
+        // Collapse multiple spaces
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        if s.isEmpty { return 0 }
+
+        // Mixed fraction "1 1/2"
+        let mixedFrac = s.split(separator: " ")
+        if mixedFrac.count == 2,
+           let whole = Int(mixedFrac[0]),
+           mixedFrac[1].contains("/") {
+            let parts = mixedFrac[1].split(separator: "/")
+            if parts.count == 2,
+               let n = Int(parts[0]), let d = Int(parts[1]), d != 0 {
+                return Double(whole) + Double(n) / Double(d)
+            }
+        }
+        // Mixed decimal "1 0.5" (post unicode replacement)
+        if mixedFrac.count == 2,
+           let whole = Double(mixedFrac[0]),
+           let frac = Double(mixedFrac[1]) {
+            return whole + frac
+        }
+        // Plain fraction "1/2"
+        if s.contains("/") {
+            let parts = s.split(separator: "/")
+            if parts.count == 2,
+               let n = Double(parts[0]), let d = Double(parts[1]), d != 0 {
+                return n / d
+            }
+        }
+        return Double(s) ?? 0
+    }
+
+    /// Render a scaled amount back to display form. Whole numbers go
+    /// without decimals; fractions round to 2 decimal places.
+    static func format(_ value: Double) -> String {
+        if value == 0 { return "" }
+        if value.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(Int(value))
+        }
+        return String(format: "%g", (value * 100).rounded() / 100)
+    }
+}
