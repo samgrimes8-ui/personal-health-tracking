@@ -260,3 +260,166 @@ struct DailyMacroTotals: Equatable {
         return t
     }
 }
+
+// ─── Phase 0 / S2 — pre-declared shapes for the parallel tab workers ────────
+//
+// Worker rule: every struct that touches a public-schema row lives HERE so
+// the six parallel workers (Analytics, Planner, Recipes, Providers, Foods,
+// Account) never need to edit Models.swift. If a shape is missing, raise
+// it before fanning out — do not patch in place inside a worker branch.
+//
+// Field names match DB columns one-to-one (snake_case) for cross-referencing
+// with src/lib/db.js. Hashable so SwiftUI ForEach/diff can lean on them;
+// Identifiable everywhere there's a stable id column.
+
+/// One row of public.meal_planner. Drives the Planner tab's week grid plus
+/// the planner-aware bits of the dashboard.
+///
+/// Mirrors addPlannerMeal() in db.js. Notes:
+///   - `meal_name` (NOT `name` — meal_log uses `name`; this column is
+///     specifically `meal_name` on meal_planner)
+///   - `actual_date` is the source of truth for which day the meal lands
+///     on; `day_of_week` is a denormalized convenience for older code paths
+///   - `planned_servings` is a multiplier when the planner row points at a
+///     recipe; nil for ad-hoc planner entries
+///   - `from_share_token` / `from_share_index` are only present when the
+///     row was copied in from a meal-plan share (see saveSharedRecipeFromPlannerRow)
+struct PlannerRow: Codable, Identifiable, Hashable {
+    var id: String
+    var week_start_date: String?      // YYYY-MM-DD (Sunday by convention)
+    var day_of_week: Int?             // 0–6 (0 = Sunday)
+    var actual_date: String?          // YYYY-MM-DD — preferred over day_of_week
+    var meal_name: String?
+    var meal_type: String?            // breakfast | lunch | snack | dinner
+    var calories: Double?
+    var protein: Double?
+    var carbs: Double?
+    var fat: Double?
+    var fiber: Double?
+    var is_leftover: Bool?
+    var planned_servings: Double?
+    var recipe_id: String?
+    var from_share_token: String?
+    var from_share_index: Int?
+}
+
+/// One component inside a food_items row. Stored as a jsonb array — see
+/// the Foods modal in app.js for the shape. `qty` + `unit` describe how
+/// much of the underlying ingredient went in, and the macro fields are
+/// already scaled to that quantity (NOT per-unit).
+struct FoodComponent: Codable, Hashable {
+    var name: String?
+    var qty: Double?
+    var unit: String?                 // "serving" | "g" | "oz" | "ml" | …
+    var calories: Double?
+    var protein: Double?
+    var carbs: Double?
+    var fat: Double?
+    var fiber: Double?
+    var sugar: Double?
+}
+
+/// One row of public.food_items — the user's saved food library. Distinct
+/// from RecipeRow: foods are atomic (a yogurt, a protein bar) while
+/// recipes assemble multiple foods. Macro fields here are per-serving;
+/// `serving_size` is a free-text label (e.g. "1 scoop (32g)").
+struct FoodItemRow: Codable, Identifiable, Hashable {
+    var id: String
+    var name: String
+    var brand: String?
+    var serving_size: String?         // free-text e.g. "1 scoop (32g)"
+    var calories: Double?
+    var protein: Double?
+    var carbs: Double?
+    var fat: Double?
+    var fiber: Double?
+    var sugar: Double?
+    var sodium: Double?
+    var components: [FoodComponent]?  // jsonb on the row
+    var notes: String?
+    var source: String?               // "manual" | "ai" | "log" | "barcode"
+    var updated_at: String?
+}
+
+/// One row of public.user_profiles, projected to the columns the Account
+/// tab + Providers tab care about. The profile row is wider in the DB —
+/// add columns here as workers need them.
+struct UserProfileRow: Codable, Hashable {
+    var user_id: String
+    var email: String?
+    var role: String?                 // free | premium | provider | admin
+    var account_status: String?       // active | suspended
+    var is_admin: Bool?
+
+    // Provider-channel fields (populated only when the user runs a channel)
+    var provider_name: String?
+    var provider_slug: String?
+    var provider_bio: String?
+    var provider_specialty: String?
+    var provider_avatar_url: String?
+    var credentials: String?
+
+    // Per-user spend overrides (admin escape hatch)
+    var spending_limit_usd: Double?
+    var spending_limit_expires_at: String?
+    var total_spent_usd: Double?
+
+    // Per-user tag preset hiding (array of preset names)
+    var hidden_tag_presets: [String]?
+}
+
+/// Provider directory listing — same row as UserProfileRow, projected
+/// to just the columns getProviders() returns. Kept distinct so the
+/// Providers tab has a tidy shape and the Account tab can stay
+/// authoritative for full-profile reads.
+struct ProviderRow: Codable, Identifiable, Hashable {
+    var id: String { user_id }
+    var user_id: String
+    var provider_name: String?
+    var provider_bio: String?
+    var provider_slug: String?
+    var provider_specialty: String?
+    var provider_avatar_url: String?
+    var credentials: String?
+    var role: String?
+    var email: String?
+}
+
+/// One row of public.provider_follows — links a follower to a provider.
+/// Composite primary key (follower_id, provider_id); we expose both
+/// columns so the Providers tab can render follower counts + "you're
+/// following" state without joining client-side.
+struct FollowRow: Codable, Hashable {
+    var follower_id: String
+    var provider_id: String
+    var created_at: String?
+}
+
+/// One row of public.token_usage. Drives the Account tab's spend
+/// breakdown widget + admin views. Each row is one Claude call —
+/// model + feature say what was billed, cost_usd is the dollar
+/// amount, tokens_used is in/out combined.
+struct TokenUsageRow: Codable, Identifiable, Hashable {
+    var id: String?                   // optional: list endpoints don't always select it
+    var user_id: String?
+    var model: String?
+    var feature: String?              // analyze-food | recipe-text | barcode | …
+    var input_tokens: Int?
+    var output_tokens: Int?
+    var tokens_used: Int?
+    var cost_usd: Double?
+    var created_at: String?
+}
+
+/// Lightweight reference to a body-scan file in the body-scans bucket.
+/// Workers use this to render the "view scan" link on the Goals page +
+/// to surface scan provenance in the Account export. Storage paths are
+/// of the form `<user_id>/<timestamp>.<ext>`; signed URLs are minted
+/// on-demand via getScanUrl() in db.js.
+struct BodyScanRef: Hashable, Identifiable {
+    var id: String { path }
+    let path: String                  // storage path inside body-scans bucket
+    var checkinId: String?
+    var scanType: String?             // "INBODY" | "DEXA"
+    var scanDate: String?             // YYYY-MM-DD
+}
