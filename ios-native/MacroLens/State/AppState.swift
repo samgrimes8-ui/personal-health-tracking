@@ -8,6 +8,7 @@ import Supabase
 @Observable
 @MainActor
 final class AppState {
+    // ─── Dashboard / Goals (pre-existing) ──────────────────────────────
     var goals: Goals = Goals()
     var todayLog: [MealLogEntry] = []
     var last7Days: [DaySummary] = []
@@ -17,6 +18,39 @@ final class AppState {
     var bodyMetrics: BodyMetrics = BodyMetrics()
     var loading: Bool = false
     var lastError: String?
+
+    // ─── Phase 0 / S3 — worker-owned state slices ──────────────────────
+    //
+    // Hands-off rule for parallel tab workers: NEVER add stored
+    // properties. Use only the slices declared here. Method bodies
+    // below are empty stubs — workers fill those in (and only those)
+    // so we don't get merge conflicts on this file.
+    //
+    // Analytics tab — full history rollups for the analytics page
+    // (the dashboard widget already has its own narrower 7-day slice).
+    var analyticsLog: [MealLogEntry] = []
+    var analyticsRangeDays: Int = 30        // default window; tab can adjust
+
+    // Planner tab — week shown in the grid + supporting recipes lookup.
+    // weekStart is "YYYY-MM-DD" (Sunday). plannerByDay[0..6] indexes
+    // Sun..Sat to mirror the JS planner's day_of_week convention.
+    var plannerWeekStart: String?
+    var plannerByDay: [[PlannerRow]] = Array(repeating: [], count: 7)
+
+    // Recipes tab — full library (the dashboard's `recipes` slice is
+    // a thin name+macros projection; this carries the wider row).
+    var recipesFull: [RecipeRow] = []
+
+    // Providers tab — directory + the ones the user follows.
+    var providers: [ProviderRow] = []
+    var followedProviderIds: Set<String> = []
+
+    // Foods tab — the user's saved food_items library.
+    var foods: [FoodItemRow] = []
+
+    // Account tab — profile + spend rollup.
+    var profile: UserProfileRow?
+    var monthTokenUsage: [TokenUsageRow] = []
 
     /// Loads everything the dashboard needs in parallel. Idempotent —
     /// safe to call on every appear or pull-to-refresh.
@@ -52,6 +86,57 @@ final class AppState {
             self.goals = (try? await g) ?? self.goals
             self.allCheckins = (try? await cs) ?? []
         }
+    }
+
+    // ─── Phase 0 / S3 — worker-owned load entry points ─────────────────
+    //
+    // Each tab worker fills in its own method body. Keep the shape
+    // consistent with loadDashboard()/loadGoals(): kick off independent
+    // fetches with `async let`, await the results, mutate state slices
+    // last so the UI sees one coherent update. Errors flow into
+    // `lastError`; transient empty results should NOT clear existing
+    // state on failure (mirrors the dashboard's `(try? await …) ?? …`
+    // pattern).
+
+    /// Analytics tab. Pulls a wider window of meal_log (default 30 days,
+    /// honoring `analyticsRangeDays`) plus supporting goals/checkins so
+    /// the page can render adherence + trend charts.
+    func loadAnalytics() async {
+        // Worker: implement.
+    }
+
+    /// Planner tab. `weekStart` is YYYY-MM-DD (Sunday) — the worker is
+    /// responsible for snapping arbitrary input to a Sunday. Stores
+    /// results in `plannerWeekStart` + `plannerByDay`.
+    func loadPlanner(weekStart: String) async {
+        // Worker: implement.
+    }
+
+    /// Recipes tab. Full library load — populates `recipesFull` and
+    /// the narrower dashboard `recipes` slice (so dashboard refreshes
+    /// stay cheap after this fans out).
+    func loadRecipesFull() async {
+        // Worker: implement.
+    }
+
+    /// Providers tab. Pulls the directory + the user's follow set so
+    /// the worker can render the "Following" badge inline without a
+    /// per-row roundtrip.
+    func loadProviders() async {
+        // Worker: implement.
+    }
+
+    /// Foods tab. Loads the user's saved food_items library into
+    /// `foods`, ordered by recency.
+    func loadFoods() async {
+        // Worker: implement.
+    }
+
+    /// Account tab. Pulls the profile row + this month's token_usage
+    /// rows; the worker derives spend totals + role-based UI from the
+    /// loaded data rather than from a precomputed summary.
+    func loadAccount() async {
+        // Worker: implement.
     }
 
     /// Insert a weight check-in. Used by the native log-weight sheet.
