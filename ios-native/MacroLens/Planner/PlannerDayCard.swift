@@ -63,23 +63,40 @@ struct PlannerDayCard: View {
             Button("OK", role: .cancel) {}
         } message: { Text(moveErr ?? "") }
         .confirmationDialog(
-            "Move leftovers after main meal?",
+            "Move main meal too?",
             isPresented: Binding(
                 get: { pendingPrompt != nil },
                 set: { if !$0 { pendingPrompt = nil } }
             ),
             presenting: pendingPrompt
         ) { target in
-            Button("Keep leftovers +1 day after main meal") {
+            Button("Move \(mainMealLabel(target)) to the day before") {
                 Task { await resolvePendingPrompt(target, mode: .keepPlusOne) }
             }
-            Button("Just relocate leftovers") {
+            Button("Just move the leftovers") {
                 Task { await resolvePendingPrompt(target, mode: .justRelocate) }
             }
             Button("Cancel", role: .cancel) { pendingPrompt = nil }
-        } message: { _ in
-            Text("This leftover is being moved past its source meal. Slide the main meal along, or just place the leftover on its own?")
         }
+    }
+
+    /// Best display name for the source meal in the prompt. Prefers the
+    /// main row's meal_name; falls back to the leftover's name with the
+    /// "(leftovers)" suffix stripped; finally to a generic phrase so the
+    /// button label always reads cleanly.
+    private func mainMealLabel(_ target: PendingMove) -> String {
+        if let n = target.main.meal_name?.trimmingCharacters(in: .whitespaces), !n.isEmpty {
+            return n
+        }
+        if let raw = target.leftover.meal_name {
+            let stripped = raw
+                .replacingOccurrences(of: "(leftovers)",
+                                      with: "",
+                                      options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespaces)
+            if !stripped.isEmpty { return stripped }
+        }
+        return "main meal"
     }
 
     // MARK: - Subviews
