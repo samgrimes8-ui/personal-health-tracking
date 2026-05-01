@@ -86,6 +86,15 @@ final class AppState {
         } catch {
             lastError = error.localizedDescription
         }
+        // Apple Health: piggyback the macro migration + foreground
+        // catch-up on dashboard load. loadDashboard() is the most
+        // reliable signal that the user is actively in the app, and
+        // both calls are no-ops if the pushMacros toggle is off.
+        // - Migration runs at most once per user per device (UserDefaults gate)
+        // - Catch-up re-pushes today's totals so any HK-side desync
+        //   (offline window, auth re-grant) resolves without a meal mutation
+        await runHealthKitMacroDailyTotalMigrationIfNeeded()
+        await syncDayMacrosToHealthKit(dateKey: Self.localDateKey(for: Date()))
     }
 
     /// Loads what the Goals page needs in parallel. Separate from
@@ -413,6 +422,10 @@ final class AppState {
     /// tiles + Today's meals + Quick log suggestions all refresh
     /// without a re-fetch.
     func updateMealLogEntry(id: String, _ patch: MealEntryPatch) async throws {
+        // Capture the affected day BEFORE the DB round-trip — patch
+        // doesn't carry logged_at so the date can't change here, but we
+        // want HK push to know which calendar day to recompute.
+        let dateKey = dateKeyForMeal(id: id)
         try await DBService.updateMealEntry(id: id, patch)
         let apply: (inout MealLogEntry) -> Void = { entry in
             if let v = patch.name { entry.name = v }
@@ -426,13 +439,18 @@ final class AppState {
         }
         if let i = todayLog.firstIndex(where: { $0.id == id }) { apply(&todayLog[i]) }
         if let i = dashboardRecentMeals.firstIndex(where: { $0.id == id }) { apply(&dashboardRecentMeals[i]) }
+        await syncDayMacrosToHealthKit(dateKey: dateKey)
     }
 
     /// Delete a meal_log entry and prune both dashboard slices locally.
     func deleteMealLogEntry(id: String) async throws {
+        // Resolve the day BEFORE deleting locally — the entry needs to
+        // still be in todayLog/dashboardRecentMeals for the lookup.
+        let dateKey = dateKeyForMeal(id: id)
         try await DBService.deleteMealEntry(id: id)
         todayLog.removeAll { $0.id == id }
         dashboardRecentMeals.removeAll { $0.id == id }
+        await syncDayMacrosToHealthKit(dateKey: dateKey)
     }
 
     /// Insert a new meal_log row. Used by Quick log + Analyze food's
@@ -493,20 +511,11 @@ final class AppState {
             if dashboardRecentMeals.count > 4 {
                 dashboardRecentMeals = Array(dashboardRecentMeals.prefix(4))
             }
-            // Apple Health push: write 4 dietary samples (kcal, protein,
-            // carbs, fat) per meal_log row, gated by the per-user toggle.
-            // No DB writeback needed — calories are push-only (we don't
-            // re-pull diet data from HK).
-            if HealthKitService.isToggleOn(.pushMacros, userId: userId) {
-                try? await HealthKitService.shared.pushMealMacros(
-                    mealLogId: entry.id,
-                    kcal: calories,
-                    protein: protein,
-                    carbs: carbs,
-                    fat: fat,
-                    at: Date()
-                )
-            }
+            // Apple Health: recompute today's totals from meal_log and
+            // push as the daily-total quartet (kcal/protein/carbs/fat).
+            // No-op if the pushMacros toggle is off. logMeal always
+            // records logged_at = Date(), so the affected day is today.
+            await syncDayMacrosToHealthKit(dateKey: Self.localDateKey(for: Date()))
         }
     }
 

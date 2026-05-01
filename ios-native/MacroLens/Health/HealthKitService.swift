@@ -2,8 +2,7 @@ import Foundation
 import HealthKit
 import UIKit
 
-/// HKHealthStore wrapper for the two-way Apple Health sync (push macros +
-/// weight to HK, pull weight from HK into our checkins history).
+/// HKHealthStore wrapper for the two-way Apple Health sync.
 ///
 /// Why a dedicated service rather than calling HK from views/AppState:
 ///   - HK auth requests are slow + ask the system for an alert; want one
@@ -13,19 +12,31 @@ import UIKit
 ///   - Push/pull paths need the same "exclude our own writes" rules so
 ///     dedup stays consistent — colocate the predicates here.
 ///
-/// Dedup contract (mirror of supabase/migrations/healthkit_columns.sql):
-///   - Every PUSH sample carries metadata identifying the source row in
-///     our DB (macrolens_meal_id for meal_log, macrolens_metric_id for
-///     checkins). Captured sample.uuid is stored on the DB row so we
-///     can match a pulled-back sample to the row that originated it.
-///   - Every PULL filters out samples produced by HKSource.default()
-///     (us) AND samples carrying our metadata keys. The unique partial
-///     index on checkins.healthkit_uuid is the last line of defense.
+/// MACROS — daily-total model (NOT per-meal):
+///   - For each calendar day with non-zero macros, we maintain exactly
+///     four HKQuantitySamples (kcal, protein, carbs, fat). Each sample
+///     carries metadata `macrolens_daily_total: "YYYY-MM-DD"` so we can
+///     find + replace the day's samples atomically on every recompute.
+///   - On every meal_log insert / update / delete we recompute that
+///     day's totals from the DB and call `pushDailyMacroTotal` (or
+///     `clearDailyMacroTotal` if zero). MacroLens-as-source-of-truth.
+///   - On first install of the new build, a one-shot migration wipes
+///     legacy per-meal samples (metadata `macrolens_meal_id`) and
+///     backfills the last 90 days under the daily-total model. See
+///     `deleteLegacyPerMealSamples` + AppState migration runner.
+///
+/// WEIGHT — per-row model:
+///   - Push: one bodyMass sample per checkins row, metadata
+///     `macrolens_metric_id`. Sample UUID stored back on the row for
+///     pull-side dedup via the unique partial index.
+///   - Pull: HKAnchoredObjectQuery, anchor persisted per-user. Filters
+///     out our own writes via HKSource.default() + metadata key.
 ///
 /// Background delivery is intentionally NOT wired (out-of-scope for v1;
-/// adds entitlement + review complexity). Pulls run on:
+/// adds entitlement + review complexity). Sync runs on:
 ///   1. Toggle-enable (HealthSettingsSection)
-///   2. App foreground (.onAppear in SignedInShell)
+///   2. App foreground (.task in SignedInShell)
+///   3. Every meal_log mutation (logMeal / updateMealLogEntry / delete)
 @MainActor
 final class HealthKitService {
     static let shared = HealthKitService()
@@ -104,48 +115,101 @@ final class HealthKitService {
         }
     }
 
-    // ─── Push: meal macros ─────────────────────────────────────────────
+    // ─── Push: daily macro totals ──────────────────────────────────────
+    //
+    // The four dietary types we touch. Pulled out as a constant because
+    // the migration path (delete legacy + delete daily-total + delete on
+    // clear) iterates over the same set in three places.
+    private static let dietaryTypes: [HKQuantityType] = [
+        HKQuantityType(.dietaryEnergyConsumed),
+        HKQuantityType(.dietaryProtein),
+        HKQuantityType(.dietaryCarbohydrates),
+        HKQuantityType(.dietaryFatTotal)
+    ]
 
-    /// Writes the four dietary samples (kcal, protein, carbs, fat) for a
-    /// single meal_log row. start == end == the meal's logged timestamp
-    /// — Apple Health treats zero-duration consumption as a single
-    /// instant and that matches how we surface meals in the dashboard.
-    func pushMealMacros(
-        mealLogId: String,
+    /// Replace-on-write: deletes any existing daily-total samples for
+    /// `dateKey` (matched by metadata, scoped to our app's source by
+    /// HKHealthStore's own enforcement), then writes 4 fresh samples.
+    /// Atomicity is best-effort — between the delete and the save HK
+    /// would briefly show no totals for that day; for the user's own
+    /// app this race is invisible.
+    ///
+    /// `dateKey` MUST be `YYYY-MM-DD` in the user's local TZ — that's
+    /// what the migration writes too, so the same key matches across
+    /// reads and writes regardless of process restart.
+    ///
+    /// `start` should be local midnight; `end` should be `Date()` for
+    /// today (HK rejects future-dated samples for some types) and end
+    /// of day for past dates (so the sample shows up "on" that day).
+    func pushDailyMacroTotal(
+        dateKey: String,
+        start: Date,
+        end: Date,
         kcal: Double,
         protein: Double,
         carbs: Double,
-        fat: Double,
-        at: Date
+        fat: Double
     ) async throws {
         guard isAvailable else { throw HealthKitError.notAvailable }
-        let metadata: [String: Any] = ["macrolens_meal_id": mealLogId]
+        try await clearDailyMacroTotal(dateKey: dateKey)
+        let metadata: [String: Any] = ["macrolens_daily_total": dateKey]
         let samples: [HKQuantitySample] = [
             HKQuantitySample(
                 type: HKQuantityType(.dietaryEnergyConsumed),
                 quantity: HKQuantity(unit: .kilocalorie(), doubleValue: kcal),
-                start: at, end: at, metadata: metadata
+                start: start, end: end, metadata: metadata
             ),
             HKQuantitySample(
                 type: HKQuantityType(.dietaryProtein),
                 quantity: HKQuantity(unit: .gram(), doubleValue: protein),
-                start: at, end: at, metadata: metadata
+                start: start, end: end, metadata: metadata
             ),
             HKQuantitySample(
                 type: HKQuantityType(.dietaryCarbohydrates),
                 quantity: HKQuantity(unit: .gram(), doubleValue: carbs),
-                start: at, end: at, metadata: metadata
+                start: start, end: end, metadata: metadata
             ),
             HKQuantitySample(
                 type: HKQuantityType(.dietaryFatTotal),
                 quantity: HKQuantity(unit: .gram(), doubleValue: fat),
-                start: at, end: at, metadata: metadata
+                start: start, end: end, metadata: metadata
             )
         ]
         do {
             try await store.save(samples)
         } catch {
             throw HealthKitError.sampleSaveFailed(error.localizedDescription)
+        }
+    }
+
+    /// Removes the daily-total samples for a given dateKey. Used when
+    /// the day's meal_log goes empty after a delete — we'd rather show
+    /// "no entry" in HK than four zero samples.
+    func clearDailyMacroTotal(dateKey: String) async throws {
+        guard isAvailable else { return }
+        let predicate = HKQuery.predicateForObjects(
+            withMetadataKey: "macrolens_daily_total",
+            operatorType: .equalTo,
+            value: dateKey
+        )
+        for type in Self.dietaryTypes {
+            // HK only lets an app delete its own samples (Apple-enforced
+            // at the framework level), so we don't need an HKSource
+            // predicate here. Returns success+count=0 if nothing matched.
+            _ = try? await store.deleteObjects(of: type, predicate: predicate)
+        }
+    }
+
+    /// Migration helper: wipes ALL legacy per-meal samples we wrote in
+    /// the previous build. Predicate matches "any value present" for
+    /// the legacy `macrolens_meal_id` metadata key. HK enforces
+    /// own-source ownership so we can't nuke samples the user created
+    /// in another app.
+    func deleteLegacyPerMealSamples() async throws {
+        guard isAvailable else { return }
+        let predicate = HKQuery.predicateForObjects(withMetadataKey: "macrolens_meal_id")
+        for type in Self.dietaryTypes {
+            _ = try? await store.deleteObjects(of: type, predicate: predicate)
         }
     }
 

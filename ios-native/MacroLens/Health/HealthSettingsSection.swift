@@ -154,6 +154,13 @@ struct HealthSettingsSection: View {
                 if permission == .pullWeight {
                     await runPull(userId: userId)
                 }
+                if permission == .pushMacros {
+                    // Backfill the last 90 days of daily totals to HK so
+                    // the user sees their MacroLens history immediately
+                    // after enabling. Idempotent — pushDailyMacroTotal
+                    // replaces samples by metadata key on every write.
+                    try? await state.backfillDailyMacroTotals(userId: userId, days: 90)
+                }
             } else {
                 revertToggle(permission)
                 lastDenied = permission
