@@ -472,8 +472,11 @@ struct AnalyzeFoodSection: View {
     ///   3b. label → analyzeNutritionLabel
     ///   3c. food → analyzeFoodPhoto (the existing path)
     /// Updates `stage` along the way so the user sees what's happening.
-    /// Throws if every path fails; falls back to meal-photo analysis on
-    /// classifier weirdness so we always return SOMETHING.
+    /// Throws only if EVERY path fails; intermediate failures (Vision
+    /// finding a bogus code, /api/barcode 5xx-ing because OFF is down,
+    /// classifier glitch) fall through to the next stage so we always
+    /// return SOMETHING — manual entry is the user's last resort, not
+    /// the second-step crash.
     private func runFoodPhotoPipeline() async throws -> AnalysisResult {
         guard let raw = image else {
             throw NSError(domain: "Analyze", code: 0, userInfo: [NSLocalizedDescriptionKey: "No photo"])
@@ -481,10 +484,14 @@ struct AnalyzeFoodSection: View {
         let resized = raw.resizedForAnalysis()
 
         // 1. Local barcode via Vision (free, fast).
-        stage = "Checking for barcode…"
+        stage = "Looking up barcode…"
         if let code = await BarcodeService.detect(in: resized) {
             stage = "Barcode \(code) — looking up…"
-            if let lookup = try await BarcodeService.lookup(code) {
+            // try? — a thrown lookup error (e.g. /api/barcode returned
+            // an HTML 502 from Vercel, or OFF parse failed upstream)
+            // shouldn't kill the pipeline. Treat it the same as "not in
+            // database" and fall through to the AI classifier.
+            if let lookup = try? await BarcodeService.lookup(code) {
                 return lookup
             }
             stage = "Barcode \(code) not in database — trying AI…"
@@ -494,25 +501,33 @@ struct AnalyzeFoodSection: View {
         guard let b64 = resized.jpegBase64() else {
             throw NSError(domain: "Analyze", code: 0, userInfo: [NSLocalizedDescriptionKey: "Couldn't encode the photo"])
         }
-        stage = "Detecting what's in the photo…"
+        stage = "Identifying food…"
         let kind = (try? await AnalyzeService.classifyFoodPhoto(b64)) ?? "food"
 
         // 3. Branch on classification.
         switch kind {
         case "barcode":
             stage = "Reading barcode digits…"
+            // Same try? guard on the AI-detected-code lookup — an OFF
+            // outage here also shouldn't crash; soft-land on meal-photo
+            // analysis instead.
             if let aiCode = try? await AnalyzeService.readBarcodeFromImage(b64),
-               let lookup = try await BarcodeService.lookup(aiCode) {
+               let lookup = try? await BarcodeService.lookup(aiCode) {
                 return lookup
             }
-            // Couldn't read the bars OR product not in OFF — fall through
-            // to meal photo analysis as a soft landing rather than failing.
             stage = "Couldn't read the barcode — analyzing as a meal…"
             return try await AnalyzeService.analyzeFoodPhoto(b64)
 
         case "label":
             stage = "Reading nutrition label…"
-            return try await AnalyzeService.analyzeNutritionLabel(b64)
+            // If the label parse fails for any reason, take one more
+            // swing at it as a generic food photo before surfacing the
+            // error. Mirrors the web's soft-landing behavior.
+            if let r = try? await AnalyzeService.analyzeNutritionLabel(b64) {
+                return r
+            }
+            stage = "Label unreadable — analyzing as a meal…"
+            return try await AnalyzeService.analyzeFoodPhoto(b64)
 
         default: // "food" or any unexpected value
             stage = "Analyzing meal photo…"

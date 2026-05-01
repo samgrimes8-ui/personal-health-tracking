@@ -30,7 +30,11 @@ enum BarcodeService {
     }
 
     /// Look up a UPC/EAN against Open Food Facts via /api/barcode.
-    /// Returns nil if the product isn't in the database (404).
+    /// Returns nil if the product isn't in the database (404) OR the
+    /// upstream returned something we can't make sense of (HTML error
+    /// page from the edge layer, OFF outage, etc.) — callers in the
+    /// food-photo pipeline treat nil as "barcode unavailable, fall
+    /// through to AI" rather than as a hard failure.
     static func lookup(_ upc: String) async throws -> AnalysisResult? {
         let digits = upc.filter(\.isNumber)
         guard !digits.isEmpty else { return nil }
@@ -43,10 +47,20 @@ enum BarcodeService {
         let (data, response) = try await URLSession.shared.data(from: url)
         guard let http = response as? HTTPURLResponse else { return nil }
         if http.statusCode == 404 { return nil }
+
+        // Some upstream failures (Vercel 502, OFF outage, /api/barcode
+        // catching a malformed OFF response) return an HTML error page
+        // even on a 200, OR a JSON body whose `error` field embeds the
+        // raw JS "Unexpected token < … is not valid JSON" string. Both
+        // crashed the old parser. Detect both shapes up front and return
+        // nil so the photo pipeline can keep going.
+        if !looksLikeJSON(data) { return nil }
+
         if !(200..<300).contains(http.statusCode) {
-            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            let raw = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            let msg = cleanedErrorMessage(raw) ?? "Barcode lookup unavailable"
             throw NSError(domain: "BarcodeService", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: msg ?? "Lookup failed"])
+                          userInfo: [NSLocalizedDescriptionKey: msg])
         }
 
         // /api/barcode returns a flat dict close to AnalysisResult shape.
@@ -71,5 +85,31 @@ enum BarcodeService {
             notes: (json["serving_size"] as? String).map { "Per serving: \($0)" },
             ingredients: nil
         )
+    }
+
+    /// First non-whitespace byte heuristic — JSON objects/arrays start
+    /// with `{` or `[`, HTML/XML error pages with `<`. Used to short-
+    /// circuit the parser before it surfaces a confusing JSON-parse
+    /// error to the UI.
+    private static func looksLikeJSON(_ data: Data) -> Bool {
+        for byte in data {
+            if byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\n")
+                || byte == UInt8(ascii: "\r") || byte == UInt8(ascii: "\t") {
+                continue
+            }
+            return byte == UInt8(ascii: "{") || byte == UInt8(ascii: "[")
+        }
+        return false
+    }
+
+    /// Strip the noisy "Unexpected token <, …" JS parser snippet that
+    /// leaks through when /api/barcode forwards the OFF parse error
+    /// verbatim. Keeps the message readable instead of dumping HTML.
+    private static func cleanedErrorMessage(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        if raw.contains("Unexpected token") || raw.contains("<html") {
+            return "Barcode lookup unavailable"
+        }
+        return raw
     }
 }
