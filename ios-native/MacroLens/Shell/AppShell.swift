@@ -22,11 +22,16 @@ struct AppShell: View {
     }
 }
 
-/// Tab bar. Dashboard is native; the rest are WebViewTab fallbacks
-/// that load the existing web app inside a WKWebView. As each screen
-/// gets a native rewrite, swap that tab from WebViewTab(page:) to the
-/// new SwiftUI view. See TODO.md "iOS native migration roadmap" for
-/// the order.
+/// Tab bar. Dashboard + Goals are native; the rest are WebViewTab
+/// placeholders that load the existing web app inside a WKWebView.
+/// As each screen gets a native rewrite, swap that tab from
+/// WebViewTab(page:) to the new SwiftUI view. See TODO.md "iOS native
+/// migration roadmap" for the order.
+///
+/// SwiftUI's TabView caps at 5 visible tabs on iPhone before collapsing
+/// the rest into a "More" overflow — the extra three (Providers, Foods,
+/// Account) live in there until we either add a custom tab bar or cut
+/// the surface area down. Acceptable tradeoff during the native port.
 struct SignedInShell: View {
     @State private var state = AppState()
 
@@ -42,11 +47,20 @@ struct SignedInShell: View {
             }
             .tabItem { Label("Goals", systemImage: "target") }
 
+            WebViewTab(page: "analytics", title: "Analytics")
+                .tabItem { Label("Analytics", systemImage: "chart.bar.fill") }
+
             WebViewTab(page: "planner", title: "Planner")
                 .tabItem { Label("Planner", systemImage: "calendar") }
 
             WebViewTab(page: "recipes", title: "Recipes")
                 .tabItem { Label("Recipes", systemImage: "book.fill") }
+
+            WebViewTab(page: "providers", title: "Providers")
+                .tabItem { Label("Providers", systemImage: "person.2.fill") }
+
+            WebViewTab(page: "foods", title: "Foods")
+                .tabItem { Label("Foods", systemImage: "fork.knife") }
 
             WebViewTab(page: "account", title: "Account")
                 .tabItem { Label("Account", systemImage: "person.crop.circle") }
