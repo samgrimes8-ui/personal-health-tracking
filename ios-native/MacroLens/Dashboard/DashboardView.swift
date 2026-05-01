@@ -128,17 +128,25 @@ struct DashboardView: View {
                 .tracking(1.0)
                 .textCase(.uppercase)
                 .foregroundStyle(Theme.text3)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             Text("\(value)\(unit == "g" ? "g" : "")")
                 .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             if let goal {
                 Text("of \(goal)\(unit == "g" ? "g" : "") \(unit == "kcal" ? "kcal" : "")")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text3)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
             } else {
                 Text("Set a goal")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.text3)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
             }
         }
         .padding(14)
