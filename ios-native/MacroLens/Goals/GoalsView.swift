@@ -135,19 +135,32 @@ struct GoalsView: View {
     private var bodyMetricsCard: some View {
         let m = state.bodyMetrics
         let lbs = m.weight_kg.map { $0 * 2.20462 }
-        return VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("Body metrics")
-            statsGrid([
-                ("Weight",  lbs.map { "\(String(format: "%.1f", $0)) lbs" } ?? "—"),
-                ("Body fat", m.body_fat_pct.map { "\(String(format: "%.1f", $0))%" } ?? "—"),
-                ("BMR",     m.bmr.map { "\($0) kcal" } ?? "—"),
-                ("TDEE",    m.tdee.map { "\($0) kcal" } ?? "—"),
-            ])
-            editInBrowserHint("Edit body details (height, age, activity) in the web app for now.")
+        // Whole card pushes a full editor — height / age / sex / activity
+        // / BF / muscle live one tap away. Summary stays clean & read-only.
+        return NavigationLink {
+            BodyMetricsDetailView()
+                .environment(state)
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    sectionTitle("Body metrics")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                }
+                statsGrid([
+                    ("Weight",  lbs.map { "\(String(format: "%.1f", $0)) lbs" } ?? "—"),
+                    ("Body fat", m.body_fat_pct.map { "\(String(format: "%.1f", $0))%" } ?? "—"),
+                    ("BMR",     m.bmr.map { "\($0) kcal" } ?? "—"),
+                    ("TDEE",    m.tdee.map { "\($0) kcal" } ?? "—"),
+                ])
+            }
+            .padding(16)
+            .background(Theme.bg2, in: .rect(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
         }
-        .padding(16)
-        .background(Theme.bg2, in: .rect(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
+        .buttonStyle(.plain)
     }
 
     private var goalSettingsCard: some View {
