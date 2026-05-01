@@ -31,6 +31,7 @@ struct RecipesView: View {
     @State private var planning: RecipeFull?
     @State private var sharing: RecipeFull?
     @State private var cooking: RecipeFull?
+    @State private var tagging: RecipeFull?
 
     enum PresentedRecipe: Identifiable {
         case viewExisting(RecipeFull)
@@ -138,6 +139,13 @@ struct RecipesView: View {
         }
         .fullScreenCover(item: $cooking) { recipe in
             CookingModeView(recipe: recipe)
+        }
+        .sheet(item: $tagging) { recipe in
+            QuickTagSheet(recipe: recipe, knownLibrary: library) { updated in
+                if let idx = library.firstIndex(where: { $0.id == updated.id }) {
+                    library[idx] = updated
+                }
+            }
         }
     }
 
@@ -269,12 +277,7 @@ struct RecipesView: View {
             } else {
                 LazyVStack(spacing: 12) {
                     ForEach(visible) { r in
-                        Button {
-                            presented = .viewExisting(r)
-                        } label: {
-                            recipeCard(r)
-                        }
-                        .buttonStyle(.plain)
+                        recipeCardRow(r)
                     }
                 }
                 .padding(.top, 4)
@@ -306,6 +309,35 @@ struct RecipesView: View {
         }
         return EmptyState(icon: "book.closed", title: title, message: message)
             .padding(.top, 12)
+    }
+
+    /// Tappable card row with a context menu that exposes the most-used
+    /// per-recipe actions (Tag / Plan / Share) without forcing the user
+    /// into the detail sheet first. Long-press to bring up the menu.
+    private func recipeCardRow(_ r: RecipeFull) -> some View {
+        Button {
+            presented = .viewExisting(r)
+        } label: {
+            recipeCard(r)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                tagging = r
+            } label: {
+                Label("Tag", systemImage: "tag")
+            }
+            Button {
+                planning = r
+            } label: {
+                Label("Plan", systemImage: "calendar.badge.plus")
+            }
+            Button {
+                sharing = r
+            } label: {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+        }
     }
 
     private func recipeCard(_ r: RecipeFull) -> some View {
