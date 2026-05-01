@@ -18,6 +18,7 @@ import Charts
 struct GoalsView: View {
     @Environment(AppState.self) private var state
     @State private var showLogSheet = false
+    @State private var showEditGoals = false
     @State private var editingCheckin: CheckinRow?
     @State private var expandedBuckets: Set<String> = []
 
@@ -62,6 +63,10 @@ struct GoalsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showLogSheet) {
             LogWeightSheet(editing: editingCheckin)
+                .environment(state)
+        }
+        .sheet(isPresented: $showEditGoals) {
+            EditGoalsSheet()
                 .environment(state)
         }
     }
@@ -147,15 +152,34 @@ struct GoalsView: View {
 
     private var goalSettingsCard: some View {
         let g = state.goals
+        let m = state.bodyMetrics
+        let directionLabel: String? = {
+            switch m.weight_goal {
+            case "lose":     return "Lose fat"
+            case "gain":     return "Build muscle"
+            case "maintain": return "Maintain"
+            default:         return nil
+            }
+        }()
         return VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("Daily targets")
+            HStack {
+                sectionTitle("Daily targets")
+                Spacer()
+                Button("Edit") { showEditGoals = true }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+            }
             HStack(spacing: 8) {
                 targetTile("Calories",  g.calories.map { "\($0)" } ?? "—",  Theme.cal)
                 targetTile("Protein",   g.protein.map { "\($0)g" } ?? "—",  Theme.protein)
                 targetTile("Carbs",     g.carbs.map { "\($0)g" } ?? "—",    Theme.carbs)
                 targetTile("Fat",       g.fat.map { "\($0)g" } ?? "—",      Theme.fat)
             }
-            editInBrowserHint("Adjust goals + pace in the web app for now.")
+            if let directionLabel {
+                Text("\(directionLabel) · \(m.pace?.capitalized ?? "Moderate") pace")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text3)
+            }
         }
         .padding(16)
         .background(Theme.bg2, in: .rect(cornerRadius: 14))

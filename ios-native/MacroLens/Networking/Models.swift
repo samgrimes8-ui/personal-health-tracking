@@ -149,6 +149,59 @@ extension BodyMetrics {
         }()
         return Int((Double(b) * mult).rounded())
     }
+
+    /// Recommended daily macros given the current TDEE + direction + pace.
+    /// Mirrors calcTargetMacros in src/pages/app.js exactly:
+    ///   - 250/400/600 kcal deficit (slow/moderate/aggressive) for losing
+    ///     fat; surplus of 250/300/400 for gaining (capped 1200 kcal floor)
+    ///   - Protein = 1 g/lb lean mass (LBM from body fat % when known,
+    ///     else estimated as 75% of body weight)
+    ///   - Fat = 25% of target calories
+    ///   - Carbs = remainder (with a 50 g floor)
+    /// Returns nil if TDEE can't be computed.
+    func calculatedTargets() -> Goals? {
+        guard let tdee, let weight_kg else { return nil }
+        let pace = ["slow": 250.0, "moderate": 400.0, "aggressive": 600.0]
+        let p = pace[self.pace ?? "moderate"] ?? 400.0
+        let deficit: Double = {
+            switch weight_goal {
+            case "lose": return p
+            case "gain": return -(["slow": 250.0, "moderate": 300.0, "aggressive": 400.0][self.pace ?? "moderate"] ?? 300.0)
+            default:     return 0
+            }
+        }()
+        let targetCal = max(1200, Double(tdee) - deficit)
+
+        let lbmLbs: Double
+        if let bf = body_fat_pct, bf > 0, bf < 100 {
+            lbmLbs = (weight_kg * (1 - bf / 100)) * 2.20462
+        } else {
+            lbmLbs = (weight_kg * 2.20462) * 0.75
+        }
+        let proteinG = (lbmLbs * 1.0).rounded()
+        let fatCal   = (targetCal * 0.25).rounded()
+        let fatG     = (fatCal / 9).rounded()
+        let carbCal  = targetCal - (proteinG * 4) - fatCal
+        let carbG    = max(50, (carbCal / 4).rounded())
+
+        return Goals(
+            calories: Int(targetCal),
+            protein: Int(proteinG),
+            carbs: Int(carbG),
+            fat: Int(fatG),
+            fiber: nil
+        )
+    }
+
+    /// Approximate weeks until goal weight is reached at the current
+    /// pace. Mirrors weeksToGoal. Returns nil when there's nothing to
+    /// project.
+    func weeksToGoal() -> Int? {
+        guard let cur = weight_kg, let goal = goal_weight_kg, cur != goal else { return nil }
+        let diff = abs(cur - goal)
+        let kgPerWeek = ["slow": 0.25, "moderate": 0.4, "aggressive": 0.6][pace ?? "moderate"] ?? 0.4
+        return Int((diff / kgPerWeek).rounded(.up))
+    }
 }
 
 /// Per-day rollup of a window of meal_log rows. Drives the analytics

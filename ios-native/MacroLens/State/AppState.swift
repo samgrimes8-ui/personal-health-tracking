@@ -142,6 +142,75 @@ final class AppState {
         allCheckins.removeAll { $0.id == id }
     }
 
+    /// Upsert daily macro targets. Mirrors upsertGoals in db.js — one
+    /// row per user, onConflict: user_id.
+    func saveGoals(_ next: Goals) async throws {
+        struct Payload: Encodable {
+            let user_id: String
+            let calories: Int?
+            let protein: Int?
+            let carbs: Int?
+            let fat: Int?
+            let fiber: Int?
+        }
+        let userId = try await currentUserID()
+        let payload = Payload(
+            user_id: userId,
+            calories: next.calories,
+            protein: next.protein,
+            carbs: next.carbs,
+            fat: next.fat,
+            fiber: next.fiber
+        )
+        try await SupabaseService.client
+            .from("goals")
+            .upsert(payload, onConflict: "user_id")
+            .execute()
+        self.goals = next
+    }
+
+    /// Upsert body_metrics. Mirrors saveBodyMetrics in db.js — one row
+    /// per user, onConflict: user_id. The Goals editor only touches a
+    /// subset of these fields; the rest stay whatever the user has set
+    /// previously (the upsert sends the WHOLE current row to avoid
+    /// blanking columns we didn't intend to change).
+    func saveBodyMetrics(_ next: BodyMetrics) async throws {
+        struct Payload: Encodable {
+            let user_id: String
+            let sex: String?
+            let age: Int?
+            let height_cm: Double?
+            let weight_kg: Double?
+            let body_fat_pct: Double?
+            let muscle_mass_kg: Double?
+            let activity_level: String?
+            let weight_goal: String?
+            let pace: String?
+            let goal_weight_kg: Double?
+            let goal_body_fat_pct: Double?
+        }
+        let userId = try await currentUserID()
+        let payload = Payload(
+            user_id: userId,
+            sex: next.sex,
+            age: next.age,
+            height_cm: next.height_cm,
+            weight_kg: next.weight_kg,
+            body_fat_pct: next.body_fat_pct,
+            muscle_mass_kg: next.muscle_mass_kg,
+            activity_level: next.activity_level,
+            weight_goal: next.weight_goal,
+            pace: next.pace,
+            goal_weight_kg: next.goal_weight_kg,
+            goal_body_fat_pct: next.goal_body_fat_pct
+        )
+        try await SupabaseService.client
+            .from("body_metrics")
+            .upsert(payload, onConflict: "user_id")
+            .execute()
+        self.bodyMetrics = next
+    }
+
     /// Insert a new meal_log row. Used by Quick log + Analyze food's
     /// "Log this meal" button. Today's log is updated locally so the
     /// macro tiles refresh immediately without a round trip.
