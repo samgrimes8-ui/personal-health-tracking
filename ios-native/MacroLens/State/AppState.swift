@@ -363,6 +363,20 @@ final class AppState {
             .value
         if let entry = inserted.first {
             todayLog.insert(entry, at: 0)
+            // Apple Health push: write 4 dietary samples (kcal, protein,
+            // carbs, fat) per meal_log row, gated by the per-user toggle.
+            // No DB writeback needed — calories are push-only (we don't
+            // re-pull diet data from HK).
+            if HealthKitService.isToggleOn(.pushMacros, userId: userId) {
+                try? await HealthKitService.shared.pushMealMacros(
+                    mealLogId: entry.id,
+                    kcal: calories,
+                    protein: protein,
+                    carbs: carbs,
+                    fat: fat,
+                    at: Date()
+                )
+            }
         }
     }
 

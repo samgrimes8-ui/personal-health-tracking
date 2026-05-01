@@ -398,6 +398,81 @@ enum DBService {
     static func deleteMyAccount() async throws {
         try await client.rpc("delete_my_account").execute()
     }
+
+    // ─── HealthKit dedup helpers ───────────────────────────────────────
+    //
+    // Two helpers for the iOS HK sync path. Schema: see
+    // supabase/migrations/healthkit_columns.sql.
+
+    /// Stamp a checkins row with the HK sample UUID returned after a
+    /// successful push. Lets the next pull dedupe via the unique partial
+    /// index instead of the (slower) metadata-key filter alone.
+    static func updateCheckinHealthKitUUID(checkinId: String, healthkitUUID: String) async throws {
+        struct Patch: Encodable {
+            let healthkit_uuid: String
+        }
+        let userId = try await currentUserID()
+        try await client
+            .from("checkins")
+            .update(Patch(healthkit_uuid: healthkitUUID))
+            .eq("id", value: checkinId)
+            .eq("user_id", value: userId)
+            .execute()
+    }
+
+    /// Insert a checkins row sourced from HealthKit. Dedupes by querying
+    /// the unique partial index on healthkit_uuid first — a return of
+    /// false means the row was already there (not an error). This is
+    /// belt-and-suspenders alongside the index's own ON CONFLICT
+    /// guarantee; the pre-check keeps the round trip predictable
+    /// (single-row insert vs catching a unique-violation error).
+    @discardableResult
+    static func insertHealthKitWeight(
+        kg: Double,
+        recordedAt: Date,
+        healthkitUUID: String
+    ) async throws -> Bool {
+        struct Existing: Decodable { let id: String }
+        let userId = try await currentUserID()
+
+        let existing: [Existing] = try await client
+            .from("checkins")
+            .select("id")
+            .eq("user_id", value: userId)
+            .eq("healthkit_uuid", value: healthkitUUID)
+            .limit(1)
+            .execute()
+            .value
+        if !existing.isEmpty { return false }
+
+        struct Insert: Encodable {
+            let user_id: String
+            let weight_kg: Double
+            // checkins.checked_in_at is a DATE, not a timestamp — the
+            // schema uses a separate column for the actual time. Send
+            // YYYY-MM-DD here so the type matches.
+            let checked_in_at: String
+            let scan_date: String
+            let source: String
+            let healthkit_uuid: String
+        }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .current
+        let dateStr = f.string(from: recordedAt)
+        try await client
+            .from("checkins")
+            .insert(Insert(
+                user_id: userId,
+                weight_kg: kg,
+                checked_in_at: dateStr,
+                scan_date: dateStr,
+                source: "healthkit",
+                healthkit_uuid: healthkitUUID
+            ))
+            .execute()
+        return true
+    }
 }
 
 // ─── Input DTOs ────────────────────────────────────────────────────────

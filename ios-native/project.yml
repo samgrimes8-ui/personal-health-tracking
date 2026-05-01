@@ -42,6 +42,8 @@ targets:
         NSCameraUsageDescription: MacroLens uses the camera to capture meals, nutrition labels, barcodes, and InBody/DEXA scan reports for AI analysis.
         NSPhotoLibraryUsageDescription: MacroLens reads photos you select to analyze meals, recipes, nutrition labels, and InBody/DEXA scan reports.
         NSPhotoLibraryAddUsageDescription: MacroLens may save processed images back to your photo library.
+        NSHealthShareUsageDescription: MacroLens reads your weight from Apple Health to keep your weigh-in history in sync across devices.
+        NSHealthUpdateUsageDescription: MacroLens writes the meals you log and the weights you record to Apple Health so other apps can use them.
         # Custom URL scheme for OAuth callbacks (Google sign-in via
         # ASWebAuthenticationSession). Supabase redirects to
         # `app.macrolens.native://login-callback#access_token=...&refresh_token=...`,
@@ -64,22 +66,27 @@ targets:
         # → click your team → "Team ID").
         DEVELOPMENT_TEAM: 86T54TVCFN
         CODE_SIGN_STYLE: Automatic
-        # Sign In With Apple entitlement is gated until Apple Developer
-        # Program enrollment lands — free dev provisioning can't claim
-        # the com.apple.developer.applesignin capability and the build
-        # fails to sign without it. To enable after enrollment:
-        #   1. Uncomment the CODE_SIGN_ENTITLEMENTS line below + the
-        #      `entitlements:` block.
-        #   2. In Config.swift, set `appleSignInEnabled = true`.
-        #   3. In Supabase: Auth → Providers → Apple → enable +
-        #      add `app.macrolens.native` to Authorized Client IDs.
-        #   4. xcodegen generate; install.sh.
-        # CODE_SIGN_ENTITLEMENTS: MacroLens/MacroLens.entitlements
-    # entitlements:
-    #   path: MacroLens/MacroLens.entitlements
-    #   properties:
-    #     com.apple.developer.applesignin:
-    #       - Default
+        # HealthKit entitlement is active for the two-way Apple Health
+        # sync (push macros + weight, pull weight history). The
+        # `.access` array is empty — that's the standard "all standard
+        # types" claim and is what HKHealthStore.requestAuthorization
+        # actually gates against at runtime. Background delivery is
+        # NOT enabled (that's a separate `.background-delivery` array
+        # in the access dict and adds review/provisioning complexity);
+        # we sync on .onAppear + toggle-enable instead. (See
+        # ios-native/MacroLens/Health/HealthKitService.swift.)
+        #
+        # Sign In With Apple is intentionally NOT in this entitlements
+        # file — that capability needs paid Apple Developer Program
+        # enrollment too, but we haven't wired the auth flow on the
+        # native side yet (Config.appleSignInEnabled is false). To
+        # bring it back: re-add the `com.apple.developer.applesignin`
+        # key to MacroLens.entitlements + flip the Config flag.
+        CODE_SIGN_ENTITLEMENTS: MacroLens/MacroLens.entitlements
+    entitlements:
+      path: MacroLens/MacroLens.entitlements
+      properties:
+        com.apple.developer.healthkit: true
     dependencies:
       - package: Supabase
         product: Supabase

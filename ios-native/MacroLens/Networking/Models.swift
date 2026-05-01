@@ -94,6 +94,13 @@ struct CheckinRow: Codable, Identifiable, Hashable {
     var checked_in_at: String?        // ISO8601 timestamp
     var scan_type: String?            // "INBODY" | "DEXA" | nil
     var scan_file_path: String?       // when present, a scan file is attached
+    // HealthKit dedup columns (see supabase/migrations/healthkit_columns.sql).
+    // healthkit_uuid is the sample.uuid.uuidString from HKHealthStore — set
+    // on rows we pushed to HK and on rows we pulled from HK; null otherwise.
+    // source distinguishes user-entered ("manual") from HK-synced
+    // ("healthkit") rows so the push path never echoes pulled rows back.
+    var healthkit_uuid: String?
+    var source: String?
 }
 
 /// One row of public.body_metrics. One per user (upsert by user_id).

@@ -12,6 +12,7 @@ struct LogWeightSheet: View {
     let editing: CheckinRow?
 
     @Environment(AppState.self) private var state
+    @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
 
     @State private var weightLbs: String = ""
@@ -221,10 +222,41 @@ struct LogWeightSheet: View {
             checkedInAt: isoF.string(from: date)
         )
         do {
+            let savedId: String?
             if let e = editing {
                 try await state.updateCheckin(id: e.id, payload)
+                savedId = e.id
             } else {
-                _ = try await state.saveCheckin(payload)
+                let saved = try await state.saveCheckin(payload)
+                savedId = saved.id
+            }
+            // Push to Apple Health if the user opted in. Only on new
+            // entries to keep v1 simple — updating an existing weigh-in
+            // would need to delete the old HK sample first to avoid
+            // dupes, and that's not worth the complexity for now. The
+            // editing == nil guard takes care of the "don't push on
+            // edit" rule; the editing.healthkit_uuid != nil case is
+            // covered too because edits never reach this branch.
+            if editing == nil,
+               let id = savedId,
+               case .signedIn(let user) = auth.state {
+                let userId = user.id.uuidString
+                if HealthKitService.isToggleOn(.pushWeight, userId: userId) {
+                    do {
+                        let uuid = try await HealthKitService.shared.pushWeight(
+                            checkinId: id, kg: weightKg, at: date
+                        )
+                        try await DBService.updateCheckinHealthKitUUID(
+                            checkinId: id, healthkitUUID: uuid
+                        )
+                    } catch {
+                        // Don't fail the save if the HK leg trips —
+                        // the row is in our DB and that's the source
+                        // of truth. Surface as a soft warning.
+                        errorMsg = "Saved, but couldn't push to Apple Health: \(error.localizedDescription)"
+                        return
+                    }
+                }
             }
             dismiss()
         } catch {

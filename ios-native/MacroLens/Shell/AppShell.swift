@@ -61,6 +61,7 @@ enum AppTab: Hashable, CaseIterable {
 /// navigation/scroll state automatically (each child is held alive in
 /// the underlying UIPageViewController).
 struct SignedInShell: View {
+    @Environment(AuthManager.self) private var auth
     @State private var state = AppState()
     @State private var selected: AppTab = .dashboard
 
@@ -79,6 +80,32 @@ struct SignedInShell: View {
         }
         .environment(state)
         .tint(Theme.accent)
+        // Apple Health: pull new weight samples on shell appear (covers
+        // app launch + foregrounding). HKAnchoredObjectQuery's anchor is
+        // persisted per-user, so this is cheap after the first sync —
+        // delivers only the delta. Skipped silently if the toggle is off
+        // or HK is unavailable.
+        .task { await runHealthKitPullIfEnabled() }
+    }
+
+    private func runHealthKitPullIfEnabled() async {
+        guard HealthKitService.shared.isAvailable,
+              case .signedIn(let user) = auth.state else { return }
+        let userId = user.id.uuidString
+        guard HealthKitService.isToggleOn(.pullWeight, userId: userId) else { return }
+        do {
+            let pulled = try await HealthKitService.shared.pullWeights(userId: userId)
+            for sample in pulled {
+                _ = try? await DBService.insertHealthKitWeight(
+                    kg: sample.kg,
+                    recordedAt: sample.recordedAt,
+                    healthkitUUID: sample.uuid
+                )
+            }
+        } catch {
+            // Silent — the next foreground will retry. Errors here
+            // shouldn't block the user from using the app.
+        }
     }
 
     @ViewBuilder

@@ -28,6 +28,7 @@ struct AccountView: View {
                 profileCard
                 appearanceCard
                 bodyMetricsCard
+                HealthSettingsSection()
                 spendingCard
                 aiInfoCard
                 signInMethodsCard
