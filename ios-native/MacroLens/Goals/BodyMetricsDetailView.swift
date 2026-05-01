@@ -13,6 +13,7 @@ import SwiftUI
 /// Daily Targets editor owns.
 struct BodyMetricsDetailView: View {
     @Environment(AppState.self) private var state
+    @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
 
     private static let imperialKey = "macrolens.units.imperial"
@@ -28,6 +29,17 @@ struct BodyMetricsDetailView: View {
     @State private var muscleStr: String = ""
     @State private var activity: String = "moderate"
 
+    /// Captured on appear so we can detect whether the user actually
+    /// changed weight (vs just edited height/age/etc). Drives the
+    /// "Also log this as today's weigh-in" toggle visibility — no
+    /// point asking the user to log a checkin if weight didn't move.
+    @State private var originalWeightKg: Double?
+    /// Default ON: when weight changes, the common case is "yep, log
+    /// it" — one save tap covers both writes. Toggle resets to true
+    /// any time weight returns to the original (so a re-edit defaults
+    /// back to ON, matching the spec).
+    @State private var alsoLogCheckin: Bool = true
+
     @State private var saving = false
     @State private var errorMsg: String?
 
@@ -38,6 +50,7 @@ struct BodyMetricsDetailView: View {
                 unitsToggle
                 sexAgeCard
                 heightWeightCard
+                if weightChanged { logCheckinToggle }
                 compositionCard
                 activityCard
                 calcSummary
@@ -229,7 +242,7 @@ struct BodyMetricsDetailView: View {
         } label: {
             HStack {
                 if saving { ProgressView().tint(Theme.accentFG) }
-                Text(saving ? "Saving…" : "Save body metrics")
+                Text(saving ? "Saving…" : "Save")
                     .font(.system(size: 14, weight: .semibold))
             }
             .foregroundStyle(Theme.accentFG)
@@ -239,6 +252,58 @@ struct BodyMetricsDetailView: View {
         }
         .buttonStyle(.plain)
         .disabled(saving)
+    }
+
+    /// Inline checkbox row revealed only when the user has changed the
+    /// weight value. Gives them an opt-out for the auto-checkin write
+    /// (default ON, matching the common Sunday-weigh-in case). Reverting
+    /// the weight to its original hides the toggle and resets it to ON
+    /// via .onChange below — so a re-edit defaults back to ON.
+    private var logCheckinToggle: some View {
+        Toggle(isOn: $alsoLogCheckin) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Also log this as today's weigh-in")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                Text("Adds a check-in row + updates the weight chart" + (pushWeightOn ? " · syncs to Apple Health" : ""))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+        }
+        .tint(Theme.accent)
+        .padding(14)
+        .background(Theme.accent.opacity(0.08), in: .rect(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.accent.opacity(0.25), lineWidth: 1))
+        .onChange(of: weightChanged) { _, isChanged in
+            // When weight bounces back to original (toggle disappears),
+            // reset to default ON so the next bona-fide change re-shows
+            // the toggle pre-checked.
+            if !isChanged { alsoLogCheckin = true }
+        }
+    }
+
+    /// Whether the user's edited weight differs from the value we
+    /// captured on appear. Compares kg-with-tolerance so toggling
+    /// imperial ↔ metric units doesn't falsely flag a change (the
+    /// lbs ↔ kg round-trip introduces sub-decimal noise).
+    private var weightChanged: Bool {
+        let current = currentWeightKg()
+        switch (current, originalWeightKg) {
+        case (nil, nil):
+            return false
+        case (.some, nil), (nil, .some):
+            return true
+        case (let c?, let o?):
+            return abs(c - o) >= 0.05   // ~0.1 lb tolerance
+        }
+    }
+
+    /// True iff the user has the Apple Health weight-push toggle on for
+    /// the current session. Used to color the checkbox subtitle so the
+    /// user knows their save is going beyond just our DB.
+    private var pushWeightOn: Bool {
+        guard case .signedIn(let user) = auth.state else { return false }
+        return HealthKitService.isToggleOn(.pushWeight, userId: user.id.uuidString)
     }
 
     // MARK: - Building blocks
@@ -311,6 +376,10 @@ struct BodyMetricsDetailView: View {
         if let mu = m.muscle_mass_kg {
             muscleStr = isImperial ? formatNum((mu * 2.20462).rounded(toPlaces: 1)) : formatNum(mu)
         }
+        // Anchor for the weightChanged comparison. Captured ONCE here;
+        // editing weightStr later flips weightChanged true → reveals
+        // the "also log a checkin" toggle.
+        originalWeightKg = m.weight_kg
     }
 
     /// When the user flips the unit toggle, convert the in-flight
@@ -387,7 +456,47 @@ struct BodyMetricsDetailView: View {
         errorMsg = nil
         defer { saving = false }
         do {
-            try await state.saveBodyMetrics(previewMetrics)
+            // 1. Always upsert body_metrics with the form values.
+            let nextBM = previewMetrics
+            try await state.saveBodyMetrics(nextBM)
+
+            // 2. If the user changed weight and kept the "also log" box
+            //    checked, write a checkins row + push to HealthKit. We
+            //    reuse state.saveCheckin and the same HK pattern as
+            //    LogWeightSheet (don't duplicate the insert logic).
+            if weightChanged, alsoLogCheckin, let weightKg = nextBM.weight_kg {
+                let now = Date()
+                let dateF = DateFormatter()
+                dateF.dateFormat = "yyyy-MM-dd"
+                dateF.timeZone = .current
+                let payload = CheckinInsert(
+                    weightKg: weightKg,
+                    bodyFatPct: nextBM.body_fat_pct,
+                    muscleMassKg: nextBM.muscle_mass_kg,
+                    notes: nil,
+                    scanDate: dateF.string(from: now),
+                    checkedInAt: ISO8601DateFormatter().string(from: now),
+                    scan: nil
+                )
+                let saved = try await state.saveCheckin(payload)
+                // Apple Health push — same flow as LogWeightSheet. Soft-
+                // fails so a HK glitch doesn't block the body-metrics
+                // save (DB is the source of truth).
+                if case .signedIn(let user) = auth.state,
+                   HealthKitService.isToggleOn(.pushWeight, userId: user.id.uuidString) {
+                    do {
+                        let uuid = try await HealthKitService.shared.pushWeight(
+                            checkinId: saved.id, kg: weightKg, at: now
+                        )
+                        try await DBService.updateCheckinHealthKitUUID(
+                            checkinId: saved.id, healthkitUUID: uuid
+                        )
+                    } catch {
+                        errorMsg = "Saved, but couldn't push to Apple Health: \(error.localizedDescription)"
+                        return
+                    }
+                }
+            }
             dismiss()
         } catch {
             errorMsg = error.localizedDescription
