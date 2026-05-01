@@ -26,7 +26,6 @@ struct RecipeDetailPager: View {
     let onDeleted: () -> Void
     let onPlan: (RecipeFull) -> Void
     let onShare: (RecipeFull) -> Void
-    let onCook: (RecipeFull) -> Void
     /// Lets the pager hand the latest in-pager mutations (e.g. instructions
     /// generated mid-swipe) back to RecipesView so the library list stays
     /// in sync without forcing a refetch.
@@ -40,7 +39,6 @@ struct RecipeDetailPager: View {
          onDeleted: @escaping () -> Void,
          onPlan: @escaping (RecipeFull) -> Void,
          onShare: @escaping (RecipeFull) -> Void,
-         onCook: @escaping (RecipeFull) -> Void,
          onChanged: @escaping (RecipeFull) -> Void) {
         _recipes = State(initialValue: recipes)
         _index = State(initialValue: max(0, min(initialIndex, recipes.count - 1)))
@@ -48,7 +46,6 @@ struct RecipeDetailPager: View {
         self.onDeleted = onDeleted
         self.onPlan = onPlan
         self.onShare = onShare
-        self.onCook = onCook
         self.onChanged = onChanged
     }
 
@@ -62,7 +59,6 @@ struct RecipeDetailPager: View {
                         onDeleted: onDeleted,
                         onPlan: onPlan,
                         onShare: onShare,
-                        onCook: onCook,
                         onChanged: { updated in
                             // Update both the local pager snapshot (so the
                             // toolbar's Edit button sees the latest data

@@ -38,6 +38,12 @@ struct RecipeDetailView: View {
 
     @State private var generatingInstructions = false
     @State private var generateError: String?
+    /// Cooking mode is presented as a fullScreenCover bound directly to a
+    /// state on this view (NOT lifted to the parent) so it stacks above the
+    /// detail sheet and opens immediately on tap. SwiftUI's "one sheet per
+    /// view at a time" rule otherwise defers presentation until the detail
+    /// sheet dismisses, which used to make tapping Cooking Mode feel broken.
+    @State private var cookingModeOpen: Bool = false
 
     enum DetailTab { case ingredients, instructions }
 
@@ -102,6 +108,14 @@ struct RecipeDetailView: View {
                                      title: working.name,
                                      onClose: { dismiss() },
                                      onEdit: { onEdit(working) }))
+        // Bound here (not on the parent RecipesView) so the cover stacks
+        // above the detail sheet immediately. Lifting this to the parent
+        // hits SwiftUI's "one sheet per view" rule and defers presentation
+        // until the detail sheet dismisses, which is the bug the previous
+        // wiring tripped.
+        .fullScreenCover(isPresented: $cookingModeOpen) {
+            CookingModeView(recipe: working)
+        }
     }
 
     // MARK: - Header
@@ -429,17 +443,18 @@ struct RecipeDetailView: View {
     private var instructionsHeaderRow: some View {
         HStack(spacing: 8) {
             Spacer()
-            if onCook != nil {
-                Button { onCook?(working) } label: {
-                    Label("Read aloud", systemImage: "speaker.wave.2.fill")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(Theme.bg3, in: .rect(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border2, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
+            // "Cooking Mode" is the new framing — silent step-by-step
+            // walkthrough by default, with an optional voice toggle inside.
+            // Replaces the old "Read aloud" entry that conflated the two.
+            Button { cookingModeOpen = true } label: {
+                Label("Cooking Mode", systemImage: "list.number")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Theme.bg3, in: .rect(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border2, lineWidth: 1))
             }
+            .buttonStyle(.plain)
         }
     }
 

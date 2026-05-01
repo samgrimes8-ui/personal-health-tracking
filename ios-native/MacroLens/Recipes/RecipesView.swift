@@ -30,7 +30,6 @@ struct RecipesView: View {
     @State private var presented: PresentedRecipe?
     @State private var planning: RecipeFull?
     @State private var sharing: RecipeFull?
-    @State private var cooking: RecipeFull?
     @State private var tagging: RecipeFull?
     @State private var tagOrderEditorOpen: Bool = false
     /// User-saved tag order. Empty == "use the canonical fallback order"
@@ -100,9 +99,6 @@ struct RecipesView: View {
                     onShare: { recipe in
                         sharing = recipe
                     },
-                    onCook: { recipe in
-                        cooking = recipe
-                    },
                     onChanged: { updated in
                         // Mid-swipe in-pager mutations (e.g. instructions
                         // generated and saved) splice back into the library
@@ -164,9 +160,11 @@ struct RecipesView: View {
                 }
             }
         }
-        .fullScreenCover(item: $cooking) { recipe in
-            CookingModeView(recipe: recipe)
-        }
+        // Cooking mode is no longer presented from this parent — moved
+        // onto RecipeDetailView itself so it stacks above the detail
+        // sheet and opens immediately on tap. Lifting it here used to
+        // hit SwiftUI's "one sheet per view" rule and defer presentation
+        // until the detail sheet dismissed.
         .sheet(item: $tagging) { recipe in
             QuickTagSheet(recipe: recipe, knownLibrary: library) { updated in
                 if let idx = library.firstIndex(where: { $0.id == updated.id }) {
