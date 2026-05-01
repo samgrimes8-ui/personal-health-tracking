@@ -29,6 +29,7 @@ struct RecipesView: View {
 
     @State private var presented: PresentedRecipe?
     @State private var planning: RecipeFull?
+    @State private var sharing: RecipeFull?
 
     enum PresentedRecipe: Identifiable {
         case viewExisting(RecipeFull)
@@ -78,6 +79,9 @@ struct RecipesView: View {
                                      },
                                      onPlan: { recipe in
                                          planning = recipe
+                                     },
+                                     onShare: { recipe in
+                                         sharing = recipe
                                      })
                 case .editExisting(let r):
                     RecipeEditView(recipe: r,
@@ -109,6 +113,23 @@ struct RecipesView: View {
                 // so a user who plans from Recipes and then switches to
                 // Planner sees the new entry without a manual reload.
                 Task { await state.loadPlanner(weekStart: PlannerDateMath.currentWeekStart()) }
+            }
+        }
+        .sheet(item: $sharing) { recipe in
+            RecipeShareSheet(
+                recipeId: recipe.id,
+                recipeName: recipe.name,
+                initialToken: recipe.share_token,
+                initialIsShared: recipe.is_shared ?? false
+            ) { isShared, newToken in
+                // Splice the new sharing state into the local library so
+                // re-opening the recipe immediately reflects the change
+                // (the detail view's Share button label flips Shared ↔
+                // Share without needing a fetch round-trip).
+                if let idx = library.firstIndex(where: { $0.id == recipe.id }) {
+                    library[idx].is_shared = isShared
+                    library[idx].share_token = newToken ?? library[idx].share_token
+                }
             }
         }
     }
