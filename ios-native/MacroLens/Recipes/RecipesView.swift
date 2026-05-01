@@ -28,6 +28,7 @@ struct RecipesView: View {
     @State private var activeTag: String = ""        // "" = All, "__untagged__" = Untagged
 
     @State private var presented: PresentedRecipe?
+    @State private var planning: RecipeFull?
 
     enum PresentedRecipe: Identifiable {
         case viewExisting(RecipeFull)
@@ -74,6 +75,9 @@ struct RecipesView: View {
                                      onDeleted: {
                                          presented = nil
                                          Task { await refresh() }
+                                     },
+                                     onPlan: { recipe in
+                                         planning = recipe
                                      })
                 case .editExisting(let r):
                     RecipeEditView(recipe: r,
@@ -97,6 +101,14 @@ struct RecipesView: View {
                                    onCancel: { presented = nil },
                                    onDeleted: { presented = nil })
                 }
+            }
+        }
+        .sheet(item: $planning) { recipe in
+            PlanRecipeSheet(recipe: recipe) {
+                // Refresh the planner for whatever week is currently shown
+                // so a user who plans from Recipes and then switches to
+                // Planner sees the new entry without a manual reload.
+                Task { await state.loadPlanner(weekStart: PlannerDateMath.currentWeekStart()) }
             }
         }
     }
