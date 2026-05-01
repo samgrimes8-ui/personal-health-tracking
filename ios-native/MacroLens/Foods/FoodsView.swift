@@ -278,13 +278,16 @@ struct FoodsView: View {
 
     private func logAsOne(_ item: FoodItemRow) async {
         do {
+            // Pass foodItemId so logMeal's auto-save short-circuits —
+            // this food is already in the library by definition.
             try await state.logMeal(
                 name: item.name,
                 calories: item.calories ?? 0,
                 protein: item.protein ?? 0,
                 carbs: item.carbs ?? 0,
                 fat: item.fat ?? 0,
-                fiber: item.fiber ?? 0
+                fiber: item.fiber ?? 0,
+                foodItemId: item.id
             )
             showToast("\(item.name) logged!")
         } catch {

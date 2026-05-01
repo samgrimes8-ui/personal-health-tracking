@@ -456,6 +456,10 @@ final class AppState {
     /// Insert a new meal_log row. Used by Quick log + Analyze food's
     /// "Log this meal" button. Today's log is updated locally so the
     /// macro tiles refresh immediately without a round trip.
+    ///
+    /// When the entry isn't already linked to a recipe or food_item, an
+    /// auto-save pass upserts it into food_items so the user's library
+    /// grows organically — mirrors autoSaveFoodItem in src/lib/db.js.
     func logMeal(name: String,
                  mealType: String? = nil,
                  calories: Double = 0,
@@ -483,6 +487,25 @@ final class AppState {
             let servings_consumed: Double
         }
         let userId = try await currentUserID()
+        // Auto-save to food_items if not already linked. Mirrors the web's
+        // autoSaveFoodItem (src/lib/db.js): skip when recipe-linked or
+        // food-linked, dedup by case-insensitive name, otherwise insert.
+        // Wrapped in try? — a failure here must not block the meal_log
+        // write (matches the web's catch-and-warn).
+        let resolvedFoodItemId: String?
+        if foodItemId != nil || recipeId != nil {
+            resolvedFoodItemId = foodItemId
+        } else {
+            resolvedFoodItemId = try? await autoSaveFoodItem(
+                userId: userId,
+                name: name,
+                calories: calories,
+                protein: protein,
+                carbs: carbs,
+                fat: fat,
+                fiber: fiber
+            )
+        }
         let payload = Insert(
             user_id: userId,
             name: name,
@@ -493,7 +516,7 @@ final class AppState {
             fat: fat,
             fiber: fiber,
             recipe_id: recipeId,
-            food_item_id: foodItemId,
+            food_item_id: resolvedFoodItemId,
             logged_at: ISO8601DateFormatter().string(from: Date()),
             servings_consumed: servingsConsumed
         )
@@ -517,6 +540,69 @@ final class AppState {
             // records logged_at = Date(), so the affected day is today.
             await syncDayMacrosToHealthKit(dateKey: Self.localDateKey(for: Date()))
         }
+    }
+
+    /// Mirrors autoSaveFoodItem() in src/lib/db.js. Used by logMeal to
+    /// promote a freshly-logged meal into the user's Foods library so
+    /// it shows up next time they search Quick Log. Dedup is by
+    /// case-insensitive name match against state.foods + a DB lookup
+    /// fallback (state.foods isn't populated until the Foods tab is
+    /// first opened, so the cache check alone misses dashboard logs).
+    private func autoSaveFoodItem(userId: String,
+                                  name: String,
+                                  calories: Double,
+                                  protein: Double,
+                                  carbs: Double,
+                                  fat: Double,
+                                  fiber: Double) async throws -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // 1. Cache check (fast path).
+        let lower = trimmed.lowercased()
+        if let hit = foods.first(where: { $0.name.lowercased() == lower }) {
+            return hit.id
+        }
+
+        // 2. DB check by name — covers the dashboard-analyze case where
+        // the Foods tab hasn't loaded yet and the cache is empty.
+        let existing: [FoodItemRow] = (try? await SupabaseService.client
+            .from("food_items")
+            .select()
+            .eq("user_id", value: userId)
+            .ilike("name", pattern: trimmed)
+            .limit(1)
+            .execute()
+            .value) ?? []
+        if let row = existing.first {
+            // Splice into cache so subsequent logs in this session hit
+            // the fast path.
+            if !foods.contains(where: { $0.id == row.id }) {
+                foods.insert(row, at: 0)
+            }
+            return row.id
+        }
+
+        // 3. Insert. source = "log" matches the web (autoSaveFoodItem
+        // tags rows so the Foods page can show where they came from).
+        let saved = try await DBService.saveFoodItem(FoodItemUpsert(
+            id: nil,
+            name: trimmed,
+            brand: nil,
+            servingSize: "1 serving",
+            calories: calories,
+            protein: protein,
+            carbs: carbs,
+            fat: fat,
+            fiber: fiber,
+            sugar: 0,
+            sodium: 0,
+            components: [],
+            notes: nil,
+            source: "log"
+        ))
+        foods.insert(saved, at: 0)
+        return saved.id
     }
 
     /// Insert a recipe row from an Analyze-recipe result. Used by the
