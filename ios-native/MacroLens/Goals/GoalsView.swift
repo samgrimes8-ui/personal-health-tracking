@@ -120,6 +120,16 @@ struct GoalsView: View {
             return (l - f) * 2.20462
         }()
 
+        // Tight y-axis: zoom into the actual weight band with 15%
+        // headroom (or ±1 lb minimum so a perfectly flat week still
+        // shows a sensible range). Default `.automatic` left huge gaps
+        // — e.g. 0–300 lbs — burying a 212–222 trend near the top.
+        let lbsValues = weeklies.map { $0.avgKg * 2.20462 }
+        let minLbs = lbsValues.min() ?? 0
+        let maxLbs = lbsValues.max() ?? 0
+        let pad = max((maxLbs - minLbs) * 0.15, 1.0)
+        let yDomain = (minLbs - pad)...(maxLbs + pad)
+
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 sectionTitle("Weekly average weight")
@@ -143,7 +153,7 @@ struct GoalsView: View {
                         .foregroundStyle(Theme.accent.opacity(0.18))
                 }
             }
-            .chartYScale(domain: .automatic(includesZero: false))
+            .chartYScale(domain: yDomain)
             .chartXAxis(.hidden)
             .chartYAxis {
                 AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { v in
@@ -175,12 +185,12 @@ struct GoalsView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.text3)
                 }
-                statsGrid([
-                    ("Weight",  lbs.map { "\(String(format: "%.1f", $0)) lbs" } ?? "—"),
-                    ("Body fat", m.body_fat_pct.map { "\(String(format: "%.1f", $0))%" } ?? "—"),
-                    ("BMR",     m.bmr.map { "\($0) kcal" } ?? "—"),
-                    ("TDEE",    m.tdee.map { "\($0) kcal" } ?? "—"),
-                ])
+                HStack(spacing: 8) {
+                    statTile("Weight",   lbs.map { "\(String(format: "%.1f", $0)) lbs" } ?? "—",     Theme.text)
+                    statTile("Body fat", m.body_fat_pct.map { "\(String(format: "%.1f", $0))%" } ?? "—", Theme.text)
+                    statTile("BMR",      m.bmr.map { "\($0) kcal" } ?? "—",                          Theme.text)
+                    statTile("TDEE",     m.tdee.map { "\($0) kcal" } ?? "—",                         Theme.text)
+                }
             }
             .padding(16)
             .background(Theme.bg2, in: .rect(cornerRadius: 14))
@@ -215,10 +225,10 @@ struct GoalsView: View {
                         .foregroundStyle(Theme.text3)
                 }
                 HStack(spacing: 8) {
-                    targetTile("Calories",  g.calories.map { "\($0)" } ?? "—",  Theme.cal)
-                    targetTile("Protein",   g.protein.map { "\($0)g" } ?? "—",  Theme.protein)
-                    targetTile("Carbs",     g.carbs.map { "\($0)g" } ?? "—",    Theme.carbs)
-                    targetTile("Fat",       g.fat.map { "\($0)g" } ?? "—",      Theme.fat)
+                    statTile("Calories",  g.calories.map { "\($0)" } ?? "—",  Theme.cal)
+                    statTile("Protein",   g.protein.map { "\($0)g" } ?? "—",  Theme.protein)
+                    statTile("Carbs",     g.carbs.map { "\($0)g" } ?? "—",    Theme.carbs)
+                    statTile("Fat",       g.fat.map { "\($0)g" } ?? "—",      Theme.fat)
                 }
                 if let directionLabel {
                     Text("\(directionLabel) · \(m.pace?.capitalized ?? "Moderate") pace")
@@ -401,39 +411,31 @@ struct GoalsView: View {
             .foregroundStyle(Theme.text3)
     }
 
-    private func statsGrid(_ items: [(String, String)]) -> some View {
-        HStack(spacing: 8) {
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.0)
-                        .font(.system(size: 10))
-                        .tracking(0.8)
-                        .textCase(.uppercase)
-                        .foregroundStyle(Theme.text3)
-                    Text(item.1)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.text)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(Theme.bg3, in: .rect(cornerRadius: 8))
-            }
-        }
-    }
-
-    private func targetTile(_ label: String, _ value: String, _ color: Color) -> some View {
+    /// Single shared tile used by both the BODY METRICS row and the
+    /// DAILY TARGETS row. Equal-width via `.frame(maxWidth: .infinity)`
+    /// inside an `HStack(spacing: 8)`. Header + value both clamp to one
+    /// line with `.minimumScaleFactor(0.6)` so long values like
+    /// "212.5 lbs" / "3216 kcal" don't push neighboring tiles around or
+    /// wrap headers like "CALORIES" → "CALORIE / S". Value+unit live on
+    /// a single line in the same font (no separate small unit row).
+    private func statTile(_ label: String, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.system(size: 10))
-                .tracking(0.8)
-                .textCase(.uppercase)
+            Text(label.uppercased())
+                .font(.caption)
+                .fontWeight(.semibold)
+                .tracking(0.5)
                 .foregroundStyle(Theme.text3)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             Text(value)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.title3)
+                .fontWeight(.semibold)
                 .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10).padding(.vertical, 8)
+        .padding(12)
         .background(Theme.bg3, in: .rect(cornerRadius: 8))
     }
 
