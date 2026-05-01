@@ -170,6 +170,20 @@ struct AnalyzeFoodSection: View {
                     .scrollContentBackground(.hidden)
                     .padding(.horizontal, 9).padding(.vertical, 4)
                     .frame(minHeight: mode == .recipe ? 110 : 80)
+                    .toolbar {
+                        // TextEditor's Return key inserts a newline (multi-
+                        // line by design) — without an explicit Done button
+                        // the only way out of the keyboard is to scroll, and
+                        // when the editor sits below the fold the keyboard
+                        // hides the analyze button. This pins a Done button
+                        // to the keyboard accessory while focused.
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            if inputFocused {
+                                Button("Done") { inputFocused = false }
+                            }
+                        }
+                    }
             }
             .background(Theme.bg3, in: .rect(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))

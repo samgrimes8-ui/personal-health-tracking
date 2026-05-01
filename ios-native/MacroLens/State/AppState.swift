@@ -12,10 +12,15 @@ final class AppState {
     var goals: Goals = Goals()
     var todayLog: [MealLogEntry] = []
     /// Recent meal_log slice for Quick Log suggestions on the dashboard.
-    /// Wider than `todayLog` (~last 300 entries, all dates) so the
-    /// search-and-relog path can find meals the user logged days or
-    /// weeks ago. Mirrors web's `state.log` (limit 300 in src/lib/db.js).
-    var dashboardRecentLog: [MealLogEntry] = []
+    /// Capped at 4 (top of list) so we can show the 2 most-recent meals
+    /// plus a fallback when the user has fewer than 2 saved foods —
+    /// the spec is "2 meals + 2 food_items" with cross-fill if either
+    /// well runs dry, so 4 of each is enough headroom.
+    var dashboardRecentMeals: [MealLogEntry] = []
+    /// Recent food_items slice for Quick Log. Same cap rationale as
+    /// dashboardRecentMeals — 4 leaves headroom for the fill-gap rule
+    /// (e.g. 0 saved meals → show 4 foods).
+    var dashboardRecentFoods: [FoodItemRow] = []
     var last7Days: [DaySummary] = []
     var recipes: [RecipeRow] = []
     var recentCheckins: [CheckinRow] = []
@@ -65,7 +70,8 @@ final class AppState {
         do {
             async let g = fetchGoals()
             async let weekLog = fetchLastNDaysLog(7)
-            async let recentLog = fetchRecentLog(limit: 300)
+            async let recentMeals = fetchRecentMeals(limit: 4)
+            async let recentFoods = fetchRecentFoods(limit: 4)
             async let r = fetchRecipes()
             async let c = fetchRecentCheckins()
 
@@ -73,7 +79,8 @@ final class AppState {
             self.goals = (try? await g) ?? Goals()
             self.todayLog = filterToToday(weekEntries).sorted { ($0.logged_at ?? "") > ($1.logged_at ?? "") }
             self.last7Days = DaySummary.build(from: weekEntries, days: 7)
-            self.dashboardRecentLog = (try? await recentLog) ?? []
+            self.dashboardRecentMeals = (try? await recentMeals) ?? []
+            self.dashboardRecentFoods = (try? await recentFoods) ?? []
             self.recipes = (try? await r) ?? []
             self.recentCheckins = (try? await c) ?? []
         } catch {
@@ -401,7 +408,7 @@ final class AppState {
     }
 
     /// Apply an in-memory patch to a meal_log entry across both
-    /// dashboard slices (`todayLog` + `dashboardRecentLog`). Used after
+    /// dashboard slices (`todayLog` + `dashboardRecentMeals`). Used after
     /// a successful DBService.updateMealEntry round-trip so the macro
     /// tiles + Today's meals + Quick log suggestions all refresh
     /// without a re-fetch.
@@ -418,14 +425,14 @@ final class AppState {
             if let v = patch.servingsConsumed { entry.servings_consumed = v }
         }
         if let i = todayLog.firstIndex(where: { $0.id == id }) { apply(&todayLog[i]) }
-        if let i = dashboardRecentLog.firstIndex(where: { $0.id == id }) { apply(&dashboardRecentLog[i]) }
+        if let i = dashboardRecentMeals.firstIndex(where: { $0.id == id }) { apply(&dashboardRecentMeals[i]) }
     }
 
     /// Delete a meal_log entry and prune both dashboard slices locally.
     func deleteMealLogEntry(id: String) async throws {
         try await DBService.deleteMealEntry(id: id)
         todayLog.removeAll { $0.id == id }
-        dashboardRecentLog.removeAll { $0.id == id }
+        dashboardRecentMeals.removeAll { $0.id == id }
     }
 
     /// Insert a new meal_log row. Used by Quick log + Analyze food's
@@ -438,7 +445,8 @@ final class AppState {
                  carbs: Double = 0,
                  fat: Double = 0,
                  fiber: Double = 0,
-                 recipeId: String? = nil) async throws {
+                 recipeId: String? = nil,
+                 foodItemId: String? = nil) async throws {
         struct Insert: Encodable {
             // public.meal_log column is `name` (not `meal_name` — that's
             // meal_planner's column). Mixed those up once already.
@@ -451,6 +459,7 @@ final class AppState {
             let fat: Double
             let fiber: Double
             let recipe_id: String?
+            let food_item_id: String?
             let logged_at: String
             let servings_consumed: Double
         }
@@ -465,6 +474,7 @@ final class AppState {
             fat: fat,
             fiber: fiber,
             recipe_id: recipeId,
+            food_item_id: foodItemId,
             logged_at: ISO8601DateFormatter().string(from: Date()),
             servings_consumed: 1.0
         )
@@ -476,7 +486,12 @@ final class AppState {
             .value
         if let entry = inserted.first {
             todayLog.insert(entry, at: 0)
-            dashboardRecentLog.insert(entry, at: 0)
+            dashboardRecentMeals.insert(entry, at: 0)
+            // Cap the slice so a long session doesn't grow it unbounded —
+            // matches the loadDashboard fetch limit (4 rows).
+            if dashboardRecentMeals.count > 4 {
+                dashboardRecentMeals = Array(dashboardRecentMeals.prefix(4))
+            }
             // Apple Health push: write 4 dietary samples (kcal, protein,
             // carbs, fat) per meal_log row, gated by the per-user toggle.
             // No DB writeback needed — calories are push-only (we don't
@@ -551,17 +566,31 @@ final class AppState {
         return response.first ?? Goals()
     }
 
-    /// Pulls the most recent N meal_log rows across all dates. Used by
-    /// the dashboard's Quick Log suggestions so the search-and-relog
-    /// path finds meals beyond just today. Mirrors getMealLog(limit:300)
-    /// in src/lib/db.js — no date filter, capped by `limit`.
-    private func fetchRecentLog(limit: Int) async throws -> [MealLogEntry] {
+    /// Top-N most-recent meal_log rows across all dates. Drives the
+    /// dashboard Quick Log preload (default `limit = 4` so the 2-meals-
+    /// plus-2-foods card has fallback rows when the food well is dry).
+    private func fetchRecentMeals(limit: Int) async throws -> [MealLogEntry] {
         let userId = try await currentUserID()
         let response: [MealLogEntry] = try await SupabaseService.client
             .from("meal_log")
             .select()
             .eq("user_id", value: userId)
             .order("logged_at", ascending: false)
+            .limit(limit)
+            .execute()
+            .value
+        return response
+    }
+
+    /// Top-N most-recent food_items rows. Drives the dashboard Quick
+    /// Log preload's "saved foods" half of the 2+2 split.
+    private func fetchRecentFoods(limit: Int) async throws -> [FoodItemRow] {
+        let userId = try await currentUserID()
+        let response: [FoodItemRow] = try await SupabaseService.client
+            .from("food_items")
+            .select()
+            .eq("user_id", value: userId)
+            .order("updated_at", ascending: false)
             .limit(limit)
             .execute()
             .value

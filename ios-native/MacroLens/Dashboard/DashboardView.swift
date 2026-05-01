@@ -25,6 +25,17 @@ struct DashboardView: View {
         }
         .background(Theme.bg)
         .scrollDismissesKeyboard(.interactively)
+        // Tap-outside-to-dismiss for the Quick Log search and Analyze
+        // describe-food fields. Bare tap registers on empty space only,
+        // so it doesn't fight TextField/TextEditor for hits inside them
+        // — and it pairs with the keyboard's "Done" button so users
+        // always have an obvious way out of the input.
+        .onTapGesture {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil, from: nil, for: nil
+            )
+        }
         .refreshable { await state.loadDashboard() }
         .task { await state.loadDashboard() }
         .sheet(item: $editingEntry) { entry in
