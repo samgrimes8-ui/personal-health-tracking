@@ -79,15 +79,76 @@ struct AnalysisResult: Codable, Hashable {
     var ingredients: [Ingredient]?
 }
 
-/// One row of public.checkins. We only decode what the dashboard
-/// analytics widget needs (weight + dates). The full table has many
-/// more body-comp columns; the Goals page can extend this when it
-/// migrates.
+/// One row of public.checkins. Now expanded for the Goals page —
+/// body fat / muscle / scan provenance. Other extended scan fields
+/// (segmental lean, BMR, BMI, etc.) we leave on the row but don't
+/// decode here; the read paths only need the headline numbers, and
+/// editing happens through the basic-fields modal.
 struct CheckinRow: Codable, Identifiable, Hashable {
     var id: String
     var weight_kg: Double?
+    var body_fat_pct: Double?
+    var muscle_mass_kg: Double?
+    var notes: String?
     var scan_date: String?            // YYYY-MM-DD
     var checked_in_at: String?        // ISO8601 timestamp
+    var scan_type: String?            // "INBODY" | "DEXA" | nil
+    var scan_file_path: String?       // when present, a scan file is attached
+}
+
+/// One row of public.body_metrics. One per user (upsert by user_id).
+/// Mirrors the web schema: stored as metric, displayed in user units.
+/// `weight_goal` is one of "lose" | "maintain" | "gain"; `pace` is
+/// "slow" | "moderate" | "aggressive".
+struct BodyMetrics: Codable, Hashable {
+    var user_id: String?
+    var sex: String?
+    var age: Int?
+    var height_cm: Double?
+    var weight_kg: Double?
+    var body_fat_pct: Double?
+    var muscle_mass_kg: Double?
+    var activity_level: String?       // sedentary | light | moderate | active | very_active
+    var weight_goal: String?
+    var pace: String?
+    var goal_weight_kg: Double?
+    var goal_body_fat_pct: Double?
+}
+
+extension BodyMetrics {
+    /// Mifflin-St Jeor / Katch-McArdle BMR — same formulas the web app
+    /// uses (calcBMR in src/pages/app.js). Returns nil if there isn't
+    /// enough data to compute.
+    var bmr: Int? {
+        guard let w = weight_kg, w > 0 else { return nil }
+        // Katch-McArdle wins when body fat % is known — depends only on
+        // lean mass + a constant.
+        if let bf = body_fat_pct, bf > 0, bf < 100 {
+            let lean = w * (1 - bf / 100)
+            return Int((370 + 21.6 * lean).rounded())
+        }
+        guard let h = height_cm, h > 0,
+              let a = age, a > 0,
+              let s = sex else { return nil }
+        let base = 10 * w + 6.25 * h - 5 * Double(a)
+        return Int((base + (s == "female" ? -161 : 5)).rounded())
+    }
+
+    /// TDEE = BMR × activity multiplier. Falls back to "moderate" when
+    /// the user hasn't picked one (matches web).
+    var tdee: Int? {
+        guard let b = bmr else { return nil }
+        let mult: Double = {
+            switch activity_level {
+            case "sedentary":   return 1.2
+            case "light":       return 1.375
+            case "active":      return 1.725
+            case "very_active": return 1.9
+            default:            return 1.55      // moderate / unset
+            }
+        }()
+        return Int((Double(b) * mult).rounded())
+    }
 }
 
 /// Per-day rollup of a window of meal_log rows. Drives the analytics

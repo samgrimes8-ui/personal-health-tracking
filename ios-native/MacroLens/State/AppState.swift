@@ -13,6 +13,8 @@ final class AppState {
     var last7Days: [DaySummary] = []
     var recipes: [RecipeRow] = []
     var recentCheckins: [CheckinRow] = []
+    var allCheckins: [CheckinRow] = []      // full history for the Goals page tiered view
+    var bodyMetrics: BodyMetrics = BodyMetrics()
     var loading: Bool = false
     var lastError: String?
 
@@ -36,6 +38,108 @@ final class AppState {
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Loads what the Goals page needs in parallel. Separate from
+    /// loadDashboard so the Goals tab can refresh without re-pulling
+    /// the dashboard's wide inputs.
+    func loadGoals() async {
+        do {
+            async let bm = fetchBodyMetrics()
+            async let g = fetchGoals()
+            async let cs = fetchAllCheckins()
+            self.bodyMetrics = (try? await bm) ?? BodyMetrics()
+            self.goals = (try? await g) ?? self.goals
+            self.allCheckins = (try? await cs) ?? []
+        }
+    }
+
+    /// Insert a weight check-in. Used by the native log-weight sheet.
+    /// Inputs are in metric (kg) — UI does the lbs→kg conversion before
+    /// calling. Updates allCheckins locally so the chart + history
+    /// refresh without a round trip.
+    @discardableResult
+    func saveCheckin(_ row: CheckinInsert) async throws -> CheckinRow {
+        let userId = try await currentUserID()
+        struct Payload: Encodable {
+            let user_id: String
+            let weight_kg: Double?
+            let body_fat_pct: Double?
+            let muscle_mass_kg: Double?
+            let notes: String?
+            let scan_date: String?
+            let checked_in_at: String
+        }
+        let payload = Payload(
+            user_id: userId,
+            weight_kg: row.weightKg,
+            body_fat_pct: row.bodyFatPct,
+            muscle_mass_kg: row.muscleMassKg,
+            notes: row.notes,
+            scan_date: row.scanDate,
+            checked_in_at: row.checkedInAt
+        )
+        let inserted: [CheckinRow] = try await SupabaseService.client
+            .from("checkins")
+            .insert(payload)
+            .select()
+            .execute()
+            .value
+        guard let saved = inserted.first else {
+            throw NSError(domain: "AppState", code: 0,
+                          userInfo: [NSLocalizedDescriptionKey: "Check-in insert returned no rows"])
+        }
+        // Insert sorted by date (ascending) so the chart stays correct.
+        allCheckins.append(saved)
+        allCheckins.sort { ($0.scan_date ?? $0.checked_in_at ?? "") < ($1.scan_date ?? $1.checked_in_at ?? "") }
+        // Body metrics auto-update with the latest weight, mirroring web.
+        if let w = row.weightKg { bodyMetrics.weight_kg = w }
+        if let bf = row.bodyFatPct { bodyMetrics.body_fat_pct = bf }
+        if let mm = row.muscleMassKg { bodyMetrics.muscle_mass_kg = mm }
+        return saved
+    }
+
+    /// Update a check-in's basic fields. Mirrors updateCheckin in db.js.
+    func updateCheckin(id: String, _ patch: CheckinInsert) async throws {
+        struct Patch: Encodable {
+            let weight_kg: Double?
+            let body_fat_pct: Double?
+            let muscle_mass_kg: Double?
+            let notes: String?
+            let scan_date: String?
+            let checked_in_at: String
+        }
+        let userId = try await currentUserID()
+        let body = Patch(
+            weight_kg: patch.weightKg,
+            body_fat_pct: patch.bodyFatPct,
+            muscle_mass_kg: patch.muscleMassKg,
+            notes: patch.notes,
+            scan_date: patch.scanDate,
+            checked_in_at: patch.checkedInAt
+        )
+        let updated: [CheckinRow] = try await SupabaseService.client
+            .from("checkins")
+            .update(body)
+            .eq("id", value: id)
+            .eq("user_id", value: userId)
+            .select()
+            .execute()
+            .value
+        if let row = updated.first, let idx = allCheckins.firstIndex(where: { $0.id == id }) {
+            allCheckins[idx] = row
+        }
+    }
+
+    func deleteCheckin(id: String) async throws {
+        let userId = try await currentUserID()
+        try await SupabaseService.client
+            .from("checkins")
+            .delete()
+            .eq("id", value: id)
+            .eq("user_id", value: userId)
+            .execute()
+        allCheckins.removeAll { $0.id == id }
     }
 
     /// Insert a new meal_log row. Used by Quick log + Analyze food's
@@ -191,6 +295,31 @@ final class AppState {
         return entries.filter { ($0.logged_at ?? "").hasPrefix(today) }
     }
 
+    private func fetchBodyMetrics() async throws -> BodyMetrics {
+        let userId = try await currentUserID()
+        let response: [BodyMetrics] = try await SupabaseService.client
+            .from("body_metrics")
+            .select("user_id, sex, age, height_cm, weight_kg, body_fat_pct, muscle_mass_kg, activity_level, weight_goal, pace, goal_weight_kg, goal_body_fat_pct")
+            .eq("user_id", value: userId)
+            .limit(1)
+            .execute()
+            .value
+        return response.first ?? BodyMetrics()
+    }
+
+    private func fetchAllCheckins() async throws -> [CheckinRow] {
+        let userId = try await currentUserID()
+        let response: [CheckinRow] = try await SupabaseService.client
+            .from("checkins")
+            .select("id, weight_kg, body_fat_pct, muscle_mass_kg, notes, scan_date, checked_in_at, scan_type, scan_file_path")
+            .eq("user_id", value: userId)
+            .order("checked_in_at", ascending: true)
+            .limit(2000)
+            .execute()
+            .value
+        return response
+    }
+
     private func fetchRecipes() async throws -> [RecipeRow] {
         let userId = try await currentUserID()
         let response: [RecipeRow] = try await SupabaseService.client
@@ -221,4 +350,16 @@ final class AppState {
         f.timeZone = .current
         return f.string(from: Calendar.current.date(byAdding: .day, value: 1, to: Date())!)
     }
+}
+
+/// Input shape for AppState.saveCheckin / updateCheckin. Plain DTO so
+/// the views don't have to know about the underlying insert payload
+/// shape.
+struct CheckinInsert {
+    var weightKg: Double?
+    var bodyFatPct: Double?
+    var muscleMassKg: Double?
+    var notes: String?
+    var scanDate: String?       // YYYY-MM-DD
+    var checkedInAt: String     // ISO8601 timestamp
 }

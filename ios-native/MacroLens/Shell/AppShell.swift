@@ -37,8 +37,10 @@ struct SignedInShell: View {
             }
             .tabItem { Label("Dashboard", systemImage: "house.fill") }
 
-            WebViewTab(page: "goals", title: "Goals & Body")
-                .tabItem { Label("Goals", systemImage: "target") }
+            NavigationStack {
+                GoalsView()
+            }
+            .tabItem { Label("Goals", systemImage: "target") }
 
             WebViewTab(page: "planner", title: "Planner")
                 .tabItem { Label("Planner", systemImage: "calendar") }
