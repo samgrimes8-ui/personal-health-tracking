@@ -49,6 +49,11 @@ struct CookingModeView: View {
             // Speak the first step on appear so the user knows audio is
             // wired (web does this in the same gesture as the modal open).
             speakCurrent()
+            // Eagerly prefetch every step's audio in the background so
+            // tapping Next / a progress dot plays instantly instead of
+            // pausing on a network round-trip mid-cook. Concurrency is
+            // capped inside CookingPlayer.prefetchAll.
+            scheduleFullPrefetch()
         }
         .onDisappear {
             player.stop()
@@ -58,7 +63,11 @@ struct CookingModeView: View {
                 voiceId = newVoice
                 CookingPlayer.persistVoiceId(newVoice)
                 player.cachedFreeVoice = nil
+                // Old-voice MP3s are useless under the new voice id, drop
+                // them and re-prefetch with the chosen voice.
+                player.invalidatePrefetch()
                 speakCurrent()
+                scheduleFullPrefetch()
             }
         }
     }
@@ -118,7 +127,10 @@ struct CookingModeView: View {
                 if voiceOff {
                     player.stop()
                 } else {
+                    // Re-arm the prefetch pass too so subsequent steps
+                    // play instantly instead of pausing on a network hop.
                     speakCurrent()
+                    scheduleFullPrefetch()
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -167,10 +179,25 @@ struct CookingModeView: View {
             let step = steps[stepIndex]
             let scaled = StepTextScaler.scale(step, base: servings, target: servings)
             VStack(spacing: 14) {
-                Text("Step \(stepIndex + 1) of \(steps.count)")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(1.0).textCase(.uppercase)
-                    .foregroundStyle(Theme.accent)
+                HStack(spacing: 8) {
+                    Text("Step \(stepIndex + 1) of \(steps.count)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .tracking(1.0).textCase(.uppercase)
+                        .foregroundStyle(Theme.accent)
+                    // Surfaces only when the *current* step's audio is still
+                    // resolving. Background prefetches for non-current steps
+                    // never flip player.loading, so this stays quiet during
+                    // the eager-fetch pass.
+                    if player.loading {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini).tint(Theme.text3)
+                            Text("Loading voice…")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.text3)
+                        }
+                        .transition(.opacity)
+                    }
+                }
                 Text(scaled)
                     .font(.system(size: 22, design: .serif))
                     .foregroundStyle(Theme.text)
@@ -271,14 +298,28 @@ struct CookingModeView: View {
             return
         }
         let step = steps[stepIndex]
-        let ctx = TTSContext(
+        let ctx = ttsContext(for: stepIndex)
+        player.speak(step: step, ctx: ctx)
+    }
+
+    /// Kick off background prefetch for every step. Skipped when voice is off
+    /// (we don't want to spend AI Bucks for audio the user is choosing not
+    /// to hear).
+    private func scheduleFullPrefetch() {
+        guard !voiceOff, !steps.isEmpty else { return }
+        player.prefetchAll(steps: steps) { idx in
+            ttsContext(for: idx)
+        }
+    }
+
+    private func ttsContext(for idx: Int) -> TTSContext {
+        TTSContext(
             recipeId: recipe.id,
-            stepIndex: stepIndex,
+            stepIndex: idx,
             servings: Double(round(servings * 100) / 100),
             voiceId: voiceId,
             instructionsVersion: instructionsVersion
         )
-        player.speak(step: step, ctx: ctx)
     }
 }
 
@@ -302,12 +343,29 @@ struct TTSContext {
 @MainActor
 final class CookingPlayer: ObservableObject {
     @Published private(set) var isPaused: Bool = false
+    /// True only when the *current* step is awaiting its first byte. Background
+    /// prefetches for non-current steps stay invisible — the user shouldn't
+    /// feel a "loading" badge for audio they're not about to hear.
     @Published private(set) var loading: Bool = false
 
     private var player: AVPlayer?
     private let synthesizer = AVSpeechSynthesizer()
     private var ticket: Int = 0
     var cachedFreeVoice: AVSpeechSynthesisVoice?
+
+    /// Resolved MP3 URLs keyed by step index. Populated either by a successful
+    /// background prefetch (no audio playback) or by an on-demand `speak`
+    /// call. Keyed by `(voiceId, instructionsVersion, stepIndex)` so a voice
+    /// change blows the cache cleanly without leaking the wrong audio.
+    private var resolvedURLs: [PrefetchKey: URL] = [:]
+    /// In-flight prefetch tasks keyed the same way. `speak` checks this map
+    /// before issuing a fresh fetch so two callers never race for the same
+    /// step.
+    private var pendingFetches: [PrefetchKey: Task<URL, Error>] = [:]
+    /// Concurrency cap for the eager prefetch pass. The TTS endpoint is
+    /// cache-first and serverside-cheap, but we still want to be polite to
+    /// the upstream OpenAI rate limit on first reads.
+    private let prefetchConcurrency = 3
 
     init() {
         configureAudioSession()
@@ -325,30 +383,128 @@ final class CookingPlayer: ObservableObject {
         }
     }
 
-    /// Speak the given step with the given context. If the network call
-    /// fails for any reason (timeout, spend cap, codec), falls back to the
-    /// device speech synthesizer so the user always hears something.
+    /// Speak the given step with the given context. Cache-first: if a
+    /// prefetch already resolved this step, plays instantly. If a prefetch
+    /// is in flight, awaits it (so the user gets one short wait rather
+    /// than a duplicated request). Network failure for any reason falls
+    /// back to AVSpeechUtterance so the user always hears something.
     func speak(step: String, ctx: TTSContext) {
         stop()
         let myTicket = (ticket &+ 1)
         ticket = myTicket
+        let key = PrefetchKey(stepIndex: ctx.stepIndex, voiceId: ctx.voiceId, version: ctx.instructionsVersion)
+
+        // Hot path: prefetch resolved this step already. No spinner flash.
+        if let cached = resolvedURLs[key] {
+            playMP3(at: cached)
+            return
+        }
+
         loading = true
+        let pendingTask = pendingFetches[key]
         Task {
             do {
-                let resp = try await TTSService.fetchRecipeAudio(
-                    recipeId: ctx.recipeId,
-                    stepIndex: ctx.stepIndex,
-                    servings: ctx.servings,
-                    voiceId: ctx.voiceId,
-                    instructionsVersion: ctx.instructionsVersion
-                )
+                let url: URL
+                if let pendingTask {
+                    url = try await pendingTask.value
+                } else {
+                    let task = Task { try await fetchURL(for: ctx) }
+                    pendingFetches[key] = task
+                    url = try await task.value
+                    resolvedURLs[key] = url
+                    pendingFetches[key] = nil
+                }
                 if myTicket != ticket { return }    // user moved on
-                playMP3(at: resp.url)
+                playMP3(at: url)
             } catch {
                 if myTicket != ticket { return }
                 speakFree(text: step)
             }
-            loading = false
+            if myTicket == ticket { loading = false }
+        }
+    }
+
+    private func fetchURL(for ctx: TTSContext) async throws -> URL {
+        let resp = try await TTSService.fetchRecipeAudio(
+            recipeId: ctx.recipeId,
+            stepIndex: ctx.stepIndex,
+            servings: ctx.servings,
+            voiceId: ctx.voiceId,
+            instructionsVersion: ctx.instructionsVersion
+        )
+        return resp.url
+    }
+
+    /// Eagerly fetches every step's audio in the background, capped at
+    /// `prefetchConcurrency` simultaneous requests. Idempotent: skips
+    /// steps that are already resolved or currently in flight, so a
+    /// rapid voice toggle (off → on) replays cleanly.
+    ///
+    /// Errors from individual prefetches are swallowed — `speak` will
+    /// retry on demand if the user reaches that step. A failed prefetch
+    /// shouldn't surface mid-cook.
+    func prefetchAll(steps: [String], ctxFor: @escaping (Int) -> TTSContext) {
+        guard !steps.isEmpty else { return }
+        let indices = Array(steps.indices)
+        Task {
+            await withTaskGroup(of: Void.self) { group in
+                var idx = 0
+                var inFlight = 0
+                while idx < indices.count {
+                    if inFlight >= prefetchConcurrency {
+                        await group.next()  // wait for one slot
+                        inFlight -= 1
+                    }
+                    let stepIndex = indices[idx]
+                    let ctx = ctxFor(stepIndex)
+                    let key = PrefetchKey(stepIndex: stepIndex, voiceId: ctx.voiceId, version: ctx.instructionsVersion)
+                    if resolvedURLs[key] != nil || pendingFetches[key] != nil {
+                        idx += 1
+                        continue   // already done or in flight, skip without consuming a slot
+                    }
+                    let task = Task { try await self.fetchURL(for: ctx) }
+                    pendingFetches[key] = task
+                    inFlight += 1
+                    group.addTask { [weak self] in
+                        do {
+                            let url = try await task.value
+                            await self?.markResolved(key: key, url: url)
+                        } catch {
+                            await self?.dropPending(key: key)
+                        }
+                    }
+                    idx += 1
+                }
+                // Drain remaining
+                for await _ in group {}
+            }
+        }
+    }
+
+    private func markResolved(key: PrefetchKey, url: URL) {
+        resolvedURLs[key] = url
+        pendingFetches[key] = nil
+    }
+
+    private func dropPending(key: PrefetchKey) {
+        pendingFetches[key] = nil
+    }
+
+    /// Drop every cached/pending entry for an old voice or version. Called
+    /// when the user picks a different voice mid-recipe — the new voice
+    /// has a different cache key, so re-prefetching from scratch is the
+    /// right move.
+    func invalidatePrefetch(except keepingVoiceId: String? = nil, version: Int? = nil) {
+        if let v = keepingVoiceId, let ver = version {
+            resolvedURLs = resolvedURLs.filter { $0.key.voiceId == v && $0.key.version == ver }
+            for (k, task) in pendingFetches where !(k.voiceId == v && k.version == ver) {
+                task.cancel()
+                pendingFetches[k] = nil
+            }
+        } else {
+            for (_, task) in pendingFetches { task.cancel() }
+            resolvedURLs.removeAll()
+            pendingFetches.removeAll()
         }
     }
 
@@ -452,6 +608,18 @@ final class CookingPlayer: ObservableObject {
     static func persistVoiceOff(_ off: Bool) {
         UserDefaults.standard.set(off ? "1" : "0", forKey: "macrolens_voice_off")
     }
+}
+
+/// Cache key for the per-step audio map. Combines stepIndex, voice and
+/// instructions_version so a voice change or recipe edit can't accidentally
+/// surface the wrong audio. Servings are intentionally not part of the key
+/// here — the cooking mode reads each step at the recipe's own servings, so
+/// step index uniquely determines which audio applies for a given recipe
+/// session.
+private struct PrefetchKey: Hashable {
+    let stepIndex: Int
+    let voiceId: String
+    let version: Int
 }
 
 /// Voice picker — premium voices only. Mirrors the picker in
