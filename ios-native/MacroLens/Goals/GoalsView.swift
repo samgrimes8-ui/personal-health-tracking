@@ -147,8 +147,12 @@ struct GoalsView: View {
                              y: .value("lbs", w.avgKg * 2.20462))
                         .interpolationMethod(.monotone)
                         .foregroundStyle(Theme.accent)
+                    // yStart must be pinned to the y-domain min — without it,
+                    // AreaMark fills to y=0 and bleeds below the plot area when
+                    // the domain doesn't include zero.
                     AreaMark(x: .value("Week", i),
-                             y: .value("lbs", w.avgKg * 2.20462))
+                             yStart: .value("Min", yDomain.lowerBound),
+                             yEnd: .value("lbs", w.avgKg * 2.20462))
                         .interpolationMethod(.monotone)
                         .foregroundStyle(Theme.accent.opacity(0.18))
                 }
@@ -161,7 +165,11 @@ struct GoalsView: View {
                     AxisValueLabel().font(.system(size: 10))
                 }
             }
+            .chartPlotStyle { plot in
+                plot.clipped()
+            }
             .frame(height: 140)
+            .clipped()
         }
         .padding(16)
         .background(Theme.bg2, in: .rect(cornerRadius: 14))
