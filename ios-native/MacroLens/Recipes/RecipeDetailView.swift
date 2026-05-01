@@ -152,6 +152,7 @@ struct RecipeDetailView: View {
         }
     }
 
+    @ViewBuilder
     private func sourceLink(_ url: String) -> some View {
         let domain: String = {
             if let u = URL(string: url) {
@@ -159,26 +160,87 @@ struct RecipeDetailView: View {
             }
             return url
         }()
-        return Link(destination: URL(string: url) ?? URL(string: "https://example.com")!) {
-            HStack(spacing: 8) {
-                Image(systemName: "link")
-                    .foregroundStyle(Theme.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("View original recipe")
-                        .font(.system(size: 13, weight: .medium))
+        let isInstagram = domain.contains("instagram.com")
+        let isTikTok = domain.contains("tiktok.com")
+        let blocked = isInstagram || isTikTok || (working.og_cache?.blocked == true)
+        let target = URL(string: url) ?? URL(string: "https://example.com")!
+
+        // Rich OG card when the web has cached metadata for this URL.
+        // recipes.og_cache is populated lazily by the web's renderer,
+        // so iOS gets the preview "for free" once a recipe has been
+        // viewed on macrolens.app at least once.
+        if let og = working.og_cache, !blocked, og.title?.isEmpty == false || og.image?.isEmpty == false {
+            Link(destination: target) {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let imgUrl = og.image, let u = URL(string: imgUrl) {
+                        AsyncImage(url: u) { phase in
+                            switch phase {
+                            case .success(let img):
+                                img.resizable().aspectRatio(contentMode: .fill)
+                            default:
+                                Theme.bg3
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 160)
+                        .clipped()
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let site = og.siteName, !site.isEmpty {
+                            Text(site.uppercased())
+                                .font(.system(size: 10))
+                                .tracking(1.0)
+                                .foregroundStyle(Theme.text3)
+                        }
+                        if let title = og.title, !title.isEmpty {
+                            Text(title)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Theme.text)
+                                .lineLimit(2)
+                        }
+                        if let desc = og.description, !desc.isEmpty {
+                            Text(desc)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.text3)
+                                .lineLimit(2)
+                        }
+                        Text("View original ↗")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.accent)
+                            .padding(.top, 2)
+                    }
+                    .padding(12)
+                }
+                .background(Theme.bg3, in: .rect(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
+                .clipShape(.rect(cornerRadius: 10))
+            }
+        } else {
+            Link(destination: target) {
+                HStack(spacing: 8) {
+                    Image(systemName: isInstagram ? "camera.fill"
+                                       : isTikTok ? "music.note"
+                                       : "link")
                         .foregroundStyle(Theme.accent)
-                    Text(domain)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(isInstagram ? "View on Instagram"
+                             : isTikTok ? "View on TikTok"
+                             : "View original recipe")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                        Text(domain)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.up.right")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.text3)
                 }
-                Spacer()
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.text3)
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Theme.bg3, in: .rect(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .background(Theme.bg3, in: .rect(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
         }
     }
 
