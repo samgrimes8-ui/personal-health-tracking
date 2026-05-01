@@ -195,6 +195,8 @@ struct AnalyticsView: View {
         let lastKg  = series.last?.weightKg ?? 0
         let diffDisplay = (lastKg - firstKg) * factor
         let sign = diffDisplay > 0 ? "+" : ""
+        let yRange = yDomain(for: displayValues, includeZero: false)
+        let yMin = yRange.lowerBound
 
         return Card {
             VStack(alignment: .leading, spacing: 8) {
@@ -208,13 +210,17 @@ struct AnalyticsView: View {
                                  y: .value(unit, point.weightKg * factor))
                             .interpolationMethod(.monotone)
                             .foregroundStyle(Theme.accent)
+                        // yStart must be pinned to the y-domain min — without it,
+                        // AreaMark fills to y=0 and bleeds below the plot area when
+                        // the domain doesn't include zero.
                         AreaMark(x: .value("Day", idx),
-                                 y: .value(unit, point.weightKg * factor))
+                                 yStart: .value("Min", yMin),
+                                 yEnd: .value(unit, point.weightKg * factor))
                             .interpolationMethod(.monotone)
                             .foregroundStyle(Theme.accent.opacity(0.18))
                     }
                 }
-                .chartYScale(domain: yDomain(for: displayValues, includeZero: false))
+                .chartYScale(domain: yRange)
                 .chartXAxis(.hidden)
                 .chartYAxis {
                     AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
@@ -222,7 +228,11 @@ struct AnalyticsView: View {
                         AxisValueLabel().font(.system(size: 9))
                     }
                 }
+                .chartPlotStyle { plot in
+                    plot.clipped()
+                }
                 .frame(height: 160)
+                .clipped()
             }
         }
     }
