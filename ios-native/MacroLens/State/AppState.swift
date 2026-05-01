@@ -131,7 +131,22 @@ final class AppState {
     /// Foods tab. Loads the user's saved food_items library into
     /// `foods`, ordered by recency.
     func loadFoods() async {
-        // Worker: implement.
+        do {
+            let userId = try await currentUserID()
+            let rows: [FoodItemRow] = try await SupabaseService.client
+                .from("food_items")
+                .select()
+                .eq("user_id", value: userId)
+                .order("updated_at", ascending: false)
+                .limit(500)
+                .execute()
+                .value
+            self.foods = rows
+        } catch {
+            // Mirror the dashboard pattern: don't blank existing data on
+            // a transient failure; surface the error so the UI can show it.
+            lastError = error.localizedDescription
+        }
     }
 
     /// Account tab. Pulls the profile row + this month's token_usage
