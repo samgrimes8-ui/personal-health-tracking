@@ -264,9 +264,13 @@ struct GoalsView: View {
         let scanLabel = scan.scan_type?.uppercased() ?? "SCAN"
         let dateStr = scan.scan_date ?? scan.checked_in_at?.prefix(10).description ?? ""
         let lbs = scan.weight_kg.map { $0 * 2.20462 }
-        return Button {
-            editingCheckin = scan
-            showLogSheet = true
+        // Tap pushes a detail view with the full body-comp / segmental
+        // / DEXA breakdown — same data the web shows in buildCheckinRow.
+        // Edit + delete live inside the detail view so this row stays
+        // a clean read-only summary.
+        return NavigationLink {
+            ScanDetailView(scan: scan)
+                .environment(state)
         } label: {
             HStack(spacing: 10) {
                 Text("📄")
