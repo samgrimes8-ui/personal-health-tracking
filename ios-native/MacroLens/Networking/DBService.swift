@@ -162,6 +162,35 @@ enum DBService {
             .execute()
     }
 
+    /// Load the user's persisted tag order. Empty array means "use the
+    /// canonical fallback order"; the caller decides how to merge unknown
+    /// tags. Backed by `user_profiles.tag_order text[]` (migration:
+    /// add_user_recipe_tag_order).
+    static func getRecipeTagOrder() async throws -> [String] {
+        struct Row: Decodable { let tag_order: [String]? }
+        let userId = try await currentUserID()
+        let rows: [Row] = try await client
+            .from("user_profiles")
+            .select("tag_order")
+            .eq("user_id", value: userId)
+            .limit(1)
+            .execute()
+            .value
+        return rows.first?.tag_order ?? []
+    }
+
+    /// Persist the user's tag order. Pass an empty array to reset to the
+    /// canonical fallback order.
+    static func saveRecipeTagOrder(_ order: [String]) async throws {
+        struct Payload: Encodable { let tag_order: [String] }
+        let userId = try await currentUserID()
+        try await client
+            .from("user_profiles")
+            .update(Payload(tag_order: order))
+            .eq("user_id", value: userId)
+            .execute()
+    }
+
     // ─── Planner ───────────────────────────────────────────────────────
     //
     // savePlannerEntry mirrors addPlannerMeal() in db.js: the caller

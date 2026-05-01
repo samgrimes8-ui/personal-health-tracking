@@ -32,6 +32,12 @@ struct RecipesView: View {
     @State private var sharing: RecipeFull?
     @State private var cooking: RecipeFull?
     @State private var tagging: RecipeFull?
+    @State private var tagOrderEditorOpen: Bool = false
+    /// User-saved tag order. Empty == "use the canonical fallback order"
+    /// (presets first, then alphabetical custom tags). Loaded once per
+    /// session via .task; mutations write through both this @State and
+    /// the user_profiles row.
+    @State private var savedTagOrder: [String] = []
 
     enum PresentedRecipe: Identifiable {
         case viewExisting(RecipeFull)
@@ -66,6 +72,7 @@ struct RecipesView: View {
         .refreshable { await refresh() }
         .task {
             if library.isEmpty { await refresh() }
+            await loadTagOrder()
         }
         .sheet(item: $presented) { which in
             switch which {
@@ -167,6 +174,26 @@ struct RecipesView: View {
                 }
             }
         }
+        .sheet(isPresented: $tagOrderEditorOpen) {
+            // Build the editor's input set from the *currently displayed*
+            // tag list so users see exactly the pills they're rearranging.
+            let counts = tagCounts(library)
+            let display = orderedDisplayTags(counts: counts)
+            TagOrderEditorSheet(initialOrder: display) { newOrder in
+                savedTagOrder = newOrder
+                Task {
+                    do {
+                        try await DBService.saveRecipeTagOrder(newOrder)
+                    } catch {
+                        // Save failures revert to the canonical order on
+                        // next load; logging keeps it findable but we
+                        // don't want a transient network blip to block
+                        // the close gesture.
+                        print("[recipes] saveRecipeTagOrder failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Sections
@@ -228,27 +255,43 @@ struct RecipesView: View {
     private var tagBar: some View {
         let counts = tagCounts(library)
         let untaggedCount = library.filter { ($0.tags ?? []).isEmpty }.count
-        let custom = counts.keys
-            .filter { tag in !RecipeTagPresets.all.contains(where: { $0.lowercased() == tag.lowercased() }) }
-            .sorted()
-        let display = RecipeTagPresets.all + custom
+        let display = orderedDisplayTags(counts: counts)
 
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                tagPill(label: "All", value: "", count: library.count, isActive: activeTag.isEmpty)
-                if untaggedCount > 0 {
-                    tagPill(label: "Untagged", value: "__untagged__",
-                            count: untaggedCount,
-                            isActive: activeTag == "__untagged__")
+        return HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    tagPill(label: "All", value: "", count: library.count, isActive: activeTag.isEmpty)
+                    if untaggedCount > 0 {
+                        tagPill(label: "Untagged", value: "__untagged__",
+                                count: untaggedCount,
+                                isActive: activeTag == "__untagged__")
+                    }
+                    ForEach(display, id: \.self) { tag in
+                        tagPill(label: tag,
+                                value: tag,
+                                count: counts[tag.lowercased()] ?? 0,
+                                isActive: activeTag.lowercased() == tag.lowercased())
+                    }
                 }
-                ForEach(display, id: \.self) { tag in
-                    tagPill(label: tag,
-                            value: tag,
-                            count: counts[tag.lowercased()] ?? 0,
-                            isActive: activeTag.lowercased() == tag.lowercased())
-                }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+            // Pencil affordance to enter reorder mode. Hidden when there
+            // are 0–1 tags (nothing meaningful to reorder) so the bar stays
+            // clean for users who haven't built up a tag library yet.
+            if display.count >= 2 {
+                Button {
+                    tagOrderEditorOpen = true
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.text3)
+                        .frame(width: 28, height: 28)
+                        .background(Theme.bg3, in: .circle)
+                        .overlay(Circle().stroke(Theme.border2, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Reorder tags")
+            }
         }
     }
 
@@ -429,6 +472,76 @@ struct RecipesView: View {
             }
         }
         return RecipeSearch.filter(tagFiltered, query: searchText)
+    }
+
+    /// Final tag list used by the filter strip. The user's persisted
+    /// tag_order wins where it has positions; everything else falls back
+    /// to the canonical order (presets, then alphabetical custom tags).
+    /// Tags returned here use the casing of the most-recent occurrence
+    /// the user has on a recipe (or the preset's canonical casing when
+    /// nothing else is available), matching the web's display behavior.
+    private func orderedDisplayTags(counts: [String: Int]) -> [String] {
+        // Build the display-cased map (tagLower → preferred casing)
+        var displayCase: [String: String] = [:]
+        for r in library {
+            for t in r.tags ?? [] {
+                let trimmed = t.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty { continue }
+                displayCase[trimmed.lowercased()] = trimmed
+            }
+        }
+        for p in RecipeTagPresets.all {
+            if displayCase[p.lowercased()] == nil {
+                displayCase[p.lowercased()] = p
+            }
+        }
+
+        // Canonical fallback: presets first (in their declared order),
+        // then everything else alphabetical.
+        var canonical: [String] = []
+        var canonicalSet: Set<String> = []
+        for p in RecipeTagPresets.all {
+            if canonicalSet.insert(p.lowercased()).inserted {
+                canonical.append(displayCase[p.lowercased()] ?? p)
+            }
+        }
+        let customs = counts.keys
+            .filter { tag in !RecipeTagPresets.all.contains(where: { $0.lowercased() == tag.lowercased() }) }
+            .sorted()
+        for c in customs {
+            if canonicalSet.insert(c).inserted {
+                canonical.append(displayCase[c] ?? c)
+            }
+        }
+
+        // Apply the user's saved order: keep entries that still exist in
+        // canonical (tag may have been deleted off all recipes since the
+        // user reordered), then append any canonical tag the user hasn't
+        // explicitly positioned.
+        let canonicalLower = Set(canonical.map { $0.lowercased() })
+        var seen: Set<String> = []
+        var ordered: [String] = []
+        for t in savedTagOrder {
+            let key = t.lowercased()
+            if canonicalLower.contains(key), seen.insert(key).inserted {
+                ordered.append(displayCase[key] ?? t)
+            }
+        }
+        for c in canonical where seen.insert(c.lowercased()).inserted {
+            ordered.append(c)
+        }
+        return ordered
+    }
+
+    private func loadTagOrder() async {
+        do {
+            let order = try await DBService.getRecipeTagOrder()
+            savedTagOrder = order
+        } catch {
+            // Non-fatal — fall back to canonical order. Same behavior as
+            // a brand new account where tag_order is empty.
+            savedTagOrder = []
+        }
     }
 
     private func tagCounts(_ rows: [RecipeFull]) -> [String: Int] {
