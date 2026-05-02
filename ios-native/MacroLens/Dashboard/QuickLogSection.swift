@@ -89,23 +89,75 @@ struct QuickLogSection: View {
         }
     }
 
+    @ViewBuilder
     private var resultsList: some View {
-        let results = filteredResults
-        return VStack(spacing: 6) {
-            if results.isEmpty {
-                Text(query.isEmpty
-                    ? "Nothing logged yet — analyze a meal below to get started."
-                    : "No matches.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.text3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 8)
-            } else {
-                ForEach(results) { item in
-                    quickLogRow(item)
+        if query.trimmingCharacters(in: .whitespaces).isEmpty {
+            preloadedSections
+        } else {
+            searchResultsList
+        }
+    }
+
+    /// No-query state. Two labeled sections so the user can see at a
+    /// glance that meal_log + food_items are both being read — earlier
+    /// versions rendered a single flat list and made it ambiguous
+    /// whether saved foods were being pulled at all.
+    @ViewBuilder
+    private var preloadedSections: some View {
+        let meals = preloadedMeals
+        let foods = preloadedFoods
+        if meals.isEmpty && foods.isEmpty {
+            Text("Nothing logged yet — analyze a meal below to get started.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                if !meals.isEmpty {
+                    sectionHeader("Recent meals", icon: "clock.arrow.circlepath")
+                    ForEach(meals) { quickLogRow($0) }
+                }
+                if !foods.isEmpty {
+                    sectionHeader("From your saved foods", icon: "leaf.fill")
+                        .padding(.top, meals.isEmpty ? 0 : 6)
+                    ForEach(foods) { quickLogRow($0) }
                 }
             }
         }
+    }
+
+    /// Search-mode list: flat results across recent meals, saved foods,
+    /// and the recipe library. Capped at 12 rows.
+    @ViewBuilder
+    private var searchResultsList: some View {
+        let results = filteredResults
+        if results.isEmpty {
+            Text("No matches.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+        } else {
+            VStack(spacing: 6) {
+                ForEach(results) { quickLogRow($0) }
+            }
+        }
+    }
+
+    private func sectionHeader(_ label: String, icon: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.text3)
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.5)
+                .textCase(.uppercase)
+                .foregroundStyle(Theme.text3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
     }
 
     private func quickLogRow(_ item: QuickLogItem) -> some View {
@@ -143,15 +195,9 @@ struct QuickLogSection: View {
 
     // MARK: - Data
 
-    /// Build the displayed row set. With no query: 2 most-recent meals +
-    /// 2 most-recent foods, with cross-fill when either side has fewer
-    /// than 2 (so the card always shows up to 4 rows). With a query:
-    /// case-insensitive name filter across the preloaded meals, foods,
-    /// and the user's recipe library.
-    private var filteredResults: [QuickLogItem] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-
-        let mealItems: [QuickLogItem] = state.dashboardRecentMeals.compactMap { entry in
+    /// All recent meal_log entries projected to QuickLogItem.
+    private var allMealItems: [QuickLogItem] {
+        state.dashboardRecentMeals.compactMap { entry in
             guard let name = entry.name, !name.isEmpty else { return nil }
             return QuickLogItem(
                 id: "log-\(entry.id)",
@@ -166,8 +212,11 @@ struct QuickLogSection: View {
                 kind: .recent
             )
         }
+    }
 
-        let foodItems: [QuickLogItem] = state.dashboardRecentFoods.map { f in
+    /// All recent food_items projected to QuickLogItem.
+    private var allFoodItems: [QuickLogItem] {
+        state.dashboardRecentFoods.map { f in
             QuickLogItem(
                 id: "food-\(f.id)",
                 name: f.name,
@@ -181,35 +230,48 @@ struct QuickLogSection: View {
                 kind: .food
             )
         }
+    }
 
-        if q.isEmpty {
-            // No query — apply the 2+2 split with cross-fill so the card
-            // always renders up to 4 rows (or fewer if both wells dry).
-            let target = 4
-            let mealsAvailable = mealItems.count
-            let foodsAvailable = foodItems.count
-            let mealsToShow: Int
-            let foodsToShow: Int
-            if mealsAvailable >= 2 && foodsAvailable >= 2 {
-                mealsToShow = 2
-                foodsToShow = 2
-            } else if mealsAvailable < 2 {
-                mealsToShow = mealsAvailable
-                foodsToShow = min(foodsAvailable, target - mealsToShow)
-            } else {
-                foodsToShow = foodsAvailable
-                mealsToShow = min(mealsAvailable, target - foodsToShow)
-            }
-            return Array(mealItems.prefix(mealsToShow)) + Array(foodItems.prefix(foodsToShow))
+    /// Meals slice for the no-query preload — top of 2+2 split with
+    /// cross-fill from foods when meals are sparse (so we always try
+    /// to hit 4 total rows across both sections).
+    private var preloadedMeals: [QuickLogItem] {
+        let (m, _) = splitForPreload(meals: allMealItems.count, foods: allFoodItems.count)
+        return Array(allMealItems.prefix(m))
+    }
+
+    /// Foods slice for the no-query preload — bottom of 2+2 split with
+    /// the same cross-fill rule.
+    private var preloadedFoods: [QuickLogItem] {
+        let (_, f) = splitForPreload(meals: allMealItems.count, foods: allFoodItems.count)
+        return Array(allFoodItems.prefix(f))
+    }
+
+    /// Decide how many meals + foods to show in the no-query preload.
+    /// Default 2-and-2; if either well is shy, fill from the other up
+    /// to a target of 4 rows total.
+    private func splitForPreload(meals available: Int, foods foodsAvailable: Int) -> (meals: Int, foods: Int) {
+        let target = 4
+        if available >= 2 && foodsAvailable >= 2 {
+            return (2, 2)
+        } else if available < 2 {
+            let m = available
+            return (m, min(foodsAvailable, target - m))
+        } else {
+            let f = foodsAvailable
+            return (min(available, target - f), f)
         }
+    }
 
-        // Search mode — filter the preloaded meals + foods, then add
-        // recipe matches from the already-loaded recipe library so the
-        // search box doubles as a "find a saved recipe to log" entry
-        // point. Cap to 12 rows so the card doesn't unbound.
+    /// Search-mode results: case-insensitive name filter across recent
+    /// meals + saved foods + the user's recipe library, deduped by name
+    /// and capped at 12 rows.
+    private var filteredResults: [QuickLogItem] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return [] }
         var seenNames = Set<String>()
         var matches: [QuickLogItem] = []
-        let pool: [QuickLogItem] = mealItems + foodItems
+        let pool: [QuickLogItem] = allMealItems + allFoodItems
         for item in pool {
             let key = item.name.lowercased()
             if !key.contains(q) { continue }
