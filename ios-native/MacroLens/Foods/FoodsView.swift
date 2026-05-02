@@ -278,17 +278,7 @@ struct FoodsView: View {
 
     private func logAsOne(_ item: FoodItemRow) async {
         do {
-            // Pass foodItemId so logMeal's auto-save short-circuits —
-            // this food is already in the library by definition.
-            try await state.logMeal(
-                name: item.name,
-                calories: item.calories ?? 0,
-                protein: item.protein ?? 0,
-                carbs: item.carbs ?? 0,
-                fat: item.fat ?? 0,
-                fiber: item.fiber ?? 0,
-                foodItemId: item.id
-            )
+            try await state.logFoodAsOne(item)
             showToast("\(item.name) logged!")
         } catch {
             showToast("Error: \(error.localizedDescription)")
@@ -296,30 +286,7 @@ struct FoodsView: View {
     }
 
     private func logComponents(_ item: FoodItemRow) async {
-        let comps = item.components ?? []
-        var logged = 0
-        for c in comps {
-            do {
-                // Component macros are already scaled to its `qty` (see
-                // FoodComponent doc in Models.swift), so pass them through
-                // unmodified and record `qty` as servings_consumed — matches
-                // src/pages/app.js:12732 (the web source of truth).
-                try await state.logMeal(
-                    name: c.name ?? item.name,
-                    calories: c.calories ?? 0,
-                    protein: c.protein ?? 0,
-                    carbs: c.carbs ?? 0,
-                    fat: c.fat ?? 0,
-                    fiber: c.fiber ?? 0,
-                    foodItemId: item.id,
-                    servingsConsumed: c.qty ?? 1
-                )
-                logged += 1
-            } catch {
-                // Continue logging the rest — partial success matches web.
-                continue
-            }
-        }
+        let logged = await state.logFoodComponents(item)
         showToast("\(logged) component\(logged == 1 ? "" : "s") logged!")
     }
 

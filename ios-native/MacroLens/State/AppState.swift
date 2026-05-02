@@ -748,6 +748,62 @@ final class AppState {
         return saved.id
     }
 
+    /// Log a saved food as a single meal_log row, threading the
+    /// food_item_id link through so future Quick Log searches and the
+    /// Foods list both see it as a re-log of the same library item.
+    /// Shared between the Foods tab and the dashboard's Quick Log so
+    /// future fixes apply to both surfaces. Mirrors the web's "log as
+    /// one food" branch in app.js's quickLogMeal.
+    ///
+    /// `at` honors the dashboard's date nav — pass
+    /// loggedAtForSelectedDate() when the caller cares about
+    /// retroactive entry; nil falls back to now.
+    func logFoodAsOne(_ item: FoodItemRow, at loggedAt: Date? = nil) async throws {
+        try await logMeal(
+            name: item.name,
+            calories: item.calories ?? 0,
+            protein: item.protein ?? 0,
+            carbs: item.carbs ?? 0,
+            fat: item.fat ?? 0,
+            fiber: item.fiber ?? 0,
+            foodItemId: item.id,
+            loggedAt: loggedAt
+        )
+    }
+
+    /// Log each component of a combo food as its own meal_log row.
+    /// Per-component macros are already scaled to the component's
+    /// `qty` (see FoodComponent doc in Models.swift), so we pass them
+    /// through unmodified and record `qty` as servings_consumed —
+    /// matches src/pages/app.js:12732. Returns the count of rows
+    /// successfully inserted; partial failures are swallowed so a
+    /// transient blip on one component doesn't abort the rest, same
+    /// behavior the web uses. Shared between Foods and Quick Log.
+    @discardableResult
+    func logFoodComponents(_ item: FoodItemRow, at loggedAt: Date? = nil) async -> Int {
+        let comps = item.components ?? []
+        var logged = 0
+        for c in comps {
+            do {
+                try await logMeal(
+                    name: c.name ?? item.name,
+                    calories: c.calories ?? 0,
+                    protein: c.protein ?? 0,
+                    carbs: c.carbs ?? 0,
+                    fat: c.fat ?? 0,
+                    fiber: c.fiber ?? 0,
+                    foodItemId: item.id,
+                    servingsConsumed: c.qty ?? 1,
+                    loggedAt: loggedAt
+                )
+                logged += 1
+            } catch {
+                continue
+            }
+        }
+        return logged
+    }
+
     /// Insert a recipe row from an Analyze-recipe result. Used by the
     /// "Save to library" button on the recipe-mode result card.
     /// `ingredients` is stored as jsonb on the recipes table.

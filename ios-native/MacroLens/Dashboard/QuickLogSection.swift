@@ -27,6 +27,11 @@ struct QuickLogSection: View {
     /// (when results are still empty because we haven't queried yet).
     @State private var lastSearchedQuery: String = ""
     @State private var aiDescribing: Bool = false
+    /// Set when the user taps a multi-component food row — drives the
+    /// "Log as one food / Log individual components" confirmation
+    /// dialog (same prompt the Foods tab uses, so behavior matches
+    /// across both surfaces).
+    @State private var comboPromptTarget: FoodItemRow?
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -60,6 +65,28 @@ struct QuickLogSection: View {
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
         .onChange(of: query) { _, newValue in
             scheduleSearch(for: newValue)
+        }
+        // Combo-food prompt — same shape FoodsView uses so the user
+        // sees identical copy whether they tap from Quick Log or from
+        // the Foods tab. Both branches route through the shared
+        // AppState.logFoodAsOne / logFoodComponents helpers.
+        .confirmationDialog(
+            comboPromptTarget.map { "Log \($0.name)" } ?? "",
+            isPresented: Binding(get: { comboPromptTarget != nil },
+                                 set: { if !$0 { comboPromptTarget = nil } }),
+            titleVisibility: .visible,
+            presenting: comboPromptTarget
+        ) { item in
+            Button("Log as one food") {
+                Task { await logComboAsOne(item) }
+            }
+            Button("Log individual components") {
+                Task { await logComboAsComponents(item) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { item in
+            let comps = item.components?.count ?? 0
+            Text("This food has \(comps) components. How do you want to log it?")
         }
     }
 
@@ -266,27 +293,36 @@ struct QuickLogSection: View {
                 fiber: entry.fiber ?? 0,
                 recipeId: entry.recipe_id,
                 foodItemId: entry.food_item_id,
+                foodItem: nil,
                 kind: .recent
             )
         }
     }
 
-    /// All recent food_items projected to QuickLogItem.
+    /// All recent food_items projected to QuickLogItem. Carries the
+    /// underlying FoodItemRow on each row so the tap path can branch
+    /// on `components.count` without a re-fetch.
     private var allFoodItems: [QuickLogItem] {
-        state.dashboardRecentFoods.map { f in
-            QuickLogItem(
-                id: "food-\(f.id)",
-                name: f.name,
-                calories: f.calories ?? 0,
-                protein: f.protein ?? 0,
-                carbs: f.carbs ?? 0,
-                fat: f.fat ?? 0,
-                fiber: f.fiber ?? 0,
-                recipeId: nil,
-                foodItemId: f.id,
-                kind: .food
-            )
-        }
+        state.dashboardRecentFoods.map { Self.makeFoodItem(from: $0) }
+    }
+
+    /// Build a QuickLogItem from a FoodItemRow with the underlying
+    /// row attached. Used by the preload + the live search so combo
+    /// detection works for both paths.
+    fileprivate static func makeFoodItem(from f: FoodItemRow) -> QuickLogItem {
+        QuickLogItem(
+            id: "food-\(f.id)",
+            name: f.name,
+            calories: f.calories ?? 0,
+            protein: f.protein ?? 0,
+            carbs: f.carbs ?? 0,
+            fat: f.fat ?? 0,
+            fiber: f.fiber ?? 0,
+            recipeId: nil,
+            foodItemId: f.id,
+            foodItem: f,
+            kind: .food
+        )
     }
 
     /// Meals slice for the no-query preload — top of 2+2 split with
@@ -390,6 +426,7 @@ struct QuickLogSection: View {
                 fiber: r.fiber ?? 0,
                 recipeId: r.id,
                 foodItemId: nil,
+                foodItem: nil,
                 kind: .recipe
             ))
         }
@@ -427,20 +464,7 @@ struct QuickLogSection: View {
                 merged.append(f)
             }
         }
-        return merged.prefix(10).map { f in
-            QuickLogItem(
-                id: "food-\(f.id)",
-                name: f.name,
-                calories: f.calories ?? 0,
-                protein: f.protein ?? 0,
-                carbs: f.carbs ?? 0,
-                fat: f.fat ?? 0,
-                fiber: f.fiber ?? 0,
-                recipeId: nil,
-                foodItemId: f.id,
-                kind: .food
-            )
-        }
+        return merged.prefix(10).map { Self.makeFoodItem(from: $0) }
     }
 
     private func ilikeFoodItems(userId: String, column: String, pattern: String) async throws -> [FoodItemRow] {
@@ -488,6 +512,7 @@ struct QuickLogSection: View {
                 fiber: entry.fiber ?? 0,
                 recipeId: entry.recipe_id,
                 foodItemId: entry.food_item_id,
+                foodItem: nil,
                 kind: .recent
             ))
             if out.count >= 10 { break }
@@ -538,6 +563,17 @@ struct QuickLogSection: View {
     }
 
     private func log(_ item: QuickLogItem) async {
+        // Multi-component food → present the same combo prompt the
+        // Foods tab uses so the user can pick "as one food" vs "by
+        // component". Single-component foods, recipes, and meal_log
+        // re-logs go straight through (the prior log already chose a
+        // mode for re-logs, so re-prompting would be noise).
+        if item.kind == .food,
+           let row = item.foodItem,
+           (row.components?.count ?? 0) > 1 {
+            comboPromptTarget = row
+            return
+        }
         loggingId = item.id
         defer { loggingId = nil }
         do {
@@ -558,6 +594,33 @@ struct QuickLogSection: View {
         } catch {
             withAnimation { toast = "Couldn't log: \(error.localizedDescription)" }
         }
+    }
+
+    // MARK: - Combo log helpers
+
+    /// User picked "Log as one food" from the combo prompt. Routes
+    /// through state.logFoodAsOne so Foods + Quick Log share one
+    /// implementation.
+    private func logComboAsOne(_ item: FoodItemRow) async {
+        do {
+            try await state.logFoodAsOne(item, at: state.loggedAtForSelectedDate())
+            withAnimation { toast = "✓ Logged \(item.name)" }
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation { toast = nil }
+        } catch {
+            withAnimation { toast = "Couldn't log: \(error.localizedDescription)" }
+        }
+    }
+
+    /// User picked "Log individual components" from the combo prompt.
+    /// state.logFoodComponents handles partial failure silently and
+    /// returns the count actually inserted, which we surface in the
+    /// confirmation toast.
+    private func logComboAsComponents(_ item: FoodItemRow) async {
+        let count = await state.logFoodComponents(item, at: state.loggedAtForSelectedDate())
+        withAnimation { toast = "✓ Logged \(count) component\(count == 1 ? "" : "s")" }
+        try? await Task.sleep(for: .seconds(2))
+        withAnimation { toast = nil }
     }
 }
 
@@ -589,5 +652,10 @@ private struct QuickLogItem: Identifiable, Hashable {
     let fiber: Double
     let recipeId: String?
     let foodItemId: String?
+    /// Underlying FoodItemRow when this item was projected from
+    /// food_items (kind == .food). Carries the components array so
+    /// the tap path can detect combo foods and present the prompt
+    /// without a re-fetch. nil for meal_log re-logs and recipes.
+    let foodItem: FoodItemRow?
     let kind: Kind
 }
