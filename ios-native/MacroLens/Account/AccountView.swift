@@ -239,7 +239,7 @@ struct AccountView: View {
         let s = computeUsageSummary()
         return Card {
             VStack(alignment: .leading, spacing: 12) {
-                cardLabel("AI Bucks this month")
+                cardLabel("Computer Calories this month")
 
                 if s.isUnlimited {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -255,7 +255,7 @@ struct AccountView: View {
                         Text(formatNumber(s.remainingBucks ?? 0))
                             .font(.system(size: 32, weight: .bold))
                             .foregroundStyle(spentColor(pct: s.spentPct))
-                        Text("AI Bucks remaining of \(formatNumber(s.limitBucks ?? 0))")
+                        Text("Computer Calories remaining of \(formatNumber(s.limitBucks ?? 0))")
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.text3)
                     }
@@ -391,7 +391,7 @@ struct AccountView: View {
         Card {
             VStack(alignment: .leading, spacing: 8) {
                 cardLabel("AI analysis")
-                Text("Food analysis is powered by Claude AI and runs securely on our servers. No API key needed — each action uses a small number of AI Bucks from your monthly allotment above.")
+                Text("Food analysis is powered by Claude AI and runs securely on our servers. No API key needed — each action uses a small number of Computer Calories from your monthly allotment above.")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text2)
                     .fixedSize(horizontal: false, vertical: true)

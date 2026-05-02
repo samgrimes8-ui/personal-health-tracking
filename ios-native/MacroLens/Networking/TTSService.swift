@@ -20,7 +20,7 @@ enum TTSService {
         var errorDescription: String? {
             switch self {
             case .unauthenticated:        return "Session expired — please sign in again."
-            case .spendingLimitExceeded:  return "You've used all your AI Bucks this month."
+            case .spendingLimitExceeded:  return "You've used all your Computer Calories this month."
             case .server(let m):          return m
             case .parse:                  return "Couldn't read the TTS response."
             }

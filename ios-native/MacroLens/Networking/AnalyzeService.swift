@@ -23,7 +23,7 @@ enum AnalyzeService {
         var errorDescription: String? {
             switch self {
             case .unauthenticated: return "Session expired — please sign in again."
-            case .spendingLimitExceeded: return "You've used all your AI Bucks this month."
+            case .spendingLimitExceeded: return "You've used all your Computer Calories this month."
             case .server(let msg): return msg
             case .parse: return "Couldn't read the analysis result. Try a more specific input."
             }
