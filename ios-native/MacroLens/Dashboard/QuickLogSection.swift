@@ -397,23 +397,37 @@ struct QuickLogSection: View {
         lastSearchedQuery = q
     }
 
-    /// Case-insensitive ilike on name + brand. PostgREST's `or` filter
-    /// takes a comma-separated list of `column.op.value` tuples — both
-    /// columns share the same %query% pattern. Returns up to 10 rows
-    /// ordered by updated_at desc.
+    /// Case-insensitive substring search on food_items, hitting both
+    /// the name column and the brand column.
+    ///
+    /// Implementation note: an earlier version used PostgREST's `or`
+    /// filter (`name.ilike.%q%,brand.ilike.%q%`). The `.or()` method
+    /// on supabase-swift passes the filter string verbatim into the
+    /// URL, where `%` becomes `%25` after URL-encoding — which works
+    /// in some PostgREST versions but not reliably (the canonical
+    /// URL wildcard is `*`, with `%` only working when the entire
+    /// pattern survives unescaped through the value parser). To
+    /// avoid that ambiguity entirely, we issue two `.ilike()` calls
+    /// in parallel and merge — `.ilike(column:pattern:)` is the same
+    /// path autoSaveFoodItem uses successfully, so wildcard handling
+    /// is well-tested.
     private func searchFoodItems(_ q: String) async throws -> [QuickLogItem] {
         let userId = try await SupabaseService.client.auth.session.user.id.uuidString
         let pattern = "%\(escapeLike(q))%"
-        let rows: [FoodItemRow] = try await SupabaseService.client
-            .from("food_items")
-            .select()
-            .eq("user_id", value: userId)
-            .or("name.ilike.\(pattern),brand.ilike.\(pattern)")
-            .order("updated_at", ascending: false)
-            .limit(10)
-            .execute()
-            .value
-        return rows.map { f in
+        async let byName = ilikeFoodItems(userId: userId, column: "name", pattern: pattern)
+        async let byBrand = ilikeFoodItems(userId: userId, column: "brand", pattern: pattern)
+        let nameHits = (try? await byName) ?? []
+        let brandHits = (try? await byBrand) ?? []
+        // Dedup by id; name hits win position over brand hits since
+        // most users search by food name, not vendor.
+        var seenIds = Set<String>()
+        var merged: [FoodItemRow] = []
+        for f in nameHits + brandHits {
+            if seenIds.insert(f.id).inserted {
+                merged.append(f)
+            }
+        }
+        return merged.prefix(10).map { f in
             QuickLogItem(
                 id: "food-\(f.id)",
                 name: f.name,
@@ -427,6 +441,18 @@ struct QuickLogSection: View {
                 kind: .food
             )
         }
+    }
+
+    private func ilikeFoodItems(userId: String, column: String, pattern: String) async throws -> [FoodItemRow] {
+        try await SupabaseService.client
+            .from("food_items")
+            .select()
+            .eq("user_id", value: userId)
+            .ilike(column, pattern: pattern)
+            .order("updated_at", ascending: false)
+            .limit(10)
+            .execute()
+            .value
     }
 
     /// Case-insensitive ilike on meal_log.name. Pulls a wider window
