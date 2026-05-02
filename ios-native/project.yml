@@ -44,6 +44,13 @@ targets:
         NSPhotoLibraryAddUsageDescription: MacroLens may save processed images back to your photo library.
         NSHealthShareUsageDescription: MacroLens reads your weight from Apple Health to keep your weigh-in history in sync across devices.
         NSHealthUpdateUsageDescription: MacroLens writes the meals you log and the weights you record to Apple Health so other apps can use them.
+        # Background modes required for HKObserverQuery + enableBackgroundDelivery.
+        # `fetch` covers the standard background-app-refresh path; `processing`
+        # covers the longer HK observer callbacks. iOS won't deliver HK
+        # background updates without these declared in Info.plist.
+        UIBackgroundModes:
+          - fetch
+          - processing
         # Custom URL scheme for OAuth callbacks (Google sign-in via
         # ASWebAuthenticationSession). Supabase redirects to
         # `app.macrolens.native://login-callback#access_token=...&refresh_token=...`,
@@ -68,13 +75,16 @@ targets:
         CODE_SIGN_STYLE: Automatic
         # HealthKit entitlement is active for the two-way Apple Health
         # sync (push macros + weight, pull weight history). The
-        # `.access` array is empty — that's the standard "all standard
-        # types" claim and is what HKHealthStore.requestAuthorization
-        # actually gates against at runtime. Background delivery is
-        # NOT enabled (that's a separate `.background-delivery` array
-        # in the access dict and adds review/provisioning complexity);
-        # we sync on .onAppear + toggle-enable instead. (See
-        # ios-native/MacroLens/Health/HealthKitService.swift.)
+        # entitlement key is plain `com.apple.developer.healthkit`
+        # (no `.access` array — adding `[]` triggered a "Verifiable
+        # Health Records" provisioning error in earlier builds, and
+        # we don't need any of the HKAccess special capabilities).
+        #
+        # Background delivery for bodyMass IS enabled at runtime via
+        # HKHealthStore.enableBackgroundDelivery + an HKObserverQuery
+        # — see HealthKitService.enableBackgroundWeightSync. The Info.plist
+        # `UIBackgroundModes: [fetch, processing]` above is the iOS-side
+        # requirement for those callbacks to actually fire.
         #
         # Sign In With Apple is intentionally NOT in this entitlements
         # file — that capability needs paid Apple Developer Program

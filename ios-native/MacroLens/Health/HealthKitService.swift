@@ -1,6 +1,7 @@
 import Foundation
 import HealthKit
 import UIKit
+import os
 
 /// HKHealthStore wrapper for the two-way Apple Health sync.
 ///
@@ -32,16 +33,35 @@ import UIKit
 ///   - Pull: HKAnchoredObjectQuery, anchor persisted per-user. Filters
 ///     out our own writes via HKSource.default() + metadata key.
 ///
-/// Background delivery is intentionally NOT wired (out-of-scope for v1;
-/// adds entitlement + review complexity). Sync runs on:
-///   1. Toggle-enable (HealthSettingsSection)
-///   2. App foreground (.task in SignedInShell)
-///   3. Every meal_log mutation (logMeal / updateMealLogEntry / delete)
+/// Background delivery IS wired now (v2): HKObserverQuery + enableBackgroundDelivery
+/// for bodyMass means iOS wakes the app within seconds of a new weight
+/// being added in HK (manual entry, smart scale, etc.) and runs the
+/// pull. See `enableBackgroundWeightSync`.
+///
+/// Sync triggers, in order of latency:
+///   1. Background delivery (HKObserverQuery) — seconds after change
+///   2. App foreground (scenePhase → .active in AppShell) — every fg
+///   3. Toggle-enable (HealthSettingsSection)
+///   4. Every meal_log mutation (logMeal / updateMealLogEntry / delete) — macros only
+///
+/// Debug logging: Console.app or `log stream --predicate 'subsystem == "app.macrolens.native"'`
 @MainActor
 final class HealthKitService {
     static let shared = HealthKitService()
 
     private let store = HKHealthStore()
+
+    /// Subsystem-tagged logger so the user can filter HK events from
+    /// general app noise via Console.app or the `log stream` CLI.
+    /// Public on purpose — AppShell + HealthMacroSync use the same
+    /// channel so a single filter captures the whole HK pipeline.
+    static let log = Logger(subsystem: "app.macrolens.native", category: "HealthKit")
+
+    /// Whether the in-memory observer query is registered for this
+    /// app launch. enableBackgroundDelivery is persistent across
+    /// launches (iOS-side), but the observer query has to be
+    /// re-registered every launch to handle wakes during that launch.
+    private var weightObserverActive = false
 
     /// Whether HK is even present (false on iPad / Mac Catalyst etc.).
     nonisolated var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
@@ -262,6 +282,10 @@ final class HealthKitService {
     /// backfill spec. Subsequent calls use the persisted anchor and pull
     /// only what's new since last sync.
     ///
+    /// Prefer `pullWeightsWithFallback` for normal use — it adds the
+    /// HKSampleQuery safety net for retroactively-dated samples that
+    /// HK's anchor logic can miss.
+    ///
     /// Caller is responsible for the DB-side dedup (SELECT id WHERE
     /// healthkit_uuid = …) before insert; this method only filters the
     /// HK-side noise (our own writes).
@@ -320,10 +344,160 @@ final class HealthKitService {
                             recordedAt: sample.startDate
                         )
                     }
+                Self.log.info("pullWeights anchored returned \(pulled.count, privacy: .public) sample(s)")
                 cont.resume(returning: pulled)
             }
             store.execute(query)
         }
+    }
+
+    /// pullWeights with a safety net: if the anchored query returns
+    /// nothing AND we haven't synced in over an hour, also runs an
+    /// HKSampleQuery for the last 24h. Catches:
+    ///   - retroactively-dated samples that HK's anchor logic might
+    ///     skip (samples added now with start_date in the past)
+    ///   - the case where the persisted anchor got corrupted/lost
+    ///   - first-launch-after-update where the anchor blob shape
+    ///     changed and decode silently returned nil
+    /// The 24h window is a deliberate compromise — wide enough to
+    /// catch "I added today's morning weigh-in this evening", narrow
+    /// enough to keep the dedup query cheap (the partial unique index
+    /// on healthkit_uuid handles any duplicates from the union of
+    /// anchored + sample queries).
+    func pullWeightsWithFallback(userId: String) async throws -> [PulledWeight] {
+        guard isAvailable else { throw HealthKitError.notAvailable }
+        let lastSyncKey = "macrolens_hk_weight_last_sync_\(userId)"
+        let primary = try await pullWeights(userId: userId)
+        if !primary.isEmpty {
+            UserDefaults.standard.set(Date(), forKey: lastSyncKey)
+            return primary
+        }
+        let lastSync = UserDefaults.standard.object(forKey: lastSyncKey) as? Date
+        let staleThreshold = Date().addingTimeInterval(-3600)
+        let isStale = lastSync == nil || lastSync! < staleThreshold
+        guard isStale else {
+            // Recent successful sync + nothing new — anchored is the
+            // source of truth, no fallback needed.
+            return []
+        }
+        Self.log.info("pullWeights anchored empty + stale (last=\(lastSync?.description ?? "never", privacy: .public)) — running 24h fallback")
+        let fallback = try await pullWeightsLast24Hours()
+        UserDefaults.standard.set(Date(), forKey: lastSyncKey)
+        Self.log.info("pullWeights fallback returned \(fallback.count, privacy: .public) sample(s)")
+        return fallback
+    }
+
+    /// Bypass the anchor — straight HKSampleQuery over the last 24h
+    /// with the same source/metadata exclusions as the anchored path.
+    /// Caller dedupes on the DB side via the unique partial index, so
+    /// it's safe to also include samples the anchored query already
+    /// surfaced.
+    private func pullWeightsLast24Hours() async throws -> [PulledWeight] {
+        let bodyMass = HKQuantityType(.bodyMass)
+        let twentyFourHoursAgo = Date().addingTimeInterval(-86400)
+        let timeRange = HKQuery.predicateForSamples(withStart: twentyFourHoursAgo, end: nil, options: [])
+        let mySource = HKQuery.predicateForObjects(from: [HKSource.default()])
+        let notMySource = NSCompoundPredicate(notPredicateWithSubpredicate: mySource)
+        let hasMyMetadata = HKQuery.predicateForObjects(withMetadataKey: "macrolens_metric_id")
+        let noMyMetadata = NSCompoundPredicate(notPredicateWithSubpredicate: hasMyMetadata)
+        let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            timeRange, notMySource, noMyMetadata
+        ])
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[PulledWeight], Error>) in
+            let query = HKSampleQuery(
+                sampleType: bodyMass,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                if let error {
+                    cont.resume(throwing: error)
+                    return
+                }
+                let pulled: [PulledWeight] = (samples ?? [])
+                    .compactMap { $0 as? HKQuantitySample }
+                    .map { sample in
+                        PulledWeight(
+                            uuid: sample.uuid.uuidString,
+                            kg: sample.quantity.doubleValue(for: .gramUnit(with: .kilo)),
+                            recordedAt: sample.startDate
+                        )
+                    }
+                cont.resume(returning: pulled)
+            }
+            store.execute(query)
+        }
+    }
+
+    // ─── Background delivery (HKObserverQuery) ─────────────────────────
+
+    /// Wires up background delivery so iOS wakes the app within seconds
+    /// of any new bodyMass sample. Composed of:
+    ///   - `enableBackgroundDelivery` — persistent across app launches.
+    ///     iOS keeps the registration even after the app is killed.
+    ///   - `HKObserverQuery` — registered fresh each launch. Handles
+    ///     wakes during this app session (cold launch from background
+    ///     wake re-runs this method via the AppShell .task hook).
+    ///
+    /// The observer's update handler MUST call its `completionHandler`
+    /// when finished, otherwise iOS deprioritises future updates. We
+    /// run the pull + insert and call the handler at the end.
+    ///
+    /// Idempotent: subsequent calls within the same launch no-op via
+    /// the `weightObserverActive` flag.
+    func enableBackgroundWeightSync(userId: String) async throws {
+        guard isAvailable else { return }
+        guard !weightObserverActive else {
+            Self.log.debug("enableBackgroundWeightSync skipped — already active this launch")
+            return
+        }
+        let bodyMass = HKQuantityType(.bodyMass)
+        do {
+            try await store.enableBackgroundDelivery(for: bodyMass, frequency: .immediate)
+            Self.log.info("enableBackgroundDelivery succeeded for bodyMass")
+        } catch {
+            Self.log.error("enableBackgroundDelivery failed: \(error.localizedDescription, privacy: .public)")
+            // Carry on — the observer query alone still works for
+            // foreground-active app sessions.
+        }
+        let query = HKObserverQuery(sampleType: bodyMass, predicate: nil) { [weak self] _, completionHandler, error in
+            // Capture self locally so the Task closure isn't holding
+            // the actor-isolated reference across hops.
+            if let error {
+                HealthKitService.log.error("HKObserverQuery error: \(error.localizedDescription, privacy: .public)")
+                completionHandler()
+                return
+            }
+            guard let self else {
+                completionHandler()
+                return
+            }
+            HealthKitService.log.info("HKObserverQuery fired (userId=\(userId, privacy: .public))")
+            Task {
+                do {
+                    let pulled = try await self.pullWeightsWithFallback(userId: userId)
+                    var inserted = 0
+                    for sample in pulled {
+                        if let did = try? await DBService.insertHealthKitWeight(
+                            kg: sample.kg,
+                            recordedAt: sample.recordedAt,
+                            healthkitUUID: sample.uuid
+                        ), did {
+                            inserted += 1
+                        }
+                    }
+                    HealthKitService.log.info("Observer-triggered pull inserted \(inserted, privacy: .public) checkin(s)")
+                } catch {
+                    HealthKitService.log.error("Observer pull failed: \(error.localizedDescription, privacy: .public)")
+                }
+                // MUST call completion or iOS deprioritises future
+                // updates for this observer.
+                completionHandler()
+            }
+        }
+        store.execute(query)
+        weightObserverActive = true
+        Self.log.info("HKObserverQuery registered for bodyMass")
     }
 
     // ─── Toggle persistence ────────────────────────────────────────────

@@ -193,8 +193,13 @@ struct HealthSettingsSection: View {
         pulling = true
         pullError = nil
         defer { pulling = false }
+        // Register the background-delivery observer alongside the first
+        // pull. enableBackgroundWeightSync is idempotent + safe even
+        // when the user later denies READ — failures just mean the
+        // foreground path remains the only sync trigger.
+        try? await HealthKitService.shared.enableBackgroundWeightSync(userId: userId)
         do {
-            let pulled = try await HealthKitService.shared.pullWeights(userId: userId)
+            let pulled = try await HealthKitService.shared.pullWeightsWithFallback(userId: userId)
             var inserted = 0
             for sample in pulled {
                 let didInsert = try await DBService.insertHealthKitWeight(

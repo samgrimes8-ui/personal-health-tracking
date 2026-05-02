@@ -62,8 +62,14 @@ enum AppTab: Hashable, CaseIterable {
 /// the underlying UIPageViewController).
 struct SignedInShell: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(\.scenePhase) private var scenePhase
     @State private var state = AppState()
     @State private var selected: AppTab = .dashboard
+    /// Throttle for the foreground re-pull. .task fires once per view
+    /// lifetime; scenePhase active fires every time the user reopens
+    /// the app — without throttling, a quick fg/bg/fg burst would run
+    /// the pull three times in a few seconds.
+    @State private var lastForegroundPull: Date?
 
     var body: some View {
         TabView(selection: $selected) {
@@ -80,31 +86,61 @@ struct SignedInShell: View {
         }
         .environment(state)
         .tint(Theme.accent)
-        // Apple Health: pull new weight samples on shell appear (covers
-        // app launch + foregrounding). HKAnchoredObjectQuery's anchor is
-        // persisted per-user, so this is cheap after the first sync —
-        // delivers only the delta. Skipped silently if the toggle is off
-        // or HK is unavailable.
-        .task { await runHealthKitPullIfEnabled() }
+        // Apple Health: initial pull on shell appear + register the
+        // background-delivery observer so HK changes wake the app.
+        .task { await runHealthKitPullIfEnabled(reason: "initial-task") }
+        // Re-pull on every transition to .active. .task only fires
+        // once per view lifetime — without this hook, foregrounding
+        // the app after adding weight in HK would never trigger a sync.
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            // Throttle to once per minute. Cheap pull but still want
+            // to avoid burning HK quota / DB roundtrips on rapid
+            // fg/bg cycles.
+            if let last = lastForegroundPull, Date().timeIntervalSince(last) < 60 {
+                return
+            }
+            Task { await runHealthKitPullIfEnabled(reason: "scene-active") }
+        }
     }
 
-    private func runHealthKitPullIfEnabled() async {
+    private func runHealthKitPullIfEnabled(reason: String) async {
         guard HealthKitService.shared.isAvailable,
               case .signedIn(let user) = auth.state else { return }
         let userId = user.id.uuidString
-        guard HealthKitService.isToggleOn(.pullWeight, userId: userId) else { return }
+        HealthKitService.log.info("runHealthKitPullIfEnabled triggered (reason=\(reason, privacy: .public))")
+        // Set up the background observer alongside the pull. Idempotent
+        // (no-op after first call per launch). Decoupled from the
+        // pullWeight toggle on purpose — observer registration is harmless
+        // even if read auth is denied; it just won't fire any callbacks.
         do {
-            let pulled = try await HealthKitService.shared.pullWeights(userId: userId)
+            try await HealthKitService.shared.enableBackgroundWeightSync(userId: userId)
+        } catch {
+            HealthKitService.log.error("enableBackgroundWeightSync failed: \(error.localizedDescription, privacy: .public)")
+        }
+        guard HealthKitService.isToggleOn(.pullWeight, userId: userId) else {
+            HealthKitService.log.debug("pullWeight toggle off — skipping pull")
+            return
+        }
+        lastForegroundPull = Date()
+        do {
+            let pulled = try await HealthKitService.shared.pullWeightsWithFallback(userId: userId)
+            var inserted = 0
             for sample in pulled {
-                _ = try? await DBService.insertHealthKitWeight(
+                if let did = try? await DBService.insertHealthKitWeight(
                     kg: sample.kg,
                     recordedAt: sample.recordedAt,
                     healthkitUUID: sample.uuid
-                )
+                ), did {
+                    inserted += 1
+                }
+            }
+            HealthKitService.log.info("Foreground pull inserted \(inserted, privacy: .public) checkin(s)")
+            if inserted > 0 {
+                await state.loadGoals()
             }
         } catch {
-            // Silent — the next foreground will retry. Errors here
-            // shouldn't block the user from using the app.
+            HealthKitService.log.error("Foreground pull failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
