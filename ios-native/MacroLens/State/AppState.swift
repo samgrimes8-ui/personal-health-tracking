@@ -506,10 +506,18 @@ final class AppState {
                 fiber: fiber
             )
         }
+        // Auto-assign meal_type from the local clock when the caller
+        // didn't pick one — same buckets the web uses
+        // (getMealTypeFromTime in src/pages/app.js): 5–10am breakfast,
+        // 10–2 lunch, 2–5 snack, 5–10 dinner, else snack. Without this,
+        // every log entry lands with meal_type = nil and the dashboard
+        // can't group it under the right section.
+        let now = Date()
+        let resolvedMealType = mealType ?? Self.inferMealType(at: now)
         let payload = Insert(
             user_id: userId,
             name: name,
-            meal_type: mealType,
+            meal_type: resolvedMealType,
             calories: calories,
             protein: protein,
             carbs: carbs,
@@ -517,7 +525,7 @@ final class AppState {
             fiber: fiber,
             recipe_id: recipeId,
             food_item_id: resolvedFoodItemId,
-            logged_at: ISO8601DateFormatter().string(from: Date()),
+            logged_at: ISO8601DateFormatter().string(from: now),
             servings_consumed: servingsConsumed
         )
         let inserted: [MealLogEntry] = try await SupabaseService.client
@@ -733,9 +741,63 @@ final class AppState {
         return response
     }
 
+    /// Filter a meal_log slice down to entries whose logged_at falls on
+    /// the *local* current date. Naïvely prefix-matching the ISO8601
+    /// string against todayDateString() drops late-evening logs in any
+    /// timezone west of UTC — e.g. 6pm PST = 02:00Z next day, which has
+    /// the wrong date prefix. We parse the timestamp into a Date and
+    /// re-format in `.current` to compare apples to apples.
     private func filterToToday(_ entries: [MealLogEntry]) -> [MealLogEntry] {
         let today = todayDateString()
-        return entries.filter { ($0.logged_at ?? "").hasPrefix(today) }
+        let local = DateFormatter()
+        local.dateFormat = "yyyy-MM-dd"
+        local.timeZone = .current
+        return entries.filter { entry in
+            guard let raw = entry.logged_at else { return false }
+            if let d = Self.parseISOTimestamp(raw) {
+                return local.string(from: d) == today
+            }
+            // Fall back to YYYY-MM-DD prefix on the raw string — at worst
+            // this treats a midnight-adjacent entry one day off, which is
+            // no worse than the previous behavior.
+            return String(raw.prefix(10)) == today
+        }
+    }
+
+    /// Tolerant ISO8601 parser. ISO8601DateFormatter is strict about
+    /// whether `.withFractionalSeconds` is present — Supabase's
+    /// timestamptz column sometimes returns "…Z", sometimes "…+00:00",
+    /// sometimes with fractional seconds. We try both shapes so the
+    /// caller doesn't have to care.
+    static func parseISOTimestamp(_ raw: String) -> Date? {
+        if let d = isoStrict.date(from: raw) { return d }
+        if let d = isoStrictFractional.date(from: raw) { return d }
+        return nil
+    }
+    private static let isoStrict: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    private static let isoStrictFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    /// Bucket a Date into one of the four canonical meal_type strings
+    /// the web uses. Same windows as src/pages/app.js getMealTypeFromTime
+    /// — kept lower-cased here because the DB stores meal_type lowercase
+    /// (the web display layer title-cases on render).
+    static func inferMealType(at date: Date) -> String {
+        let h = Calendar.current.component(.hour, from: date)
+        switch h {
+        case 5..<10:  return "breakfast"
+        case 10..<14: return "lunch"
+        case 14..<17: return "snack"
+        case 17..<22: return "dinner"
+        default:      return "snack"
+        }
     }
 
     private func fetchBodyMetrics() async throws -> BodyMetrics {

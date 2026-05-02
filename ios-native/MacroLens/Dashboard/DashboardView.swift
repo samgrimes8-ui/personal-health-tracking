@@ -83,7 +83,16 @@ struct DashboardView: View {
     }
 
     private var todayMealsCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Match the web dashboard: bucket today's entries into the four
+        // canonical meal types, render only sections that have logs, and
+        // show a small per-section macro tally next to the section title.
+        // Entries arrive newest-first (loadDashboard sorts by logged_at
+        // desc); we re-sort each bucket oldest-first so the day reads
+        // chronologically inside each section.
+        let buckets = Self.bucketByMealType(state.todayLog)
+        let active = Self.mealTypeOrder.filter { !(buckets[$0]?.isEmpty ?? true) }
+
+        return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Today's meals")
                     .font(.system(size: 15, weight: .medium))
@@ -101,14 +110,80 @@ struct DashboardView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 40)
             } else {
-                ForEach(state.todayLog) { entry in
-                    mealRow(entry)
-                    Divider().background(Theme.border).padding(.leading, 20)
+                ForEach(active, id: \.self) { mealType in
+                    let entries = (buckets[mealType] ?? []).sorted {
+                        ($0.logged_at ?? "") < ($1.logged_at ?? "")
+                    }
+                    mealTypeSectionHeader(mealType, entries: entries)
+                    ForEach(entries) { entry in
+                        mealRow(entry)
+                        Divider().background(Theme.border).padding(.leading, 20)
+                    }
                 }
             }
         }
         .background(Theme.bg2, in: .rect(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
+    }
+
+    private func mealTypeSectionHeader(_ mealType: String, entries: [MealLogEntry]) -> some View {
+        let totals = DailyMacroTotals.sum(entries)
+        let label = mealType.capitalized
+        let icon = Self.mealTypeIcon[mealType] ?? ""
+        return HStack {
+            Text("\(icon) \(label)")
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.5)
+                .textCase(.uppercase)
+                .foregroundStyle(Theme.text2)
+            Spacer()
+            HStack(spacing: 6) {
+                Text("\(Int(totals.calories)) kcal")
+                    .foregroundStyle(Theme.cal)
+                Text("P\(Int(totals.protein))")
+                    .foregroundStyle(Theme.protein)
+                Text("C\(Int(totals.carbs))")
+                    .foregroundStyle(Theme.carbs)
+                Text("F\(Int(totals.fat))")
+                    .foregroundStyle(Theme.fat)
+            }
+            .font(.system(size: 10, weight: .medium))
+        }
+        .padding(.horizontal, 20).padding(.vertical, 8)
+        .background(Theme.bg3)
+    }
+
+    /// Canonical render order for the four meal_type buckets.
+    private static let mealTypeOrder = ["breakfast", "lunch", "snack", "dinner"]
+    /// Lowercase meal_type → header emoji. Matches the web's
+    /// MEAL_TYPE_ICONS map in src/pages/app.js.
+    private static let mealTypeIcon: [String: String] = [
+        "breakfast": "🌅", "lunch": "☀️", "snack": "🍎", "dinner": "🌙"
+    ]
+    /// Group meal_log entries by meal_type. Entries with a missing or
+    /// unrecognized meal_type get bucketed by their logged_at hour using
+    /// the same windows the web uses (`getMealTypeFromTime` in app.js).
+    /// Pre-existing rows from before the auto-assign fix in logMeal go
+    /// through this fallback path.
+    private static func bucketByMealType(_ entries: [MealLogEntry]) -> [String: [MealLogEntry]] {
+        var out: [String: [MealLogEntry]] = [:]
+        for e in entries {
+            let key = normalizedMealType(e)
+            out[key, default: []].append(e)
+        }
+        return out
+    }
+
+    private static func normalizedMealType(_ entry: MealLogEntry) -> String {
+        if let raw = entry.meal_type?.lowercased(),
+           mealTypeOrder.contains(raw) {
+            return raw
+        }
+        if let iso = entry.logged_at,
+           let date = AppState.parseISOTimestamp(iso) {
+            return AppState.inferMealType(at: date)
+        }
+        return "snack"
     }
 
     // MARK: - Helpers
