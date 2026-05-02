@@ -91,24 +91,78 @@ struct DashboardView: View {
         // chronologically inside each section.
         let buckets = Self.bucketByMealType(state.todayLog)
         let active = Self.mealTypeOrder.filter { !(buckets[$0]?.isEmpty ?? true) }
+        let isToday = Calendar.current.isDateInToday(state.selectedDate)
 
         return VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Today's meals")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Theme.text)
+            // Date-nav header. Chevron-left walks one day backward;
+            // chevron-right walks forward (clamped to today — there's
+            // no use case for logging into the future, and the macros
+            // dashboard doesn't anticipate future days).
+            HStack(spacing: 8) {
+                Button {
+                    Task { await shiftDay(by: -1) }
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.text2)
+                        .frame(width: 28, height: 28)
+                        .background(Theme.bg3, in: .rect(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(headerLabel)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                    if !isToday {
+                        Text(Self.absoluteDateLabel(state.selectedDate))
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                    }
+                }
+
                 Spacer()
+
+                if !isToday {
+                    Button {
+                        Task { await state.setSelectedDate(Date()) }
+                    } label: {
+                        Text("Today")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.accentFG)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Theme.accent, in: .rect(cornerRadius: 999))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    Task { await shiftDay(by: 1) }
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(isToday ? Theme.text3 : Theme.text2)
+                        .frame(width: 28, height: 28)
+                        .background(Theme.bg3, in: .rect(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .disabled(isToday)
+                .opacity(isToday ? 0.4 : 1)
             }
-            .padding(.horizontal, 20).padding(.vertical, 16)
+            .padding(.horizontal, 20).padding(.vertical, 14)
 
             Divider().background(Theme.border)
 
             if state.todayLog.isEmpty {
-                Text("No entries yet. Analyze a meal to get started.")
+                Text(isToday
+                     ? "No entries yet. Analyze a meal to get started."
+                     : "Nothing logged on this day. Use the search or Analyze section above to log retroactively.")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text3)
                     .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 20)
                     .padding(.vertical, 40)
+                    .multilineTextAlignment(.center)
             } else {
                 ForEach(active, id: \.self) { mealType in
                     let entries = (buckets[mealType] ?? []).sorted {
@@ -124,6 +178,39 @@ struct DashboardView: View {
         }
         .background(Theme.bg2, in: .rect(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
+    }
+
+    /// Shift `state.selectedDate` by `delta` days. Forward shift past
+    /// today is clamped — the chevron also disables in that case but
+    /// keep the guard here too in case a swipe gesture is wired in
+    /// later.
+    private func shiftDay(by delta: Int) async {
+        let cal = Calendar.current
+        guard let next = cal.date(byAdding: .day, value: delta, to: state.selectedDate) else { return }
+        let snapped = cal.startOfDay(for: next)
+        let today = cal.startOfDay(for: Date())
+        if snapped > today { return }
+        await state.setSelectedDate(snapped)
+    }
+
+    private var headerLabel: String {
+        let cal = Calendar.current
+        if cal.isDateInToday(state.selectedDate) { return "Today's meals" }
+        if cal.isDateInYesterday(state.selectedDate) { return "Yesterday's meals" }
+        let f = DateFormatter()
+        f.dateFormat = "EEEE"
+        f.timeZone = .current
+        return "\(f.string(from: state.selectedDate))'s meals"
+    }
+
+    private static func absoluteDateLabel(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.timeZone = .current
+        // "Apr 30" / "May 1" — no year (the dashboard isn't a time
+        // machine and the chevron walks day-by-day, so the year is
+        // self-evident from the user's recent path).
+        f.setLocalizedDateFormatFromTemplate("MMMd")
+        return f.string(from: date)
     }
 
     private func mealTypeSectionHeader(_ mealType: String, entries: [MealLogEntry]) -> some View {

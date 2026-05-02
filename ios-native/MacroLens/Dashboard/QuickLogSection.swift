@@ -520,7 +520,8 @@ struct QuickLogSection: View {
                 protein: result.protein,
                 carbs: result.carbs,
                 fat: result.fat,
-                fiber: result.fiber ?? 0
+                fiber: result.fiber ?? 0,
+                loggedAt: state.loggedAtForSelectedDate()
             )
             // Reset the search field so the user sees the toast +
             // returns to the preload sections (which will now include
@@ -548,7 +549,8 @@ struct QuickLogSection: View {
                 fat: item.fat,
                 fiber: item.fiber,
                 recipeId: item.recipeId,
-                foodItemId: item.foodItemId
+                foodItemId: item.foodItemId,
+                loggedAt: state.loggedAtForSelectedDate()
             )
             withAnimation { toast = "✓ Logged \(item.name)" }
             try? await Task.sleep(for: .seconds(2))

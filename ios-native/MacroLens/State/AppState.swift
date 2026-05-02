@@ -10,6 +10,13 @@ import Supabase
 final class AppState {
     // ─── Dashboard / Goals (pre-existing) ──────────────────────────────
     var goals: Goals = Goals()
+    /// Calendar day the dashboard is currently showing. Defaults to today;
+    /// chevron-nav on the Today's Meals header walks it backward (and
+    /// optionally forward, capped at today). Drives `todayLog` — when
+    /// this changes, the visible day's meals + macro tile totals follow.
+    /// Field name stayed as `todayLog` rather than renaming for diff
+    /// minimality; conceptually it's "the visible day's log."
+    var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     var todayLog: [MealLogEntry] = []
     /// Recent meal_log slice for Quick Log suggestions on the dashboard.
     /// Capped at 4 (top of list) so we can show the 2 most-recent meals
@@ -77,7 +84,7 @@ final class AppState {
 
             let weekEntries = try await weekLog
             self.goals = (try? await g) ?? Goals()
-            self.todayLog = filterToToday(weekEntries).sorted { ($0.logged_at ?? "") > ($1.logged_at ?? "") }
+            self.todayLog = filterToVisibleDay(weekEntries).sorted { ($0.logged_at ?? "") > ($1.logged_at ?? "") }
             self.last7Days = DaySummary.build(from: weekEntries, days: 7)
             self.dashboardRecentMeals = (try? await recentMeals) ?? []
             self.dashboardRecentFoods = (try? await recentFoods) ?? []
@@ -85,6 +92,19 @@ final class AppState {
             self.recentCheckins = (try? await c) ?? []
         } catch {
             lastError = error.localizedDescription
+        }
+        // If the user is viewing a day older than the 7-day weekLog window,
+        // the prefix-filter above produced an empty set — fall back to a
+        // day-specific fetch so the meals card still populates. Safe to
+        // skip for today (already covered by the weekLog filter).
+        if !Calendar.current.isDateInToday(selectedDate) {
+            let key = Self.localDateKey(for: selectedDate)
+            let cal = Calendar.current
+            let weekStart = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: Date()))
+                ?? cal.startOfDay(for: Date())
+            if selectedDate < weekStart {
+                await loadDayLog(dateKey: key)
+            }
         }
         // Apple Health: piggyback the macro migration + foreground
         // catch-up on dashboard load. loadDashboard() is the most
@@ -95,6 +115,78 @@ final class AppState {
         //   (offline window, auth re-grant) resolves without a meal mutation
         await runHealthKitMacroDailyTotalMigrationIfNeeded()
         await syncDayMacrosToHealthKit(dateKey: Self.localDateKey(for: Date()))
+    }
+
+    /// Switch the dashboard's visible day. Snaps to start-of-day, then
+    /// fetches that day's meal_log slice and writes it into `todayLog`
+    /// (which the dashboard treats as "the visible day's log"). No-op
+    /// if the date is already selected.
+    func setSelectedDate(_ date: Date) async {
+        let snapped = Calendar.current.startOfDay(for: date)
+        if Calendar.current.isDate(snapped, inSameDayAs: selectedDate) { return }
+        selectedDate = snapped
+        await loadDayLog(dateKey: Self.localDateKey(for: snapped))
+    }
+
+    /// Fetch one local-day's meal_log into `todayLog`. Pulls a slightly
+    /// wider window (prev-day → next-day) and prefix-filters in Swift,
+    /// matching the day-boundary contract used in HealthMacroSync.
+    func loadDayLog(dateKey: String) async {
+        do {
+            let userId = try await currentUserID()
+            let cal = Calendar.current
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd"
+            f.timeZone = .current
+            guard let day = f.date(from: dateKey) else { return }
+            let prevKey = f.string(from: cal.date(byAdding: .day, value: -1, to: day) ?? day)
+            let nextKey = f.string(from: cal.date(byAdding: .day, value: 2, to: day) ?? day)
+            let entries: [MealLogEntry] = try await SupabaseService.client
+                .from("meal_log")
+                .select()
+                .eq("user_id", value: userId)
+                .gte("logged_at", value: prevKey)
+                .lt("logged_at", value: nextKey)
+                .order("logged_at", ascending: false)
+                .execute()
+                .value
+            let local = DateFormatter()
+            local.dateFormat = "yyyy-MM-dd"
+            local.timeZone = .current
+            self.todayLog = entries.filter { entry in
+                guard let raw = entry.logged_at else { return false }
+                if let d = Self.parseISOTimestamp(raw) {
+                    return local.string(from: d) == dateKey
+                }
+                return String(raw.prefix(10)) == dateKey
+            }
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// Resolve a Date to use for `logged_at` when the user is logging
+    /// against a past day via the dashboard date-nav. Returns nil when
+    /// `selectedDate` is today (callers should pass nil so logMeal uses
+    /// `Date()` and the entry lands at the actual current time). When
+    /// past-dated, anchors to a sensible time-of-day for the picked
+    /// meal_type using the same windows the web uses
+    /// (`getMealTypeFromTime` / `inferMealType`):
+    ///   breakfast → 08:00, lunch → 12:00, snack → 15:00, dinner → 18:00.
+    func loggedAtForSelectedDate(mealType: String? = nil) -> Date? {
+        if Calendar.current.isDateInToday(selectedDate) { return nil }
+        let resolvedType = (mealType ?? Self.inferMealType(at: Date())).lowercased()
+        let hour: Int
+        switch resolvedType {
+        case "breakfast": hour = 8
+        case "lunch":     hour = 12
+        case "snack":     hour = 15
+        case "dinner":    hour = 18
+        default:          hour = 12
+        }
+        var comps = Calendar.current.dateComponents([.year, .month, .day], from: selectedDate)
+        comps.hour = hour; comps.minute = 0; comps.second = 0
+        return Calendar.current.date(from: comps)
     }
 
     /// Loads what the Goals page needs in parallel. Separate from
@@ -469,7 +561,8 @@ final class AppState {
                  fiber: Double = 0,
                  recipeId: String? = nil,
                  foodItemId: String? = nil,
-                 servingsConsumed: Double = 1.0) async throws {
+                 servingsConsumed: Double = 1.0,
+                 loggedAt: Date? = nil) async throws {
         struct Insert: Encodable {
             // public.meal_log column is `name` (not `meal_name` — that's
             // meal_planner's column). Mixed those up once already.
@@ -512,8 +605,12 @@ final class AppState {
         // 10–2 lunch, 2–5 snack, 5–10 dinner, else snack. Without this,
         // every log entry lands with meal_type = nil and the dashboard
         // can't group it under the right section.
-        let now = Date()
-        let resolvedMealType = mealType ?? Self.inferMealType(at: now)
+        //
+        // For past-day logs (loggedAt != nil), bucket using the *target*
+        // timestamp — a "lunch" log shifted to yesterday should still be
+        // tagged lunch, not whatever the current clock says.
+        let when = loggedAt ?? Date()
+        let resolvedMealType = mealType ?? Self.inferMealType(at: when)
         let payload = Insert(
             user_id: userId,
             name: name,
@@ -525,7 +622,7 @@ final class AppState {
             fiber: fiber,
             recipe_id: recipeId,
             food_item_id: resolvedFoodItemId,
-            logged_at: ISO8601DateFormatter().string(from: now),
+            logged_at: ISO8601DateFormatter().string(from: when),
             servings_consumed: servingsConsumed
         )
         let inserted: [MealLogEntry] = try await SupabaseService.client
@@ -535,18 +632,27 @@ final class AppState {
             .execute()
             .value
         if let entry = inserted.first {
-            todayLog.insert(entry, at: 0)
+            // Only splice into todayLog if the entry's local day matches
+            // the dashboard's visible day. Past-day logs from the date-
+            // nav header land on a different day's view; we still update
+            // the recents slice (date-agnostic) but skip the visible-day
+            // tile counters until the user navigates to that day.
+            let entryKey = Self.localDateKey(for: when)
+            let visibleKey = Self.localDateKey(for: selectedDate)
+            if entryKey == visibleKey {
+                todayLog.insert(entry, at: 0)
+            }
             dashboardRecentMeals.insert(entry, at: 0)
             // Cap the slice so a long session doesn't grow it unbounded —
             // matches the loadDashboard fetch limit (4 rows).
             if dashboardRecentMeals.count > 4 {
                 dashboardRecentMeals = Array(dashboardRecentMeals.prefix(4))
             }
-            // Apple Health: recompute today's totals from meal_log and
-            // push as the daily-total quartet (kcal/protein/carbs/fat).
-            // No-op if the pushMacros toggle is off. logMeal always
-            // records logged_at = Date(), so the affected day is today.
-            await syncDayMacrosToHealthKit(dateKey: Self.localDateKey(for: Date()))
+            // Apple Health: recompute the affected day's totals from
+            // meal_log and push as the daily-total quartet
+            // (kcal/protein/carbs/fat). No-op if the pushMacros toggle
+            // is off. Past-day logs target the past day, not today.
+            await syncDayMacrosToHealthKit(dateKey: entryKey)
         }
     }
 
@@ -742,25 +848,25 @@ final class AppState {
     }
 
     /// Filter a meal_log slice down to entries whose logged_at falls on
-    /// the *local* current date. Naïvely prefix-matching the ISO8601
-    /// string against todayDateString() drops late-evening logs in any
+    /// the dashboard's *visible* day (selectedDate). Naïvely prefix-
+    /// matching the ISO8601 string drops late-evening logs in any
     /// timezone west of UTC — e.g. 6pm PST = 02:00Z next day, which has
     /// the wrong date prefix. We parse the timestamp into a Date and
     /// re-format in `.current` to compare apples to apples.
-    private func filterToToday(_ entries: [MealLogEntry]) -> [MealLogEntry] {
-        let today = todayDateString()
+    private func filterToVisibleDay(_ entries: [MealLogEntry]) -> [MealLogEntry] {
+        let key = Self.localDateKey(for: selectedDate)
         let local = DateFormatter()
         local.dateFormat = "yyyy-MM-dd"
         local.timeZone = .current
         return entries.filter { entry in
             guard let raw = entry.logged_at else { return false }
             if let d = Self.parseISOTimestamp(raw) {
-                return local.string(from: d) == today
+                return local.string(from: d) == key
             }
             // Fall back to YYYY-MM-DD prefix on the raw string — at worst
             // this treats a midnight-adjacent entry one day off, which is
             // no worse than the previous behavior.
-            return String(raw.prefix(10)) == today
+            return String(raw.prefix(10)) == key
         }
     }
 

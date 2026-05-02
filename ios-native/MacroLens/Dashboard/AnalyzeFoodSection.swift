@@ -549,7 +549,8 @@ struct AnalyzeFoodSection: View {
                 protein: r.protein,
                 carbs: r.carbs,
                 fat: r.fat,
-                fiber: r.fiber ?? 0
+                fiber: r.fiber ?? 0,
+                loggedAt: state.loggedAtForSelectedDate()
             )
             logged = true
         } catch {
