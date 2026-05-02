@@ -513,11 +513,17 @@ final class AppState {
     /// a successful DBService.updateMealEntry round-trip so the macro
     /// tiles + Today's meals + Quick log suggestions all refresh
     /// without a re-fetch.
+    ///
+    /// If `patch.loggedAt` shifts the entry to a different local day,
+    /// the entry is removed from `todayLog` when its new day no longer
+    /// matches `selectedDate` (and added when it does), and HK is
+    /// re-pushed for BOTH the old and new day so neither stays stale.
     func updateMealLogEntry(id: String, _ patch: MealEntryPatch) async throws {
-        // Capture the affected day BEFORE the DB round-trip — patch
-        // doesn't carry logged_at so the date can't change here, but we
-        // want HK push to know which calendar day to recompute.
-        let dateKey = dateKeyForMeal(id: id)
+        // Capture the affected day BEFORE the DB round-trip — a delete
+        // would lose the row from local slices, and a logged_at shift
+        // would replace it. Both cases need the original day key for
+        // HK recompute.
+        let oldDateKey = dateKeyForMeal(id: id)
         try await DBService.updateMealEntry(id: id, patch)
         let apply: (inout MealLogEntry) -> Void = { entry in
             if let v = patch.name { entry.name = v }
@@ -528,10 +534,33 @@ final class AppState {
             if let v = patch.fat { entry.fat = v }
             if let v = patch.fiber { entry.fiber = v }
             if let v = patch.servingsConsumed { entry.servings_consumed = v }
+            if let v = patch.loggedAt { entry.logged_at = v }
         }
         if let i = todayLog.firstIndex(where: { $0.id == id }) { apply(&todayLog[i]) }
         if let i = dashboardRecentMeals.firstIndex(where: { $0.id == id }) { apply(&dashboardRecentMeals[i]) }
-        await syncDayMacrosToHealthKit(dateKey: dateKey)
+
+        // Resolve the new day for HK recompute + visible-day membership.
+        let newDateKey: String
+        if let raw = patch.loggedAt, let d = Self.parseISOTimestamp(raw) {
+            newDateKey = Self.localDateKey(for: d)
+        } else {
+            newDateKey = oldDateKey
+        }
+        if newDateKey != oldDateKey {
+            // Day shifted. Drop from todayLog if it no longer matches the
+            // visible day; re-fetch the entry into todayLog if it now
+            // does (covers the rarer case of editing an off-day entry
+            // FROM a different visible day).
+            let visibleKey = Self.localDateKey(for: selectedDate)
+            if newDateKey != visibleKey {
+                todayLog.removeAll { $0.id == id }
+            } else if !todayLog.contains(where: { $0.id == id }),
+                      let row = dashboardRecentMeals.first(where: { $0.id == id }) {
+                todayLog.insert(row, at: 0)
+            }
+            await syncDayMacrosToHealthKit(dateKey: oldDateKey)
+        }
+        await syncDayMacrosToHealthKit(dateKey: newDateKey)
     }
 
     /// Delete a meal_log entry and prune both dashboard slices locally.

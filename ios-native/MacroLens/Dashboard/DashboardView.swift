@@ -379,6 +379,14 @@ private struct EditMealSheet: View {
     @State private var carbs: Double
     @State private var fat: Double
     @State private var fiber: Double
+    /// The entry's logged_at, surfaced as a Date for SwiftUI's
+    /// DatePicker so users can retroactively shift an entry to a past
+    /// day or move it earlier/later in the day. The original timestamp
+    /// is captured separately (`originalLoggedAt`) so we only send the
+    /// logged_at column on save when the user actually changed it —
+    /// matches the rest of the patch's "nil means don't touch" rule.
+    @State private var loggedAtDate: Date
+    private let originalLoggedAt: Date
     @State private var saving = false
     @State private var deleting = false
     @State private var errorMessage: String?
@@ -400,6 +408,17 @@ private struct EditMealSheet: View {
         self.baseCarbs    = (entry.carbs    ?? 0) / consumed
         self.baseFat      = (entry.fat      ?? 0) / consumed
         self.baseFiber    = (entry.fiber    ?? 0) / consumed
+        // Resolve the entry's logged_at into a Date for the DatePicker.
+        // Falls back to "now" if the row somehow has no timestamp — at
+        // worst the user re-saves and the column gets a fresh value
+        // (rare; meal_log rows always have logged_at on insert).
+        let parsed: Date = {
+            if let raw = entry.logged_at,
+               let d = AppState.parseISOTimestamp(raw) { return d }
+            return Date()
+        }()
+        self.originalLoggedAt = parsed
+        _loggedAtDate = State(initialValue: parsed)
         _name = State(initialValue: entry.name ?? "")
         _mealType = State(initialValue: entry.meal_type?.lowercased() ?? Self.inferMealType(entry.logged_at))
         _servings = State(initialValue: consumed)
@@ -425,6 +444,23 @@ private struct EditMealSheet: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                }
+
+                Section {
+                    // Date+time picker for retroactive shift. `in: ...today`
+                    // matches the dashboard's chevron clamp — the macros
+                    // dashboard isn't designed for future-dated logs.
+                    DatePicker(
+                        "Logged at",
+                        selection: $loggedAtDate,
+                        in: ...Date(),
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                } header: {
+                    Text("When")
+                } footer: {
+                    Text("Move this entry to a different time or day. Changing the date updates that day's macro totals (and Apple Health, if enabled).")
+                        .font(.system(size: 11))
                 }
 
                 Section("Servings") {
@@ -509,6 +545,10 @@ private struct EditMealSheet: View {
         saving = true
         errorMessage = nil
         defer { saving = false }
+        // Only ship logged_at when the user actually moved the picker —
+        // a no-op picker should not blank or rewrite the column. Tolerance
+        // is 1s because DatePicker can wobble sub-second on display.
+        let movedTimestamp = abs(loggedAtDate.timeIntervalSince(originalLoggedAt)) > 1
         let patch = MealEntryPatch(
             name: name.trimmingCharacters(in: .whitespaces),
             mealType: mealType,
@@ -517,7 +557,8 @@ private struct EditMealSheet: View {
             carbs: carbs,
             fat: fat,
             fiber: fiber,
-            servingsConsumed: servings
+            servingsConsumed: servings,
+            loggedAt: movedTimestamp ? ISO8601DateFormatter().string(from: loggedAtDate) : nil
         )
         do {
             try await state.updateMealLogEntry(id: entry.id, patch)

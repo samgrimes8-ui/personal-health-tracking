@@ -385,6 +385,10 @@ enum DBService {
     // Update + delete entry. AppState.logMeal already covers the insert
     // path on the main actor (it splices into todayLog locally).
     static func updateMealEntry(id: String, _ patch: MealEntryPatch) async throws {
+        // Custom encode so unset fields drop entirely rather than send
+        // JSON null — meal_log.logged_at is NOT NULL in Postgres, so a
+        // patch that doesn't touch logged_at must omit the column to
+        // avoid blanking it.
         struct Payload: Encodable {
             let name: String?
             let meal_type: String?
@@ -394,6 +398,20 @@ enum DBService {
             let fat: Double?
             let fiber: Double?
             let servings_consumed: Double?
+            let logged_at: String?
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: DynamicKey.self)
+                if let v = name { try c.encode(v, forKey: DynamicKey("name")) }
+                if let v = meal_type { try c.encode(v, forKey: DynamicKey("meal_type")) }
+                if let v = calories { try c.encode(v, forKey: DynamicKey("calories")) }
+                if let v = protein { try c.encode(v, forKey: DynamicKey("protein")) }
+                if let v = carbs { try c.encode(v, forKey: DynamicKey("carbs")) }
+                if let v = fat { try c.encode(v, forKey: DynamicKey("fat")) }
+                if let v = fiber { try c.encode(v, forKey: DynamicKey("fiber")) }
+                if let v = servings_consumed { try c.encode(v, forKey: DynamicKey("servings_consumed")) }
+                if let v = logged_at { try c.encode(v, forKey: DynamicKey("logged_at")) }
+            }
         }
         let userId = try await currentUserID()
         try await client
@@ -406,7 +424,8 @@ enum DBService {
                 carbs: patch.carbs,
                 fat: patch.fat,
                 fiber: patch.fiber,
-                servings_consumed: patch.servingsConsumed
+                servings_consumed: patch.servingsConsumed,
+                logged_at: patch.loggedAt
             ))
             .eq("id", value: id)
             .eq("user_id", value: userId)
@@ -646,6 +665,10 @@ struct MealEntryPatch {
     var fat: Double?
     var fiber: Double?
     var servingsConsumed: Double?
+    /// ISO8601 timestamp. When set, retroactively shifts the entry's
+    /// logged_at — used by the Edit Meal sheet's date+time picker so
+    /// users can move an entry to a past day after the fact.
+    var loggedAt: String?
 }
 
 struct ProfilePatch {
