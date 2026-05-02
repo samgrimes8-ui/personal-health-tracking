@@ -127,31 +127,36 @@ final class HealthKitService {
         HKQuantityType(.dietaryFatTotal)
     ]
 
-    /// Replace-on-write: deletes any existing daily-total samples for
-    /// `dateKey` (matched by metadata, scoped to our app's source by
-    /// HKHealthStore's own enforcement), then writes 4 fresh samples.
-    /// Atomicity is best-effort — between the delete and the save HK
-    /// would briefly show no totals for that day; for the user's own
-    /// app this race is invisible.
+    /// Replace-on-write: deletes any existing MacroLens samples in the
+    /// day's time range (both new daily-total and legacy per-meal),
+    /// then writes 4 fresh daily-total samples. The compound delete
+    /// predicate makes the push self-healing — it cleans up legacy
+    /// per-meal samples that iCloud might have resurrected from another
+    /// device + double-pushed daily totals from a v1 push that didn't
+    /// match metadata cleanly.
     ///
     /// `dateKey` MUST be `YYYY-MM-DD` in the user's local TZ — that's
     /// what the migration writes too, so the same key matches across
     /// reads and writes regardless of process restart.
     ///
-    /// `start` should be local midnight; `end` should be `Date()` for
-    /// today (HK rejects future-dated samples for some types) and end
-    /// of day for past dates (so the sample shows up "on" that day).
+    /// `start`/`end` are the sample times shown in HK (start = local
+    /// midnight; end = `Date()` for today, end-of-day for past dates).
+    /// `dayStart`/`dayEnd` define the delete window — usually
+    /// [local-midnight, next-midnight) so we catch any sample whose
+    /// start is anywhere in the day in user's TZ.
     func pushDailyMacroTotal(
         dateKey: String,
         start: Date,
         end: Date,
+        dayStart: Date,
+        dayEnd: Date,
         kcal: Double,
         protein: Double,
         carbs: Double,
         fat: Double
     ) async throws {
         guard isAvailable else { throw HealthKitError.notAvailable }
-        try await clearDailyMacroTotal(dateKey: dateKey)
+        try await clearDailyMacroTotal(dateKey: dateKey, dayStart: dayStart, dayEnd: dayEnd)
         let metadata: [String: Any] = ["macrolens_daily_total": dateKey]
         let samples: [HKQuantitySample] = [
             HKQuantitySample(
@@ -182,20 +187,29 @@ final class HealthKitService {
         }
     }
 
-    /// Removes the daily-total samples for a given dateKey. Used when
-    /// the day's meal_log goes empty after a delete — we'd rather show
-    /// "no entry" in HK than four zero samples.
-    func clearDailyMacroTotal(dateKey: String) async throws {
+    /// Self-healing daily-total cleanup. Deletes anything we wrote that
+    /// falls within [dayStart, dayEnd) — that catches:
+    ///   - daily-total samples for this dateKey (current model)
+    ///   - daily-total samples whose dateKey was different (e.g. TZ
+    ///     change between writes — predicate matches by metadata key
+    ///     existence, not specific value)
+    ///   - legacy per-meal samples (metadata.macrolens_meal_id) within
+    ///     this day, which the v1 migration may have missed if iCloud
+    ///     re-synced them from another device
+    /// HK enforces own-source ownership on delete so we never touch
+    /// the user's other-app data.
+    func clearDailyMacroTotal(dateKey: String, dayStart: Date, dayEnd: Date) async throws {
         guard isAvailable else { return }
-        let predicate = HKQuery.predicateForObjects(
-            withMetadataKey: "macrolens_daily_total",
-            operatorType: .equalTo,
-            value: dateKey
+        let timeRange = HKQuery.predicateForSamples(
+            withStart: dayStart, end: dayEnd, options: [.strictStartDate]
         )
+        let isDailyTotal = HKQuery.predicateForObjects(withMetadataKey: "macrolens_daily_total")
+        let isLegacyMeal = HKQuery.predicateForObjects(withMetadataKey: "macrolens_meal_id")
+        let ours = NSCompoundPredicate(orPredicateWithSubpredicates: [isDailyTotal, isLegacyMeal])
+        let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [timeRange, ours])
         for type in Self.dietaryTypes {
-            // HK only lets an app delete its own samples (Apple-enforced
-            // at the framework level), so we don't need an HKSource
-            // predicate here. Returns success+count=0 if nothing matched.
+            // Returns success+count=0 if nothing matched — no exception
+            // for empty deletes, so try? swallows transient auth issues.
             _ = try? await store.deleteObjects(of: type, predicate: predicate)
         }
     }

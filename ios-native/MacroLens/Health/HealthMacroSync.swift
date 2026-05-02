@@ -14,6 +14,15 @@ import Supabase
 ///
 /// All entry points are no-ops if the pushMacros toggle is off — callers
 /// don't need to gate themselves.
+///
+/// TIME ZONE CONTRACT (important — root cause of the v1 drift bug):
+///   - logged_at on meal_log is an ISO8601 string in UTC ("…Z")
+///   - "Today" + day-grouping is in the user's local TZ
+///   - DO NOT use `logged_at.hasPrefix(localDateKey)` — that's a UTC
+///     prefix matched against a local key, which mis-buckets evening
+///     meals in TZs west of UTC. Always parse the ISO string into a
+///     Date and re-format in `.current` to compare apples to apples.
+///   - This mirrors AppState.filterToToday — keep them in lockstep.
 extension AppState {
 
     // ─── Per-day recompute + push ──────────────────────────────────────
@@ -38,13 +47,24 @@ extension AppState {
 
     /// Used by the meal mutation methods to capture an entry's day BEFORE
     /// the mutation runs (so a delete still knows which day to recompute).
-    /// Falls back to today if the entry isn't in any local slice.
+    /// Falls back to today if the entry isn't in any local slice. Parses
+    /// logged_at into a Date + reformats local-TZ to avoid the UTC-prefix
+    /// trap (see file header).
     func dateKeyForMeal(id: String) -> String {
-        if let e = todayLog.first(where: { $0.id == id }), let s = e.logged_at {
-            return String(s.prefix(10))
+        let lookup: (MealLogEntry) -> String? = { entry in
+            guard let raw = entry.logged_at else { return nil }
+            if let d = AppState.parseISOTimestamp(raw) {
+                return Self.localDateKey(for: d)
+            }
+            // No timestamp parses; fall back to the raw 10-char prefix
+            // — bug-for-bug compatible with the dashboard's fallback.
+            return String(raw.prefix(10))
         }
-        if let e = dashboardRecentMeals.first(where: { $0.id == id }), let s = e.logged_at {
-            return String(s.prefix(10))
+        if let e = todayLog.first(where: { $0.id == id }), let key = lookup(e) {
+            return key
+        }
+        if let e = dashboardRecentMeals.first(where: { $0.id == id }), let key = lookup(e) {
+            return key
         }
         return Self.localDateKey(for: Date())
     }
@@ -58,13 +78,16 @@ extension AppState {
 
     // ─── Migration: legacy per-meal samples → daily totals + 90d backfill
 
-    /// One-shot migration. Triggered from AppShell .task; gated by a
-    /// per-user UserDefaults flag so it runs at most once per user per
-    /// device. Steps:
-    ///   1. Wipe legacy per-meal samples (metadata.macrolens_meal_id)
-    ///   2. Backfill the last 90 days under the new daily-total model
-    ///   3. Stamp the flag so we don't re-run
-    ///
+    /// Per-user UserDefaults key. Bumped to v2 in the drift-fix commit so
+    /// existing users re-run the migration with the TZ-correct grouping
+    /// + the self-healing push (legacy samples on every push). v1 users
+    /// who already had the flag set get re-migrated automatically.
+    private static func migrationFlagKey(userId: String) -> String {
+        "hk_macros_daily_total_migration_v2_\(userId)"
+    }
+
+    /// Gated migration runner. Triggered from AppState.loadDashboard;
+    /// runs at most once per user per device unless `force: true`.
     /// Skipped silently if the pushMacros toggle is off (no permission
     /// + no need — the user opted out of macro sync).
     func runHealthKitMacroDailyTotalMigrationIfNeeded() async {
@@ -73,9 +96,21 @@ extension AppState {
         do { userId = try await SupabaseService.client.auth.session.user.id.uuidString }
         catch { return }
         guard HealthKitService.isToggleOn(.pushMacros, userId: userId) else { return }
-        let flagKey = "hk_macros_daily_total_migration_v1_\(userId)"
-        if UserDefaults.standard.bool(forKey: flagKey) { return }
+        await runHealthKitMacroDailyTotalMigration(userId: userId, force: false)
+    }
 
+    /// Force-runnable migration. Used by the toggle-on path + the
+    /// "Resync to Apple Health" debug button. Steps:
+    ///   1. Wipe legacy per-meal samples (metadata.macrolens_meal_id)
+    ///   2. Backfill the last 90 days under the daily-total model.
+    ///      pushDailyMacroTotal is itself self-healing — it re-deletes
+    ///      anything in the day's window before writing — so this also
+    ///      cleans up double-pushed samples from a previous v1 run.
+    ///   3. Stamp the v2 flag so the gated path skips on next launch.
+    func runHealthKitMacroDailyTotalMigration(userId: String, force: Bool) async {
+        guard HealthKitService.shared.isAvailable else { return }
+        let flagKey = Self.migrationFlagKey(userId: userId)
+        if !force && UserDefaults.standard.bool(forKey: flagKey) { return }
         do {
             try await HealthKitService.shared.deleteLegacyPerMealSamples()
             try await backfillDailyMacroTotals(userId: userId, days: 90)
@@ -85,12 +120,25 @@ extension AppState {
         }
     }
 
+    /// Manual reset for the "Resync to Apple Health" button. Clears the
+    /// flag and re-runs the migration with force=true. Returns when
+    /// done so the caller can show a "Done" status.
+    func resyncMacrosToHealthKit() async {
+        let userId: String
+        do { userId = try await SupabaseService.client.auth.session.user.id.uuidString }
+        catch { return }
+        UserDefaults.standard.removeObject(forKey: Self.migrationFlagKey(userId: userId))
+        await runHealthKitMacroDailyTotalMigration(userId: userId, force: true)
+    }
+
     /// Backfill `days` worth of daily totals. Used by the migration AND
-    /// when the user flips the pushMacros toggle on for the first time
-    /// (HealthSettingsSection runs this directly so the user sees the
-    /// last 90 days of macros in HK immediately).
+    /// when the user flips the pushMacros toggle on for the first time.
+    /// Group-by-day uses the parse-then-local-TZ-format pattern (see
+    /// file header) so evening meals near midnight bucket into the
+    /// correct day.
     func backfillDailyMacroTotals(userId: String, days: Int) async throws {
-        let cal = Calendar(identifier: .gregorian)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
         let today = cal.startOfDay(for: Date())
         guard let from = cal.date(byAdding: .day, value: -(days - 1), to: today) else { return }
         let fromKey = Self.localDateKey(for: from)
@@ -103,17 +151,20 @@ extension AppState {
             .execute()
             .value
 
-        // Group by the day prefix of logged_at — same convention as the
-        // dashboard's filterToToday + DaySummary.build. ISO8601 strings
-        // start with YYYY-MM-DD; we trust that prefix as the day key.
+        // Group by local-TZ day. Parse ISO → re-format `.current` so a
+        // PST 10pm meal (UTC next-day) buckets into PST today, not PST
+        // tomorrow. Same rule the dashboard's filterToToday uses.
         let groups = Dictionary(grouping: entries) { entry -> String in
-            String((entry.logged_at ?? "").prefix(10))
+            guard let raw = entry.logged_at else { return "" }
+            if let d = AppState.parseISOTimestamp(raw) {
+                return Self.localDateKey(for: d)
+            }
+            return String(raw.prefix(10))
         }
 
         for (dateKey, dayEntries) in groups {
-            // Defensive: skip rows with malformed/missing logged_at.
-            // YYYY-MM-DD is exactly 10 chars; anything shorter means
-            // the row didn't have a timestamp prefix.
+            // Skip rows with malformed/missing logged_at — they end up
+            // grouped under "" or a sub-10-char prefix.
             guard dateKey.count == 10 else { continue }
             let totals = DailyMacroTotals.sum(dayEntries)
             try await applyDayMacrosToHealthKit(dateKey: dateKey, totals: totals)
@@ -123,11 +174,12 @@ extension AppState {
     // ─── Internals ─────────────────────────────────────────────────────
 
     /// Sum kcal/protein/carbs/fat for one local date by querying
-    /// meal_log with a one-day timestamp window. Filters client-side on
-    /// the local YYYY-MM-DD prefix to match how the dashboard slices
-    /// "today's" meals — keeps native + web in sync on the day boundary.
+    /// meal_log and filtering with the parse-then-local-TZ-format
+    /// pattern (see file header). Mirrors AppState.filterToToday so
+    /// MacroLens dashboard totals + HK totals always match.
     private func fetchDayMealTotals(userId: String, dateKey: String) async throws -> DailyMacroTotals {
-        let cal = Calendar(identifier: .gregorian)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.timeZone = .current
@@ -136,11 +188,10 @@ extension AppState {
               let next = cal.date(byAdding: .day, value: 1, to: day) else {
             return DailyMacroTotals()
         }
-        // Query a slightly wider window than strictly needed (using the
-        // YYYY-MM-DD bound which Postgres reads as UTC midnight) and
-        // then filter precisely on the prefix. Mirror of the
-        // dashboard's filterToToday pattern — local-day prefix is the
-        // contract MacroLens uses everywhere.
+        // Query a wider-than-needed window using the YYYY-MM-DD bound
+        // (Postgres reads it as UTC midnight). Then filter precisely
+        // client-side in the user's local TZ. The wider window covers
+        // the worst-case 24h TZ skew between UTC and local.
         let prevKey = f.string(from: cal.date(byAdding: .day, value: -1, to: day) ?? day)
         let nextKey = f.string(from: next)
         let entries: [MealLogEntry] = try await SupabaseService.client
@@ -151,15 +202,22 @@ extension AppState {
             .lt("logged_at", value: nextKey)
             .execute()
             .value
-        let dayEntries = entries.filter { ($0.logged_at ?? "").hasPrefix(dateKey) }
+        let dayEntries = entries.filter { entry in
+            guard let raw = entry.logged_at else { return false }
+            if let d = AppState.parseISOTimestamp(raw) {
+                return Self.localDateKey(for: d) == dateKey
+            }
+            return String(raw.prefix(10)) == dateKey
+        }
         return DailyMacroTotals.sum(dayEntries)
     }
 
     /// Push or clear depending on whether the day has any macros. The
-    /// "no zero samples" rule mirrors the brief: HK should show the day
-    /// as empty after a delete drains it, not as 0 kcal.
+    /// "no zero samples" rule: HK shows the day as empty after a delete
+    /// drains it, not as 0 kcal.
     private func applyDayMacrosToHealthKit(dateKey: String, totals: DailyMacroTotals) async throws {
-        let cal = Calendar(identifier: .gregorian)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.timeZone = .current
@@ -168,7 +226,14 @@ extension AppState {
 
         if totals.calories == 0 && totals.protein == 0
             && totals.carbs == 0 && totals.fat == 0 {
-            try await HealthKitService.shared.clearDailyMacroTotal(dateKey: dateKey)
+            // Empty-day: still call clear with the day's time range so
+            // any leftover legacy per-meal samples in that window get
+            // wiped too (clearDailyMacroTotal is also self-healing).
+            let start = cal.startOfDay(for: day)
+            let nextMidnight = cal.date(byAdding: .day, value: 1, to: start) ?? start
+            try await HealthKitService.shared.clearDailyMacroTotal(
+                dateKey: dateKey, dayStart: start, dayEnd: nextMidnight
+            )
             return
         }
 
@@ -184,6 +249,11 @@ extension AppState {
             dateKey: dateKey,
             start: start,
             end: end,
+            // dayStart/nextMidnight are passed for the self-healing
+            // delete predicate inside pushDailyMacroTotal — it nukes
+            // any of our samples in that range, daily-total or legacy.
+            dayStart: start,
+            dayEnd: nextMidnight,
             kcal: totals.calories,
             protein: totals.protein,
             carbs: totals.carbs,

@@ -25,6 +25,8 @@ struct HealthSettingsSection: View {
     @State private var pulling: Bool = false
     @State private var pullStatus: String?
     @State private var pullError: String?
+    @State private var resyncing: Bool = false
+    @State private var resyncStatus: String?
 
     var body: some View {
         Card {
@@ -81,6 +83,11 @@ struct HealthSettingsSection: View {
 
                     if let denied = lastDenied {
                         deniedHint(for: denied)
+                    }
+
+                    if pushMacrosOn {
+                        Divider().background(Theme.border).padding(.vertical, 2)
+                        resyncRow(userId: userId)
                     }
                 } else {
                     Text("Sign in to enable Apple Health sync.")
@@ -155,11 +162,14 @@ struct HealthSettingsSection: View {
                     await runPull(userId: userId)
                 }
                 if permission == .pushMacros {
-                    // Backfill the last 90 days of daily totals to HK so
-                    // the user sees their MacroLens history immediately
-                    // after enabling. Idempotent — pushDailyMacroTotal
-                    // replaces samples by metadata key on every write.
-                    try? await state.backfillDailyMacroTotals(userId: userId, days: 90)
+                    // Route through the migration runner with force=true
+                    // so the toggle-on path also wipes any legacy
+                    // per-meal samples (covers users who toggled off,
+                    // missed the gated migration, then re-toggled on).
+                    // Backfills the last 90 days of daily totals.
+                    await state.runHealthKitMacroDailyTotalMigration(
+                        userId: userId, force: true
+                    )
                 }
             } else {
                 revertToggle(permission)
@@ -200,6 +210,57 @@ struct HealthSettingsSection: View {
         } catch {
             pullError = "Couldn't read from Apple Health: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - Resync (manual drift recovery)
+
+    /// "Resync to Apple Health" row. Force-runs the migration: wipes
+    /// every legacy per-meal sample we ever wrote + re-pushes the last
+    /// 90 days of daily totals. Useful when HK shows drift from
+    /// MacroLens — typically because iCloud Health sync resurrected
+    /// legacy samples from another device.
+    private func resyncRow(userId: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Resync to Apple Health")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                    Text("Wipes MacroLens entries from Apple Health and re-pushes the last 90 days. Use if Health doesn't match the app.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                if resyncing {
+                    ProgressView()
+                } else {
+                    Button {
+                        Task { await runResync(userId: userId) }
+                    } label: {
+                        Text("Resync")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.accentFG)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .background(Theme.accent, in: .rect(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            if let resyncStatus {
+                Text(resyncStatus)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+        }
+    }
+
+    private func runResync(userId: String) async {
+        resyncing = true
+        resyncStatus = nil
+        defer { resyncing = false }
+        await state.resyncMacrosToHealthKit()
+        resyncStatus = "Re-pushed the last 90 days. Open Apple Health → Nutrition to verify."
     }
 
     // MARK: - Denied hint
