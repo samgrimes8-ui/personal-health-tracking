@@ -382,8 +382,8 @@ struct QuickLogSection: View {
         }
     }
 
-    /// Hit food_items + meal_log in parallel for the current query,
-    /// merge with the in-memory recipe library, and dedupe.
+    /// Hit food_items + meal_log + generic_foods in parallel for the
+    /// current query, merge with the in-memory recipe library, and dedupe.
     /// Errors are swallowed so a transient network blip just shows
     /// "no matches" with the AI describe fallback (instead of an error
     /// banner that doesn't help the user).
@@ -392,18 +392,20 @@ struct QuickLogSection: View {
         defer { searching = false }
         async let foods: [QuickLogItem] = (try? await searchFoodItems(q)) ?? []
         async let meals: [QuickLogItem] = (try? await searchMealLog(q)) ?? []
+        async let generics: [QuickLogItem] = (try? await searchGenericFoods(q)) ?? []
         let foodHits = await foods
         let mealHits = await meals
+        let genericHits = await generics
         if Task.isCancelled { return }
 
         var seenFoodIds = Set<String>()
         var seenNames = Set<String>()
         var out: [QuickLogItem] = []
-        // Order: food_items first (canonical, with brand info), then
-        // meal_log history (deduped against the food_items set), then
-        // recipe library — so a search that matches a saved food shows
-        // the food row instead of a redundant meal_log row.
-        for item in foodHits + mealHits {
+        // Order: user's own food_items first (canonical + brand info), then
+        // meal_log history, then USDA generic_foods, then recipe library.
+        // The user's own data wins ties so a personalized "Joe's protein
+        // shake" beats a generic USDA row for the same lowercased name.
+        for item in foodHits + mealHits + genericHits {
             if let fid = item.foodItemId, seenFoodIds.contains(fid) { continue }
             let nameKey = item.name.lowercased()
             if seenNames.contains(nameKey) { continue }
@@ -432,6 +434,54 @@ struct QuickLogSection: View {
         }
         searchResults = Array(out.prefix(20))
         lastSearchedQuery = q
+    }
+
+    /// USDA-sourced generic foods (avocado, banana, oats, …). Read-only
+    /// shared table; populated by scripts/import-usda-foods.js. Hits two
+    /// columns in parallel — `name` for substring match and `aliases`
+    /// for the depluralized/comma-stripped variants — then merges by id.
+    /// Lets a known-good generic food short-circuit the AI describe
+    /// fallback, which is the whole point of the table.
+    private func searchGenericFoods(_ q: String) async throws -> [QuickLogItem] {
+        let pattern = "%\(escapeLike(q))%"
+        async let byName: [GenericFoodRow] = (try? await SupabaseService.client
+            .from("generic_foods")
+            .select()
+            .ilike("name", pattern: pattern)
+            .order("name", ascending: true)
+            .limit(8)
+            .execute()
+            .value) ?? []
+        async let byAlias: [GenericFoodRow] = (try? await SupabaseService.client
+            .from("generic_foods")
+            .select()
+            .contains("aliases", value: [q.lowercased()])
+            .limit(4)
+            .execute()
+            .value) ?? []
+        let nameHits = await byName
+        let aliasHits = await byAlias
+        var seen = Set<String>()
+        var out: [QuickLogItem] = []
+        // Alias hits first — an exact alias like "banana" should beat a
+        // partial name match like "Banana cream pie".
+        for row in aliasHits + nameHits {
+            if !seen.insert(row.id).inserted { continue }
+            out.append(QuickLogItem(
+                id: "generic-\(row.id)",
+                name: row.name,
+                calories: row.kcal ?? 0,
+                protein: row.protein_g ?? 0,
+                carbs: row.carbs_g ?? 0,
+                fat: row.fat_g ?? 0,
+                fiber: row.fiber_g ?? 0,
+                recipeId: nil,
+                foodItemId: nil,
+                foodItem: nil,
+                kind: .generic
+            ))
+        }
+        return out
     }
 
     /// Case-insensitive substring search on food_items, hitting both
@@ -546,7 +596,8 @@ struct QuickLogSection: View {
                 carbs: result.carbs,
                 fat: result.fat,
                 fiber: result.fiber ?? 0,
-                loggedAt: state.loggedAtForSelectedDate()
+                loggedAt: state.loggedAtForSelectedDate(),
+                fullLabel: AppState.FullLabelPayload.from(result)
             )
             // Reset the search field so the user sees the toast +
             // returns to the preload sections (which will now include
@@ -626,20 +677,22 @@ struct QuickLogSection: View {
 
 private struct QuickLogItem: Identifiable, Hashable {
     enum Kind {
-        case recipe, recent, food
+        case recipe, recent, food, generic
 
         var icon: String {
             switch self {
-            case .recipe: return "book.fill"
-            case .recent: return "clock.arrow.circlepath"
-            case .food:   return "leaf.fill"
+            case .recipe:  return "book.fill"
+            case .recent:  return "clock.arrow.circlepath"
+            case .food:    return "leaf.fill"
+            case .generic: return "fork.knife"
             }
         }
         var tint: Color {
             switch self {
-            case .recipe: return Theme.accent
-            case .recent: return Theme.text3
-            case .food:   return Theme.carbs
+            case .recipe:  return Theme.accent
+            case .recent:  return Theme.text3
+            case .food:    return Theme.carbs
+            case .generic: return Theme.protein
             }
         }
     }
