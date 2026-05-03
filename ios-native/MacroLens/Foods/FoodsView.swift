@@ -355,10 +355,14 @@ struct FoodsView: View {
 
     /// Display label for a food card's serving cell. Order of preference:
     /// serving_description (structured, AI-supplied), serving_size
-    /// (free-text legacy), or the literal "1 serving".
+    /// (free-text legacy), or a tap-to-set affordance for legacy rows
+    /// that pre-date the serving-info migration. The bare "1 serving"
+    /// default isn't useful — it doesn't say what one serving IS — so
+    /// we surface the affordance instead, which routes the user into
+    /// the editor (the card's tap target opens it already).
     private func servingLabel(_ f: FoodItemRow) -> String {
         if let desc = f.serving_description, !desc.isEmpty { return desc }
-        if let s = f.serving_size, !s.isEmpty { return s }
-        return "1 serving"
+        if let s = f.serving_size, !s.isEmpty, s != "1 serving" { return s }
+        return "Size unknown — tap to set"
     }
 }
