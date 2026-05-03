@@ -8,6 +8,10 @@ struct DashboardView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(AppState.self) private var state
     @State private var editingEntry: MealLogEntry?
+    /// Set while a planned-meal toggle is in flight so a fast double-tap
+    /// can't fire two inserts before the first round-trip resolves.
+    /// Cleared in defer regardless of success/failure.
+    @State private var togglingPlannerId: String?
 
     var body: some View {
         ScrollView {
@@ -89,9 +93,25 @@ struct DashboardView: View {
         // Entries arrive newest-first (loadDashboard sorts by logged_at
         // desc); we re-sort each bucket oldest-first so the day reads
         // chronologically inside each section.
+        //
+        // Planned meals from meal_planner.actual_date == selectedDate get
+        // rendered as check-off placeholders ABOVE the consumed rows in
+        // each meal_type section — same layout the web's renderTodayMeals
+        // uses (src/pages/app.js). The "consumed" state is computed by
+        // name-matching the planned row against today's meal_log; web has
+        // no consumed_at column and we mirror that 1:1 so the two stay
+        // consistent.
         let buckets = Self.bucketByMealType(state.todayLog)
-        let active = Self.mealTypeOrder.filter { !(buckets[$0]?.isEmpty ?? true) }
+        let plannedBuckets = Self.bucketPlannedByMealType(state.todayPlanned)
+        let active = Self.mealTypeOrder.filter {
+            !(buckets[$0]?.isEmpty ?? true) || !(plannedBuckets[$0]?.isEmpty ?? true)
+        }
         let isToday = Calendar.current.isDateInToday(state.selectedDate)
+        // Lowercased meal_log names — drives the planned-row strikethrough.
+        // Recomputed per render because state.todayLog is @Observable.
+        let consumedNames: Set<String> = Set(
+            state.todayLog.compactMap { $0.name?.lowercased() }
+        )
 
         return VStack(alignment: .leading, spacing: 0) {
             // Date-nav header. Chevron-left walks one day backward;
@@ -153,7 +173,7 @@ struct DashboardView: View {
 
             Divider().background(Theme.border)
 
-            if state.todayLog.isEmpty {
+            if active.isEmpty {
                 Text(isToday
                      ? "No entries yet. Analyze a meal to get started."
                      : "Nothing logged on this day. Use the search or Analyze section above to log retroactively.")
@@ -168,7 +188,17 @@ struct DashboardView: View {
                     let entries = (buckets[mealType] ?? []).sorted {
                         ($0.logged_at ?? "") < ($1.logged_at ?? "")
                     }
+                    let plans = plannedBuckets[mealType] ?? []
                     mealTypeSectionHeader(mealType, entries: entries)
+                    // Planned rows first — they're placeholders the user
+                    // hasn't acted on yet, so they read as a to-do above
+                    // the actual log entries. Web does the same ordering.
+                    ForEach(plans) { plan in
+                        plannedRow(plan, isConsumed: consumedNames.contains(
+                            (plan.meal_name ?? "").lowercased()
+                        ))
+                        Divider().background(Theme.border).padding(.leading, 20)
+                    }
                     ForEach(entries) { entry in
                         mealRow(entry)
                         Divider().background(Theme.border).padding(.leading, 20)
@@ -261,6 +291,26 @@ struct DashboardView: View {
         return out
     }
 
+    /// Bucket planned meal_planner rows by meal_type, mirroring the same
+    /// fallback chain bucketByMealType uses for meal_log: prefer the
+    /// row's own meal_type, otherwise position-fallback so an unlabeled
+    /// planner row still lands somewhere sensible. Web does the same
+    /// (renderTodayMeals: `m.meal_type || MEAL_TYPES[Math.min(i, len-1)]`).
+    private static func bucketPlannedByMealType(_ rows: [PlannerRow]) -> [String: [PlannerRow]] {
+        var out: [String: [PlannerRow]] = [:]
+        for (i, row) in rows.enumerated() {
+            let key: String = {
+                if let raw = row.meal_type?.lowercased(),
+                   mealTypeOrder.contains(raw) {
+                    return raw
+                }
+                return mealTypeOrder[min(i, mealTypeOrder.count - 1)]
+            }()
+            out[key, default: []].append(row)
+        }
+        return out
+    }
+
     private static func normalizedMealType(_ entry: MealLogEntry) -> String {
         if let raw = entry.meal_type?.lowercased(),
            mealTypeOrder.contains(raw) {
@@ -319,6 +369,79 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.bg2, in: .rect(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+    }
+
+    /// Planned-meal placeholder row. Visually distinct from a logged
+    /// meal row: a circular checkbox on the left (filled green w/ a
+    /// checkmark when name-matched against today's meal_log), lighter
+    /// secondary text, and a "Planned · X kcal" subline so the user
+    /// understands these calories don't count against the macro tiles
+    /// until they tap to consume. Tapping toggles via
+    /// AppState.togglePlannedMeal — insert when unconsumed, delete when
+    /// consumed.
+    private func plannedRow(_ plan: PlannerRow, isConsumed: Bool) -> some View {
+        let mealName = plan.meal_name ?? "—"
+        let inFlight = togglingPlannerId == plan.id
+        return Button {
+            Task { await togglePlanned(plan) }
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .stroke(isConsumed ? Theme.protein : Theme.border2, lineWidth: 2)
+                        .frame(width: 20, height: 20)
+                    if isConsumed {
+                        Circle()
+                            .fill(Theme.protein)
+                            .frame(width: 20, height: 20)
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mealName)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(isConsumed ? Theme.text3 : Theme.text2)
+                        .strikethrough(isConsumed, color: Theme.text3)
+                        .multilineTextAlignment(.leading)
+                    Text("Planned · \(Int(plan.calories ?? 0)) kcal")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                }
+                Spacer()
+                if inFlight {
+                    ProgressView().scaleEffect(0.7)
+                } else {
+                    Text(isConsumed ? "Tap to unlog" : "Log it →")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                }
+            }
+            .padding(.horizontal, 20).padding(.vertical, 12)
+            .opacity(isConsumed ? 0.55 : 1)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(inFlight)
+    }
+
+    /// Wraps state.togglePlannedMeal in the in-flight gate + a refresh
+    /// of the visible day's planner slice so a deletion (unlog) doesn't
+    /// leave the row's checkbox state stale until the next dashboard
+    /// load. The toggle insert path already mutates todayLog locally
+    /// inside logMeal, which propagates to the consumedNames computation
+    /// on the next render.
+    private func togglePlanned(_ plan: PlannerRow) async {
+        if togglingPlannerId == plan.id { return }
+        togglingPlannerId = plan.id
+        defer { togglingPlannerId = nil }
+        do {
+            try await state.togglePlannedMeal(plan)
+        } catch {
+            // Best-effort — a transient failure just leaves the checkbox
+            // in its previous state; a pull-to-refresh re-syncs from DB.
+        }
     }
 
     private func mealRow(_ entry: MealLogEntry) -> some View {

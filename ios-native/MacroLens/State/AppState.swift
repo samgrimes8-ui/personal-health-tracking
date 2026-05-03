@@ -28,6 +28,14 @@ final class AppState {
     /// dashboardRecentMeals — 4 leaves headroom for the fill-gap rule
     /// (e.g. 0 saved meals → show 4 foods).
     var dashboardRecentFoods: [FoodItemRow] = []
+    /// Planned-but-not-yet-consumed-via-name-match meal_planner rows for
+    /// the visible day. Mirrors the web's getTodayPlannedMeals(): pulls
+    /// `actual_date == selectedDate` rows that aren't leftovers, and the
+    /// dashboard cross-references each row's `meal_name` against today's
+    /// meal_log to render a strikethrough/checkmark when consumed (the
+    /// web has no consumed_at column either — the source of truth is
+    /// the meal_log row inserted on tap).
+    var todayPlanned: [PlannerRow] = []
     var last7Days: [DaySummary] = []
     var recipes: [RecipeRow] = []
     var recentCheckins: [CheckinRow] = []
@@ -81,6 +89,7 @@ final class AppState {
             async let recentFoods = fetchRecentFoods(limit: 4)
             async let r = fetchRecipes()
             async let c = fetchRecentCheckins()
+            async let planned = fetchPlannedForDate(Self.localDateKey(for: selectedDate))
 
             let weekEntries = try await weekLog
             self.goals = (try? await g) ?? Goals()
@@ -90,6 +99,7 @@ final class AppState {
             self.dashboardRecentFoods = (try? await recentFoods) ?? []
             self.recipes = (try? await r) ?? []
             self.recentCheckins = (try? await c) ?? []
+            self.todayPlanned = (try? await planned) ?? []
         } catch {
             lastError = error.localizedDescription
         }
@@ -125,7 +135,13 @@ final class AppState {
         let snapped = Calendar.current.startOfDay(for: date)
         if Calendar.current.isDate(snapped, inSameDayAs: selectedDate) { return }
         selectedDate = snapped
-        await loadDayLog(dateKey: Self.localDateKey(for: snapped))
+        let key = Self.localDateKey(for: snapped)
+        await loadDayLog(dateKey: key)
+        // Refresh the planned-meal placeholders for the new day so the
+        // check-off rows track the date-nav. Errors are swallowed —
+        // the day's meal_log still loads even if the planner fetch
+        // hiccups, mirroring the rest of loadDashboard's tolerance.
+        self.todayPlanned = (try? await fetchPlannedForDate(key)) ?? []
     }
 
     /// Fetch one local-day's meal_log into `todayLog`. Pulls a slightly
@@ -748,6 +764,52 @@ final class AppState {
         return saved.id
     }
 
+    /// Toggle a planned meal_planner row's "consumed" state by inserting
+    /// or deleting the matching meal_log row. Mirrors web's
+    /// logPlannedMeal (src/pages/app.js):
+    ///
+    ///   • If today's log already has an entry whose name matches the
+    ///     planner row's meal_name (case-insensitive), delete that entry
+    ///     — the user is unlogging a previously-checked-off meal.
+    ///   • Otherwise, insert a meal_log row with the planner row's
+    ///     macros, recipe_id (resolved by name from state.recipes),
+    ///     meal_type, and servings_consumed: 1. The planner row stays
+    ///     untouched — meal_log is the source of truth for consumed
+    ///     state, same as web. There is no consumed_at column.
+    ///
+    /// macros come from the planner row directly because addPlannerMeal
+    /// (db.js:184) stores them as totals already (planned_servings ×
+    /// per-serving), so we don't need to recompute on consume.
+    func togglePlannedMeal(_ row: PlannerRow) async throws {
+        let name = (row.meal_name ?? "").trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        let lower = name.lowercased()
+        // Existing match by name (web's loggedNames set) — first hit wins.
+        if let existing = todayLog.first(where: { ($0.name ?? "").lowercased() == lower }) {
+            try await deleteMealLogEntry(id: existing.id)
+            return
+        }
+        // No match → log it. Resolve recipe_id by name so the meal_log
+        // row threads back to the recipe (web's logPlannedMeal does
+        // the same lookup on state.recipes). meal_type defaults to the
+        // planner row's slot; falls back to time-of-day inference if
+        // somehow missing.
+        let recipeId = recipes.first { $0.name.lowercased() == lower }?.id
+        let mealType = row.meal_type?.lowercased() ?? Self.inferMealType(at: Date())
+        try await logMeal(
+            name: name,
+            mealType: mealType,
+            calories: row.calories ?? 0,
+            protein: row.protein ?? 0,
+            carbs: row.carbs ?? 0,
+            fat: row.fat ?? 0,
+            fiber: row.fiber ?? 0,
+            recipeId: recipeId,
+            servingsConsumed: 1,
+            loggedAt: loggedAtForSelectedDate(mealType: mealType)
+        )
+    }
+
     /// Log a saved food as a single meal_log row, threading the
     /// food_item_id link through so future Quick Log searches and the
     /// Foods list both see it as a re-log of the same library item.
@@ -875,6 +937,30 @@ final class AppState {
             .execute()
             .value
         return response
+    }
+
+    /// Pull meal_planner rows for one local-day, drop leftovers, and
+    /// hand back the rest as planned placeholders. Mirrors the web's
+    /// getTodayPlannedMeals() (src/pages/app.js): excludes is_leftover
+    /// rows AND any row whose name contains "(leftover" — leftovers
+    /// shouldn't appear as a check-off row because the source meal
+    /// already accounts for them.
+    private func fetchPlannedForDate(_ dateKey: String) async throws -> [PlannerRow] {
+        let userId = try await currentUserID()
+        let rows: [PlannerRow] = try await SupabaseService.client
+            .from("meal_planner")
+            .select()
+            .eq("user_id", value: userId)
+            .eq("actual_date", value: dateKey)
+            .order("meal_type", ascending: true)
+            .execute()
+            .value
+        return rows.filter { row in
+            if row.is_leftover == true { return false }
+            let name = (row.meal_name ?? "").lowercased()
+            if name.contains("(leftover") { return false }
+            return true
+        }
     }
 
     /// Top-N most-recent food_items rows. Drives the dashboard Quick
