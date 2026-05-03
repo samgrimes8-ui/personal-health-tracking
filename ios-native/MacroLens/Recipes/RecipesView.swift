@@ -28,7 +28,12 @@ struct RecipesView: View {
     @State private var activeTag: String = ""        // "" = All, "__untagged__" = Untagged
 
     @State private var presented: PresentedRecipe?
-    @State private var planning: RecipeFull?
+    /// Plan sheet bound on the parent ONLY for the context-menu shortcut
+    /// (long-press a recipe card → Plan). The in-detail path now opens its
+    /// own local sheet on RecipeDetailView so it stacks correctly above the
+    /// detail. No stacking issue here because the context menu fires when
+    /// no detail sheet is showing.
+    @State private var planningFromCard: RecipeFull?
     @State private var sharing: RecipeFull?
     @State private var tagging: RecipeFull?
     @State private var tagOrderEditorOpen: Bool = false
@@ -98,11 +103,16 @@ struct RecipesView: View {
                         presented = nil
                         Task { await refresh() }
                     },
-                    onPlan: { recipe in
-                        planning = recipe
-                    },
                     onShare: { recipe in
                         sharing = recipe
+                    },
+                    onPlanned: {
+                        // Plan sheet now presents from inside the detail
+                        // (no parent state involved). This callback only
+                        // fires the planner refresh after a successful
+                        // save so the user sees their meal in Planner
+                        // tab without a manual reload.
+                        Task { await state.loadPlanner(weekStart: PlannerDateMath.currentWeekStart()) }
                     },
                     onChanged: { updated in
                         // Mid-swipe in-pager mutations (e.g. instructions
@@ -140,13 +150,17 @@ struct RecipesView: View {
                 }
             }
         }
-        .sheet(item: $planning) { recipe in
+        // Plan sheet for the in-detail tap is no longer presented from
+        // this parent — moved onto RecipeDetailView so the calendar
+        // picker stacks above the detail immediately. Same fix as the
+        // cooking-mode commit (151fc7e). This binding here only handles
+        // the context-menu shortcut (long-press a card → Plan), which
+        // never collides with a detail sheet.
+        .sheet(item: $planningFromCard) { recipe in
             PlanRecipeSheet(recipe: recipe) {
-                // Refresh the planner for whatever week is currently shown
-                // so a user who plans from Recipes and then switches to
-                // Planner sees the new entry without a manual reload.
                 Task { await state.loadPlanner(weekStart: PlannerDateMath.currentWeekStart()) }
             }
+            .presentationDetents([.medium, .large])
         }
         .sheet(item: $sharing) { recipe in
             RecipeShareSheet(
@@ -410,7 +424,7 @@ struct RecipesView: View {
                 Label("Tag", systemImage: "tag")
             }
             Button {
-                planning = r
+                planningFromCard = r
             } label: {
                 Label("Plan", systemImage: "calendar.badge.plus")
             }

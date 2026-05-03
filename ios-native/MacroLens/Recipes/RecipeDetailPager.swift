@@ -24,8 +24,13 @@ struct RecipeDetailPager: View {
 
     let onEdit: (RecipeFull) -> Void
     let onDeleted: () -> Void
-    let onPlan: (RecipeFull) -> Void
     let onShare: (RecipeFull) -> Void
+    /// Refresh hook fired by the per-page detail view after a successful
+    /// plan-from-recipe save. The plan sheet itself lives on the inner
+    /// detail view (so it stacks immediately above the pager); only the
+    /// post-save side effect comes back up here so the parent can refresh
+    /// the planner.
+    let onPlanned: () -> Void
     /// Lets the pager hand the latest in-pager mutations (e.g. instructions
     /// generated mid-swipe) back to RecipesView so the library list stays
     /// in sync without forcing a refetch.
@@ -37,15 +42,15 @@ struct RecipeDetailPager: View {
          initialIndex: Int,
          onEdit: @escaping (RecipeFull) -> Void,
          onDeleted: @escaping () -> Void,
-         onPlan: @escaping (RecipeFull) -> Void,
          onShare: @escaping (RecipeFull) -> Void,
+         onPlanned: @escaping () -> Void,
          onChanged: @escaping (RecipeFull) -> Void) {
         _recipes = State(initialValue: recipes)
         _index = State(initialValue: max(0, min(initialIndex, recipes.count - 1)))
         self.onEdit = onEdit
         self.onDeleted = onDeleted
-        self.onPlan = onPlan
         self.onShare = onShare
+        self.onPlanned = onPlanned
         self.onChanged = onChanged
     }
 
@@ -57,7 +62,7 @@ struct RecipeDetailPager: View {
                         recipe: r,
                         onEdit: onEdit,
                         onDeleted: onDeleted,
-                        onPlan: onPlan,
+                        onPlanned: onPlanned,
                         onShare: onShare,
                         onChanged: { updated in
                             // Update both the local pager snapshot (so the

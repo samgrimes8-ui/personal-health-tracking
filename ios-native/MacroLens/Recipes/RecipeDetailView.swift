@@ -16,7 +16,11 @@ struct RecipeDetailView: View {
     /// Hooks for the per-feature actions — wired by the parent so the
     /// detail view stays presentation-only. Defaulted to no-ops while the
     /// owning features are being built out commit-by-commit.
-    var onPlan: ((RecipeFull) -> Void)? = nil
+    /// Optional callback the parent provides so the planner can refresh
+    /// after a successful plan-from-recipe save. The plan sheet itself is
+    /// presented locally (planSheetOpen) — only the post-save side effect
+    /// goes back up to RecipesView.
+    var onPlanned: (() -> Void)? = nil
     var onShare: ((RecipeFull) -> Void)? = nil
     var onCook: ((RecipeFull) -> Void)? = nil
     /// Notified when in-page state mutates (e.g. instructions get
@@ -44,13 +48,18 @@ struct RecipeDetailView: View {
     /// view at a time" rule otherwise defers presentation until the detail
     /// sheet dismisses, which used to make tapping Cooking Mode feel broken.
     @State private var cookingModeOpen: Bool = false
+    /// Plan-this-recipe sheet — same fix pattern as cooking mode. Bound
+    /// here (not on RecipesView) so the calendar picker stacks above this
+    /// detail sheet and opens immediately, instead of queueing behind the
+    /// detail's own dismiss.
+    @State private var planSheetOpen: Bool = false
 
     enum DetailTab { case ingredients, instructions }
 
     init(recipe: RecipeFull,
          onEdit: @escaping (RecipeFull) -> Void,
          onDeleted: @escaping () -> Void,
-         onPlan: ((RecipeFull) -> Void)? = nil,
+         onPlanned: (() -> Void)? = nil,
          onShare: ((RecipeFull) -> Void)? = nil,
          onCook: ((RecipeFull) -> Void)? = nil,
          onChanged: ((RecipeFull) -> Void)? = nil,
@@ -58,7 +67,7 @@ struct RecipeDetailView: View {
         self.recipe = recipe
         self.onEdit = onEdit
         self.onDeleted = onDeleted
-        self.onPlan = onPlan
+        self.onPlanned = onPlanned
         self.onShare = onShare
         self.onCook = onCook
         self.onChanged = onChanged
@@ -116,6 +125,17 @@ struct RecipeDetailView: View {
         .fullScreenCover(isPresented: $cookingModeOpen) {
             CookingModeView(recipe: working)
         }
+        // Same fix applied to plan-this-recipe — sheet bound here, not on
+        // RecipesView, so tapping Plan opens the calendar picker
+        // immediately on top of the detail. Half-sheet detents because the
+        // calendar grid + servings + meal-type pickers feel right at
+        // .medium with the option to drag to .large.
+        .sheet(isPresented: $planSheetOpen) {
+            PlanRecipeSheet(recipe: working) {
+                onPlanned?()
+            }
+            .presentationDetents([.medium, .large])
+        }
     }
 
     // MARK: - Header
@@ -135,39 +155,36 @@ struct RecipeDetailView: View {
     /// pill row in the web sticky header.
     @ViewBuilder
     private var quickActionsRow: some View {
-        let hasPlan = onPlan != nil
         let hasShare = onShare != nil
-        if hasPlan || hasShare {
-            HStack(spacing: 8) {
-                if hasPlan {
-                    Button {
-                        onPlan?(working)
-                    } label: {
-                        Label("Plan", systemImage: "calendar.badge.plus")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.accentFG)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 9)
-                            .background(Theme.accent, in: .rect(cornerRadius: 10))
-                    }
-                    .buttonStyle(.plain)
+        HStack(spacing: 8) {
+            Button {
+                // Local state — sheet stacks above this detail view
+                // immediately. Same fix pattern as cooking mode.
+                planSheetOpen = true
+            } label: {
+                Label("Plan", systemImage: "calendar.badge.plus")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.accentFG)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Theme.accent, in: .rect(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            if hasShare {
+                Button {
+                    onShare?(working)
+                } label: {
+                    let isShared = working.is_shared == true
+                    Label(isShared ? "Shared" : "Share",
+                          systemImage: isShared ? "checkmark.circle.fill" : "square.and.arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(isShared ? Theme.protein : Theme.text2)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Theme.bg3, in: .rect(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(isShared ? Theme.protein : Theme.border2, lineWidth: 1))
                 }
-                if hasShare {
-                    Button {
-                        onShare?(working)
-                    } label: {
-                        let isShared = working.is_shared == true
-                        Label(isShared ? "Shared" : "Share",
-                              systemImage: isShared ? "checkmark.circle.fill" : "square.and.arrow.up")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(isShared ? Theme.protein : Theme.text2)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 9)
-                            .background(Theme.bg3, in: .rect(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(isShared ? Theme.protein : Theme.border2, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                }
+                .buttonStyle(.plain)
             }
         }
     }
