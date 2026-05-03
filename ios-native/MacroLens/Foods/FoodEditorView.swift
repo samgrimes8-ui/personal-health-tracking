@@ -49,6 +49,13 @@ struct FoodEditorView: View {
     @State private var addingComponent = false
     @State private var componentEditingIdx: Int?
     @State private var confirmDelete = false
+    @State private var refining = false
+    @State private var refineToast: String?
+    /// Live mirror of the row we're editing. Stays in sync with `item`
+    /// for new foods (always nil) and existing foods (initial value
+    /// from `item`); the Refine flow replaces it on apply so the form
+    /// re-hydrates with the freshly-saved values.
+    @State private var liveItem: FoodItemRow?
     @FocusState private var keyboardFocused: Bool
 
     private var isNew: Bool { item?.id == nil }
@@ -91,6 +98,7 @@ struct FoodEditorView: View {
                 }
             }
             .onAppear { hydrate() }
+            .sheet(isPresented: $refining) { refineSheetContent }
             .sheet(isPresented: $addingComponent) {
                 AddComponentSheet { newComponent in
                     components.append(newComponent)
@@ -126,6 +134,18 @@ struct FoodEditorView: View {
             } message: {
                 Text("This will remove the saved food. Logged meals already using it stay logged.")
             }
+            .overlay(alignment: .bottom) {
+                if let refineToast {
+                    Text(refineToast)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.accentFG)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(Theme.text.opacity(0.92), in: .rect(cornerRadius: 999))
+                        .padding(.bottom, 28)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: refineToast)
         }
         .presentationDetents([.large])
     }
@@ -341,6 +361,23 @@ struct FoodEditorView: View {
 
             if !isNew {
                 Button {
+                    refining = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("Refine with barcode, label, or AI…")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(Theme.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Theme.accentSoft(), in: .rect(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.accent.opacity(0.25), lineWidth: 1))
+                }
+                .disabled(saving || deleting)
+
+                Button {
                     confirmDelete = true
                 } label: {
                     Text(deleting ? "Deleting…" : "Delete food")
@@ -403,25 +440,48 @@ struct FoodEditorView: View {
 
     // MARK: - Hydrate / save / delete
 
+    @ViewBuilder
+    private var refineSheetContent: some View {
+        if let target = liveItem ?? item {
+            RefineFoodSheet(item: target, onApply: handleRefineApplied)
+        }
+    }
+
+    private func handleRefineApplied(_ updated: FoodItemRow) {
+        liveItem = updated
+        hydrate()
+        if let idx = state.foods.firstIndex(where: { $0.id == updated.id }) {
+            state.foods[idx] = updated
+        }
+        refineToast = "Updated from refine."
+        Task {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            if refineToast == "Updated from refine." { refineToast = nil }
+        }
+    }
+
     private func hydrate() {
-        guard let item else { return }
-        name = item.name
-        brand = item.brand ?? ""
-        servingSize = (item.serving_size?.isEmpty == false) ? item.serving_size! : "1 serving"
+        // Seed `liveItem` on first hydrate so subsequent refine cycles
+        // can replace it without losing the original-row reference.
+        if liveItem == nil { liveItem = item }
+        guard let source = liveItem ?? item else { return }
+        name = source.name
+        brand = source.brand ?? ""
+        servingSize = (source.serving_size?.isEmpty == false) ? source.serving_size! : "1 serving"
         // Prefer the structured serving_description when present; fall
         // back to the legacy serving_size text for older rows so the
         // editor doesn't open with a blank required field.
-        servingDescription = item.serving_description?.isEmpty == false
-            ? item.serving_description!
-            : (item.serving_size?.isEmpty == false ? item.serving_size! : "")
-        servingGramsText = item.serving_grams.map { String(format: "%g", $0) } ?? ""
-        components = item.components ?? []
-        calories = item.calories.map { String(Int($0.rounded())) } ?? ""
-        protein  = item.protein.map  { String(Int($0.rounded())) } ?? ""
-        carbs    = item.carbs.map    { String(Int($0.rounded())) } ?? ""
-        fat      = item.fat.map      { String(Int($0.rounded())) } ?? ""
-        fiber    = item.fiber.map    { String(Int($0.rounded())) } ?? ""
-        sugar    = item.sugar.map    { String(Int($0.rounded())) } ?? ""
+        servingDescription = source.serving_description?.isEmpty == false
+            ? source.serving_description!
+            : (source.serving_size?.isEmpty == false ? source.serving_size! : "")
+        servingGramsText = source.serving_grams.map { String(format: "%g", $0) } ?? ""
+        components = source.components ?? []
+        calories = source.calories.map { String(Int($0.rounded())) } ?? ""
+        protein  = source.protein.map  { String(Int($0.rounded())) } ?? ""
+        carbs    = source.carbs.map    { String(Int($0.rounded())) } ?? ""
+        fat      = source.fat.map      { String(Int($0.rounded())) } ?? ""
+        fiber    = source.fiber.map    { String(Int($0.rounded())) } ?? ""
+        sugar    = source.sugar.map    { String(Int($0.rounded())) } ?? ""
     }
 
     private func save() async {

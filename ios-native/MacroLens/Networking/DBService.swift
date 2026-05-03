@@ -414,6 +414,115 @@ enum DBService {
             .execute()
     }
 
+    /// Partial-update on food_items for the Refine flow. Only sends keys
+    /// that are non-nil on the patch — untouched columns stay as-is so a
+    /// refine of "calories + sodium" doesn't blank serving_grams. Returns
+    /// the updated row (post-write) for the caller to splice into state.
+    @discardableResult
+    static func updateFoodItem(id: String, _ patch: FoodItemPatch) async throws -> FoodItemRow {
+        struct Payload: Encodable {
+            let updated_at: String
+            let brand: String?
+            let serving_size: String?
+            let serving_description: String?
+            let serving_grams: Double?
+            let serving_oz: Double?
+            let calories: Double?
+            let protein: Double?
+            let carbs: Double?
+            let fat: Double?
+            let fiber: Double?
+            let sugar: Double?
+            let sodium: Double?
+            let saturated_fat_g: Double?
+            let trans_fat_g: Double?
+            let cholesterol_mg: Double?
+            let sodium_mg: Double?
+            let fiber_g: Double?
+            let sugar_total_g: Double?
+            let sugar_added_g: Double?
+            let vitamin_a_mcg: Double?
+            let vitamin_c_mg: Double?
+            let vitamin_d_mcg: Double?
+            let calcium_mg: Double?
+            let iron_mg: Double?
+            let potassium_mg: Double?
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: DynamicKey.self)
+                // updated_at is always written so the row's recency
+                // sorts correctly after refine.
+                try c.encode(updated_at, forKey: DynamicKey("updated_at"))
+                if let v = brand { try c.encode(v, forKey: DynamicKey("brand")) }
+                if let v = serving_size { try c.encode(v, forKey: DynamicKey("serving_size")) }
+                if let v = serving_description { try c.encode(v, forKey: DynamicKey("serving_description")) }
+                if let v = serving_grams { try c.encode(v, forKey: DynamicKey("serving_grams")) }
+                if let v = serving_oz { try c.encode(v, forKey: DynamicKey("serving_oz")) }
+                if let v = calories { try c.encode(v, forKey: DynamicKey("calories")) }
+                if let v = protein { try c.encode(v, forKey: DynamicKey("protein")) }
+                if let v = carbs { try c.encode(v, forKey: DynamicKey("carbs")) }
+                if let v = fat { try c.encode(v, forKey: DynamicKey("fat")) }
+                if let v = fiber { try c.encode(v, forKey: DynamicKey("fiber")) }
+                if let v = sugar { try c.encode(v, forKey: DynamicKey("sugar")) }
+                if let v = sodium { try c.encode(v, forKey: DynamicKey("sodium")) }
+                if let v = saturated_fat_g { try c.encode(v, forKey: DynamicKey("saturated_fat_g")) }
+                if let v = trans_fat_g { try c.encode(v, forKey: DynamicKey("trans_fat_g")) }
+                if let v = cholesterol_mg { try c.encode(v, forKey: DynamicKey("cholesterol_mg")) }
+                if let v = sodium_mg { try c.encode(v, forKey: DynamicKey("sodium_mg")) }
+                if let v = fiber_g { try c.encode(v, forKey: DynamicKey("fiber_g")) }
+                if let v = sugar_total_g { try c.encode(v, forKey: DynamicKey("sugar_total_g")) }
+                if let v = sugar_added_g { try c.encode(v, forKey: DynamicKey("sugar_added_g")) }
+                if let v = vitamin_a_mcg { try c.encode(v, forKey: DynamicKey("vitamin_a_mcg")) }
+                if let v = vitamin_c_mg { try c.encode(v, forKey: DynamicKey("vitamin_c_mg")) }
+                if let v = vitamin_d_mcg { try c.encode(v, forKey: DynamicKey("vitamin_d_mcg")) }
+                if let v = calcium_mg { try c.encode(v, forKey: DynamicKey("calcium_mg")) }
+                if let v = iron_mg { try c.encode(v, forKey: DynamicKey("iron_mg")) }
+                if let v = potassium_mg { try c.encode(v, forKey: DynamicKey("potassium_mg")) }
+            }
+        }
+        let userId = try await currentUserID()
+        let payload = Payload(
+            updated_at: ISO8601DateFormatter().string(from: Date()),
+            brand: patch.brand,
+            serving_size: patch.servingSize,
+            serving_description: patch.servingDescription,
+            serving_grams: patch.servingGrams,
+            serving_oz: patch.servingOz,
+            calories: patch.calories,
+            protein: patch.protein,
+            carbs: patch.carbs,
+            fat: patch.fat,
+            fiber: patch.fiber,
+            sugar: patch.sugar,
+            sodium: patch.sodium,
+            saturated_fat_g: patch.saturatedFatG,
+            trans_fat_g: patch.transFatG,
+            cholesterol_mg: patch.cholesterolMg,
+            sodium_mg: patch.sodiumMg,
+            fiber_g: patch.fiberG,
+            sugar_total_g: patch.sugarTotalG,
+            sugar_added_g: patch.sugarAddedG,
+            vitamin_a_mcg: patch.vitaminAMcg,
+            vitamin_c_mg: patch.vitaminCMg,
+            vitamin_d_mcg: patch.vitaminDMcg,
+            calcium_mg: patch.calciumMg,
+            iron_mg: patch.ironMg,
+            potassium_mg: patch.potassiumMg
+        )
+        let rows: [FoodItemRow] = try await client
+            .from("food_items")
+            .update(payload)
+            .eq("id", value: id)
+            .eq("user_id", value: userId)
+            .select()
+            .execute()
+            .value
+        guard let row = rows.first else {
+            throw DBServiceError.emptyInsert("food_items")
+        }
+        return row
+    }
+
     // ─── Meal log ──────────────────────────────────────────────────────
     //
     // Update + delete entry. AppState.logMeal already covers the insert
@@ -725,6 +834,38 @@ struct FoodItemUpsert {
     /// Full nutrition label (opt-in). Optional — older paths and
     /// manual edits leave them nil. The food editor only surfaces
     /// these fields when the toggle is on.
+    var saturatedFatG: Double?
+    var transFatG: Double?
+    var cholesterolMg: Double?
+    var sodiumMg: Double?
+    var fiberG: Double?
+    var sugarTotalG: Double?
+    var sugarAddedG: Double?
+    var vitaminAMcg: Double?
+    var vitaminCMg: Double?
+    var vitaminDMcg: Double?
+    var calciumMg: Double?
+    var ironMg: Double?
+    var potassiumMg: Double?
+}
+
+/// Patch payload for the Refine flow on FoodEditorView. Only non-nil
+/// fields are written; everything else stays as-is on the row. Name +
+/// components + notes are intentionally absent — those are
+/// user-customized identity fields that refine never overwrites.
+struct FoodItemPatch {
+    var brand: String?
+    var servingSize: String?
+    var servingDescription: String?
+    var servingGrams: Double?
+    var servingOz: Double?
+    var calories: Double?
+    var protein: Double?
+    var carbs: Double?
+    var fat: Double?
+    var fiber: Double?
+    var sugar: Double?
+    var sodium: Double?
     var saturatedFatG: Double?
     var transFatG: Double?
     var cholesterolMg: Double?
