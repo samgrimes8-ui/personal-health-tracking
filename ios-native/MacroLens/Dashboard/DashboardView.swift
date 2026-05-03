@@ -539,7 +539,6 @@ struct MealLogEditor: View {
 
     @State private var name: String
     @State private var mealType: String
-    @State private var servings: Double
     @State private var calories: Double
     @State private var protein: Double
     @State private var carbs: Double
@@ -558,6 +557,18 @@ struct MealLogEditor: View {
     @State private var alreadyInLibrary: Bool = false
     @State private var showingDeleteConfirm = false
     @FocusState private var keyboardFocused: Bool
+
+    /// Display unit for the amount field. Persisted across previews
+    /// in UserDefaults so a user who logs grams once gets grams next
+    /// time. Falls back to .servings when the source food doesn't
+    /// carry serving_grams (which is required for any conversion).
+    @State private var unitMode: MealLogUnitMode
+    /// Amount as displayed in the current unit. Bound to the
+    /// FractionalNumberField; the canonical servings value is
+    /// recomputed via `currentServings` whenever this commits.
+    @State private var displayedAmount: Double = 1.0
+    /// User-default key for the per-session unit preference.
+    private static let unitPreferenceKey = "macrolens.mealLogEditor.unit"
 
     /// Per-serving "base" macros — divide consumed values by servings to
     /// recover base, then re-multiply when the user changes servings.
@@ -593,33 +604,6 @@ struct MealLogEditor: View {
         return true
     }
 
-    /// Field label for the Servings input. Reads "How many medium
-    /// avocados?" when the source has a serving_description; falls back
-    /// to "Consumed" otherwise.
-    private var servingsFieldLabel: String {
-        let desc: String? = {
-            switch mode {
-            case .new(let draft): return draft.servingDescription
-            case .edit(let entry): return entry.serving_description
-            }
-        }()
-        if let unit = ServingFormat.unitNoun(description: desc), !unit.isEmpty {
-            return "How many \(unit)?"
-        }
-        return "Consumed"
-    }
-
-    private var servingDescriptionLabel: String? {
-        let desc: String? = {
-            switch mode {
-            case .new(let draft): return draft.servingDescription
-            case .edit(let entry): return entry.serving_description
-            }
-        }()
-        guard let d = desc, !d.isEmpty else { return nil }
-        return "1 serving = \(d)"
-    }
-
     init(mode: Mode, defaultLoggedAt: Date? = nil) {
         self.mode = mode
         switch mode {
@@ -639,7 +623,6 @@ struct MealLogEditor: View {
             _loggedAtDate = State(initialValue: parsed)
             _name = State(initialValue: entry.name ?? "")
             _mealType = State(initialValue: entry.meal_type?.lowercased() ?? Self.inferMealType(entry.logged_at))
-            _servings = State(initialValue: consumed)
             _calories = State(initialValue: entry.calories ?? 0)
             _protein  = State(initialValue: entry.protein  ?? 0)
             _carbs    = State(initialValue: entry.carbs    ?? 0)
@@ -659,13 +642,138 @@ struct MealLogEditor: View {
             _loggedAtDate = State(initialValue: initial)
             _name = State(initialValue: draft.name)
             _mealType = State(initialValue: AppState.inferMealType(at: initial))
-            _servings = State(initialValue: 1.0)
             _calories = State(initialValue: draft.calories)
             _protein  = State(initialValue: draft.protein)
             _carbs    = State(initialValue: draft.carbs)
             _fat      = State(initialValue: draft.fat)
             _fiber    = State(initialValue: draft.fiber)
         }
+        // Resolve initial unit from UserDefaults preference, falling back
+        // to .servings when the source food doesn't carry the gram weight
+        // needed for conversion.
+        let saved = UserDefaults.standard.string(forKey: Self.unitPreferenceKey)
+            .flatMap(MealLogUnitMode.init(rawValue:)) ?? .servings
+        let resolvedMode: MealLogUnitMode = {
+            switch saved {
+            case .servings: return .servings
+            case .grams, .ounces:
+                // Need serving_grams to do any non-servings conversion.
+                let grams: Double? = {
+                    switch mode {
+                    case .new(let d): return d.servingGrams
+                    case .edit(let e): return e.serving_grams
+                    }
+                }()
+                return grams != nil ? saved : .servings
+            }
+        }()
+        self._unitMode = State(initialValue: resolvedMode)
+        // Initial displayed amount: 1 serving's worth in the chosen unit.
+        let g: Double? = {
+            switch mode {
+            case .new(let d): return d.servingGrams
+            case .edit(let e): return e.serving_grams
+            }
+        }()
+        let oz: Double? = {
+            switch mode {
+            case .new(let d): return d.servingOz ?? d.servingGrams.map { $0 / 28.3495 }
+            case .edit(let e): return e.serving_oz ?? e.serving_grams.map { $0 / 28.3495 }
+            }
+        }()
+        let initialServings: Double = {
+            switch mode {
+            case .new: return 1.0
+            case .edit(let e): return max(0.001, e.servings_consumed ?? 1)
+            }
+        }()
+        let initialDisplayed: Double = {
+            switch resolvedMode {
+            case .servings: return initialServings
+            case .grams:    return (g.map { initialServings * $0 }) ?? initialServings
+            case .ounces:   return (oz.map { initialServings * $0 }) ?? initialServings
+            }
+        }()
+        self._displayedAmount = State(initialValue: initialDisplayed)
+    }
+
+    /// gram weight per serving (if the source food has it).
+    private var servingGrams: Double? {
+        switch mode {
+        case .new(let d): return d.servingGrams
+        case .edit(let e): return e.serving_grams
+        }
+    }
+    /// oz per serving — falls back to grams ÷ 28.3495 when the source
+    /// only carries a gram weight.
+    private var servingOz: Double? {
+        switch mode {
+        case .new(let d): return d.servingOz ?? d.servingGrams.map { $0 / 28.3495 }
+        case .edit(let e): return e.serving_oz ?? e.serving_grams.map { $0 / 28.3495 }
+        }
+    }
+    /// Which units make sense for THIS food. Always servings; grams
+    /// added when serving_grams is present; ounces added when grams
+    /// or oz is present (oz derives from grams).
+    private var availableUnits: [MealLogUnitMode] {
+        var out: [MealLogUnitMode] = [.servings]
+        if servingGrams != nil { out.append(.grams) }
+        if servingOz != nil    { out.append(.ounces) }
+        return out
+    }
+    /// Convert the field's displayed value (in the active unit) into
+    /// canonical servings. Used for save and macro computation.
+    private func currentServings() -> Double {
+        switch unitMode {
+        case .servings: return displayedAmount
+        case .grams:    return servingGrams.map { displayedAmount / max($0, 0.0001) } ?? displayedAmount
+        case .ounces:   return servingOz.map    { displayedAmount / max($0, 0.0001) } ?? displayedAmount
+        }
+    }
+    /// Cycle to the next available unit. Re-formats displayedAmount
+    /// so the SAME servings value reads correctly in the new unit.
+    private func cycleUnit() {
+        let units = availableUnits
+        guard units.count > 1, let i = units.firstIndex(of: unitMode) else { return }
+        let next = units[(i + 1) % units.count]
+        let s = currentServings()
+        switch next {
+        case .servings: displayedAmount = s
+        case .grams:    displayedAmount = (servingGrams.map { s * $0 }) ?? s
+        case .ounces:   displayedAmount = (servingOz.map    { s * $0 }) ?? s
+        }
+        unitMode = next
+        UserDefaults.standard.set(next.rawValue, forKey: Self.unitPreferenceKey)
+    }
+    /// Recompute the consumed macro fields from the per-serving base
+    /// times the current servings value. Called on amount-field commit
+    /// (and after unit cycling — same servings, but we still want to
+    /// roll any user-pending edit through).
+    private func recomputeMacrosFromAmount() {
+        let s = max(0, currentServings())
+        calories = (baseCalories * s).rounded(toPlaces: 1)
+        protein  = (baseProtein  * s).rounded(toPlaces: 1)
+        carbs    = (baseCarbs    * s).rounded(toPlaces: 1)
+        fat      = (baseFat      * s).rounded(toPlaces: 1)
+        fiber    = (baseFiber    * s).rounded(toPlaces: 1)
+    }
+    /// Top-of-sheet "1 serving = …" hint. Pulls the structured
+    /// serving_description when present (set by USDA / AI / barcode
+    /// paths via worker-serving-units), falls back to a gram weight
+    /// when only that's known, otherwise nothing.
+    private var topServingHint: String? {
+        let desc: String? = {
+            switch mode {
+            case .new(let d): return d.servingDescription
+            case .edit(let e): return e.serving_description
+            }
+        }()
+        if let desc, !desc.isEmpty { return "1 serving = \(desc)" }
+        if let g = servingGrams, g > 0 {
+            let formatted = g == g.rounded() ? "\(Int(g))" : String(format: "%.1f", g)
+            return "1 serving ≈ \(formatted)g"
+        }
+        return nil
     }
 
     var body: some View {
@@ -675,6 +783,16 @@ struct MealLogEditor: View {
                     TextField("Meal name", text: $name)
                         .focused($keyboardFocused)
                         .autocorrectionDisabled()
+                    if let hint = topServingHint {
+                        HStack(spacing: 6) {
+                            Image(systemName: "scalemass")
+                                .foregroundStyle(Theme.text3)
+                                .font(.system(size: 11))
+                            Text(hint)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.text3)
+                        }
+                    }
                 }
 
                 Section("Meal type") {
@@ -705,28 +823,37 @@ struct MealLogEditor: View {
 
                 Section {
                     HStack {
-                        Text(servingsFieldLabel)
+                        Text(unitMode.label)
                         Spacer()
-                        TextField("1.0", value: $servings, format: .number.precision(.fractionLength(0...2)))
-                            .keyboardType(.decimalPad)
-                            .focused($keyboardFocused)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 90)
-                            .onChange(of: servings) { _, new in
-                                let s = max(0, new)
-                                calories = (baseCalories * s).rounded(toPlaces: 1)
-                                protein  = (baseProtein  * s).rounded(toPlaces: 1)
-                                carbs    = (baseCarbs    * s).rounded(toPlaces: 1)
-                                fat      = (baseFat      * s).rounded(toPlaces: 1)
-                                fiber    = (baseFiber    * s).rounded(toPlaces: 1)
+                        FractionalNumberField(
+                            value: $displayedAmount,
+                            placeholder: "1",
+                            precision: unitMode == .servings ? 2 : 1,
+                            width: 90,
+                            keyboardFocused: $keyboardFocused,
+                            onCommit: { recomputeMacrosFromAmount() }
+                        )
+                        if availableUnits.count > 1 {
+                            Button {
+                                cycleUnit()
+                                recomputeMacrosFromAmount()
+                            } label: {
+                                Text(unitMode.symbol)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .frame(width: 30, height: 28)
+                                    .background(Theme.bg3, in: .rect(cornerRadius: 6))
+                                    .foregroundStyle(Theme.text2)
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Switch unit")
+                        }
                     }
                 } header: {
-                    Text("Servings")
+                    Text("Amount")
                 } footer: {
-                    if let label = servingDescriptionLabel {
-                        Text(label).font(.system(size: 11))
-                    }
+                    Text(amountFooterHint)
+                        .font(.system(size: 11))
                 }
 
                 Section("Macros") {
@@ -818,15 +945,39 @@ struct MealLogEditor: View {
         return isNew ? "Save and log" : "Save"
     }
 
+    /// Footer hint under the Amount field. In servings mode this is
+    /// just "Tip: type 1/2 or ½ for a half-serving"; in grams/oz it
+    /// shows the conversion ("≈ X servings") so the user can see what
+    /// they're committing.
+    private var amountFooterHint: String {
+        let s = currentServings()
+        let servingsLabel: String = {
+            if s == s.rounded() { return "\(Int(s.rounded())) serving\(s == 1 ? "" : "s")" }
+            let f = NumberFormatter()
+            f.minimumFractionDigits = 0; f.maximumFractionDigits = 2
+            return "\(f.string(from: NSNumber(value: s)) ?? "\(s)") servings"
+        }()
+        switch unitMode {
+        case .servings:
+            return "Type 1/2, ½, or 1.5 for partial servings."
+        case .grams:
+            return "≈ \(servingsLabel)"
+        case .ounces:
+            return "≈ \(servingsLabel)"
+        }
+    }
+
     private func macroField(_ label: String, value: Binding<Double>, suffix: String) -> some View {
         HStack {
             Text(label)
             Spacer()
-            TextField("0", value: value, format: .number.precision(.fractionLength(0...1)))
-                .keyboardType(.decimalPad)
-                .focused($keyboardFocused)
-                .multilineTextAlignment(.trailing)
-                .frame(width: 80)
+            FractionalNumberField(
+                value: value,
+                placeholder: "0",
+                precision: 1,
+                width: 80,
+                keyboardFocused: $keyboardFocused
+            )
             Text(suffix).foregroundStyle(Theme.text3).font(.system(size: 13))
         }
     }
@@ -849,7 +1000,7 @@ struct MealLogEditor: View {
                 carbs: carbs,
                 fat: fat,
                 fiber: fiber,
-                servingsConsumed: servings,
+                servingsConsumed: currentServings(),
                 loggedAt: movedTimestamp ? ISO8601DateFormatter().string(from: loggedAtDate) : nil
             )
             do {
@@ -870,7 +1021,7 @@ struct MealLogEditor: View {
                     fiber: fiber,
                     recipeId: draft.recipeId,
                     foodItemId: draft.foodItemId,
-                    servingsConsumed: servings,
+                    servingsConsumed: currentServings(),
                     loggedAt: loggedAtDate,
                     fullLabel: draft.fullLabel
                 )
@@ -955,6 +1106,229 @@ private extension Double {
     func rounded(toPlaces n: Int) -> Double {
         let mult = pow(10.0, Double(n))
         return (self * mult).rounded() / mult
+    }
+}
+
+/// Reusable numeric field for the meal-log editor. Improvements over a
+/// raw `TextField(value:format:)`:
+///
+///   • Tap-to-select-all on focus (so re-tapping a field with content
+///     lets the user immediately type a replacement instead of having
+///     to manually clear it).
+///   • Inline ✕ clear button while focused with non-empty text.
+///   • Fraction parsing on commit ("1/2", "1 1/2", "½", "1.5" all
+///     resolve to a Double). Decimal pad keyboards don't have a `/`,
+///     but the parser also catches anything else the user pasted in.
+///   • Long-press still surfaces the system cut/copy/paste menu since
+///     the underlying control is a stock SwiftUI TextField.
+///
+/// External `value` binding stays the source of truth — the field
+/// re-syncs its visible text when `value` changes from outside (e.g.
+/// the unit toggle re-formats it for grams/ounces) but only when the
+/// field isn't focused, so user typing is never clobbered mid-edit.
+struct FractionalNumberField: View {
+    @Binding var value: Double
+    var placeholder: String = "0"
+    var precision: Int = 2
+    var width: CGFloat? = 90
+    var keyboardFocused: FocusState<Bool>.Binding? = nil
+    var onCommit: (() -> Void)? = nil
+
+    @State private var text: String
+    @FocusState private var focused: Bool
+
+    init(value: Binding<Double>,
+         placeholder: String = "0",
+         precision: Int = 2,
+         width: CGFloat? = 90,
+         keyboardFocused: FocusState<Bool>.Binding? = nil,
+         onCommit: (() -> Void)? = nil) {
+        self._value = value
+        self.placeholder = placeholder
+        self.precision = precision
+        self.width = width
+        self.keyboardFocused = keyboardFocused
+        self.onCommit = onCommit
+        _text = State(initialValue: Self.format(value.wrappedValue, precision: precision))
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            TextField(placeholder, text: $text)
+                .keyboardType(.decimalPad)
+                .focused($focused)
+                .modifier(SharedKeyboardFocus(shared: keyboardFocused, mine: $focused))
+                .multilineTextAlignment(.trailing)
+                .onChange(of: focused) { _, isFocused in
+                    if isFocused {
+                        // Defer one runloop tick so SwiftUI has marked our
+                        // TextField as the first responder; then send the
+                        // standard selectAll responder action so it lands
+                        // on this field specifically.
+                        DispatchQueue.main.async {
+                            UIApplication.shared.sendAction(
+                                #selector(UIResponder.selectAll(_:)),
+                                to: nil, from: nil, for: nil
+                            )
+                        }
+                    } else {
+                        commit()
+                    }
+                }
+                .onSubmit { commit() }
+            if focused && !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(Theme.text3)
+                        .font(.system(size: 13))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(width: width)
+        .onChange(of: value) { _, newValue in
+            // External update (parent recomputed value, e.g. unit toggle).
+            // Don't clobber the user's mid-edit typing.
+            if !focused {
+                text = Self.format(newValue, precision: precision)
+            }
+        }
+    }
+
+    private func commit() {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            value = 0
+            text = Self.format(0, precision: precision)
+        } else if let parsed = FractionParser.parse(trimmed) {
+            value = parsed
+            text = Self.format(parsed, precision: precision)
+        } else {
+            // Bad input — revert to last good value's formatted text.
+            text = Self.format(value, precision: precision)
+        }
+        onCommit?()
+    }
+
+    private static func format(_ v: Double, precision: Int) -> String {
+        if v == v.rounded() {
+            return String(Int(v.rounded()))
+        }
+        let f = NumberFormatter()
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = precision
+        return f.string(from: NSNumber(value: v)) ?? String(v)
+    }
+}
+
+/// FractionalNumberField needs its OWN @FocusState (so it knows when
+/// it specifically gained focus, for select-all + commit-on-blur), but
+/// the parent sheet wants ONE shared @FocusState driving the keyboard
+/// "Done" toolbar button. This modifier mirrors focus bidirectionally:
+/// the field's local focus drives the shared flag (so Done appears
+/// when ANY field is focused), and the shared flag clearing forces
+/// the field to give up focus (so tapping Done actually dismisses
+/// the keyboard).
+private struct SharedKeyboardFocus: ViewModifier {
+    let shared: FocusState<Bool>.Binding?
+    let mine: FocusState<Bool>.Binding
+
+    func body(content: Content) -> some View {
+        if let shared {
+            content
+                .onChange(of: mine.wrappedValue) { _, new in
+                    if new { shared.wrappedValue = true }
+                }
+                .onChange(of: shared.wrappedValue) { _, new in
+                    // Done button (or any other clear) propagates to the
+                    // field if it's the one that's focused right now.
+                    if !new && mine.wrappedValue { mine.wrappedValue = false }
+                }
+        } else {
+            content
+        }
+    }
+}
+
+/// Tolerant fraction/mixed-number parser. Accepts:
+///   "1.5"       → 1.5
+///   "1/2"       → 0.5
+///   "1 1/2"     → 1.5
+///   "½", "¼"…   → unicode fraction characters
+///   "  1/4 "    → leading/trailing whitespace
+/// Returns nil for empty/garbage so the caller can keep the prior
+/// value rather than defaulting to 0.
+enum FractionParser {
+    private static let unicodeFractions: [Character: String] = [
+        "½": "1/2", "⅓": "1/3", "⅔": "2/3", "¼": "1/4", "¾": "3/4",
+        "⅕": "1/5", "⅖": "2/5", "⅗": "3/5", "⅘": "4/5",
+        "⅙": "1/6", "⅚": "5/6", "⅛": "1/8", "⅜": "3/8", "⅝": "5/8", "⅞": "7/8"
+    ]
+
+    static func parse(_ raw: String) -> Double? {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return nil }
+
+        // Expand any unicode fraction characters first so "1½" → "1 1/2".
+        var expanded = ""
+        for ch in trimmed {
+            if let frac = unicodeFractions[ch] {
+                if !expanded.isEmpty,
+                   let last = expanded.last,
+                   last.isNumber || last == "." {
+                    expanded.append(" ")
+                }
+                expanded.append(frac)
+            } else {
+                expanded.append(ch)
+            }
+        }
+
+        // Try mixed number "1 1/2"
+        let parts = expanded.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        if parts.count == 2,
+           let whole = Double(parts[0]),
+           let frac = parseSimpleFraction(parts[1]) {
+            return whole + frac
+        }
+        // Pure fraction
+        if let frac = parseSimpleFraction(expanded) { return frac }
+        // Plain number
+        return Double(expanded)
+    }
+
+    private static func parseSimpleFraction(_ text: String) -> Double? {
+        let parts = text.split(separator: "/").map(String.init)
+        guard parts.count == 2,
+              let num = Double(parts[0]),
+              let den = Double(parts[1]),
+              den != 0 else { return nil }
+        return num / den
+    }
+}
+
+/// Display unit for the Servings field. Cycles servings → grams → oz
+/// as alternates are available (gated by serving_grams / serving_oz on
+/// the source row). User's last pick is persisted so opening another
+/// food in the same unit just works.
+enum MealLogUnitMode: String, CaseIterable {
+    case servings, grams, ounces
+
+    var symbol: String {
+        switch self {
+        case .servings: return "×"
+        case .grams:    return "g"
+        case .ounces:   return "oz"
+        }
+    }
+    var label: String {
+        switch self {
+        case .servings: return "Servings"
+        case .grams:    return "Grams"
+        case .ounces:   return "Ounces"
+        }
     }
 }
 
