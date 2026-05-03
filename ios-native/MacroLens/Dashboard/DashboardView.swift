@@ -575,7 +575,21 @@ struct MealLogEditor: View {
     @State private var savedToFoodsToast: String?
     @State private var alreadyInLibrary: Bool = false
     @State private var showingDeleteConfirm = false
+    /// Shared "is ANY field in this sheet focused" flag — drives the
+    /// keyboard "Done" toolbar button visibility and lets every numeric
+    /// field broadcast its focus state to the toolbar. Intentionally
+    /// NOT bound to any specific TextField via `.focused(...)` —
+    /// otherwise setting it from a numeric-field tap would steal focus
+    /// to whichever field carries the binding (was the bug: tapping
+    /// the amount field jumped the cursor into the Name field because
+    /// they shared this @FocusState).
     @FocusState private var keyboardFocused: Bool
+    /// Drives the Name TextField's `.focused(...)` modifier in
+    /// isolation so a focus event on a numeric field can't bleed in.
+    /// Mirrors into `keyboardFocused` via .onChange below so the
+    /// toolbar Done button + the field-side dismissal logic still
+    /// see "the Name field is focused" through the shared flag.
+    @FocusState private var nameFocused: Bool
 
     /// Display unit for the amount field. Persisted across previews
     /// in UserDefaults so a user who logs grams once gets grams next
@@ -842,7 +856,7 @@ struct MealLogEditor: View {
             Form {
                 Section("Name") {
                     TextField("Meal name", text: $name)
-                        .focused($keyboardFocused)
+                        .focused($nameFocused)
                         .autocorrectionDisabled()
                     if let hint = topServingHint {
                         HStack(spacing: 6) {
@@ -960,6 +974,22 @@ struct MealLogEditor: View {
             .navigationTitle(navTitle)
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
+            // Mirror Name field focus into the shared keyboardFocused
+            // flag so the toolbar Done button shows whenever the Name
+            // field is up. Numeric fields handle the same mirroring
+            // inside FractionalNumberField, so the shared flag tracks
+            // "any field focused" without any one TextField having to
+            // own the binding.
+            .onChange(of: nameFocused) { _, isFocused in
+                if isFocused { keyboardFocused = true }
+            }
+            // Reverse direction: tapping Done clears the shared flag,
+            // which propagates back to the Name field so the keyboard
+            // actually dismisses (FractionalNumberField has its own
+            // onChange that does the same for numeric fields).
+            .onChange(of: keyboardFocused) { _, isFocused in
+                if !isFocused, nameFocused { nameFocused = false }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
