@@ -218,18 +218,50 @@ function parseJSON(data) {
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
+// Full label fields — emitted by every prompt below. Reused as a string so
+// the AI sees the same shape (and the same "null if unknown" rule) every
+// time. Pasted before the closing `}` in each JSON template.
+//
+// Important: the model MUST return null for any value it cannot read or
+// confidently infer. The opt-in UI shows "not tracked" for nulls — which
+// is honest. Fabricated zeros would silently corrupt the goals view.
+const FULL_LABEL_FIELDS = `"saturated_fat_g": number|null,
+  "trans_fat_g": number|null,
+  "cholesterol_mg": number|null,
+  "sodium_mg": number|null,
+  "fiber_g": number|null,
+  "sugar_total_g": number|null,
+  "sugar_added_g": number|null,
+  "vitamin_a_mcg": number|null,
+  "vitamin_c_mg": number|null,
+  "vitamin_d_mcg": number|null,
+  "calcium_mg": number|null,
+  "iron_mg": number|null,
+  "potassium_mg": number|null,`
+
+const FULL_LABEL_RULES = `
+Rules for full-label fields (saturated_fat_g, trans_fat_g, cholesterol_mg, sodium_mg, fiber_g, sugar_total_g, sugar_added_g, vitamin_a_mcg, vitamin_c_mg, vitamin_d_mcg, calcium_mg, iron_mg, potassium_mg):
+- Use null for any value you cannot read or confidently infer. Do NOT fabricate zeros.
+- vitamin_a_mcg is RAE (retinol activity equivalents), not IU.
+- All values are PER SERVING, matching the same serving_description / serving_grams as the macros.
+- These come from packaged-product labels, USDA data for generic foods, or restaurant nutrition info. If none of those apply, return null.`
+
 // Full analysis prompt — always returns macros + ingredients in one call
 const FULL_ANALYSIS_PROMPT = `Respond ONLY with a JSON object, no markdown, no explanation. Format:
 {
   "name": "meal name",
   "description": "brief 1-sentence description",
   "servings": number,
+  "serving_description": "plain-language single-serving unit, e.g. '1 medium avocado, ~150g' or '1 cup cooked, ~195g' or '1 slice (~30g)'",
+  "serving_grams": number,
+  "serving_oz": number,
   "calories": number,
   "protein": number,
   "carbs": number,
   "fat": number,
   "fiber": number,
   "sugar": number,
+  ${FULL_LABEL_FIELDS}
   "confidence": "low|medium|high",
   "notes": "any important caveats or empty string",
   "ingredients": [
@@ -280,11 +312,29 @@ Rules for ingredients:
   - frozen: explicitly frozen items
   - bakery: fresh bread, rolls, tortillas
   - beverages: wine, beer, juice used in cooking
-- List every ingredient needed. If packaged/restaurant item with no recipe, return empty array.`
+- List every ingredient needed. If packaged/restaurant item with no recipe, return empty array.
 
-// Planner/simple prompt — just macros, no ingredients needed
+Rules for serving fields:
+- serving_description MUST be a clear, human-readable single-serving unit (e.g. "1 cup, ~240g", "1 slice (~120g)", "1 medium bowl, ~350g"). Always include an approximate gram weight.
+- serving_grams must be a NUMBER. serving_oz = serving_grams / 28.3495, one decimal.
+- All macro fields above are PER SERVING (one of "servings"), matching the gram weight in serving_description. Do not return per-100g or whole-recipe totals.
+${FULL_LABEL_RULES}`
+
+// Planner/simple prompt — just macros, no ingredients needed.
+// Macros must be FOR ONE serving as described in serving_description, NOT
+// per-100g totals. If the user describes a fractional amount (e.g. "half
+// an avocado"), still return per-1-serving macros — the client applies
+// any servings_consumed multiplier on top.
 const MACROS_ONLY_PROMPT = `Respond ONLY with a JSON object, no markdown, no explanation. Format:
-{"name":"meal name","calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"confidence":"low|medium|high"}`
+{"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g' or '1 slice of bread, ~30g' or '1 cup cooked rice, ~195g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,${FULL_LABEL_FIELDS}"confidence":"low|medium|high"}
+
+Rules for serving fields:
+- serving_description MUST be a clear, human-readable single-serving unit. Prefer natural units (1 medium avocado, 1 large banana, 1 slice of toast, 1 large egg, 1 cup cooked rice). Always include an approximate gram weight in parentheses or after a comma — e.g. "1 medium avocado, ~150g" or "1 slice of toast (~30g)".
+- serving_grams must be a NUMBER (the same gram weight referenced in serving_description). serving_oz = serving_grams / 28.3495, rounded to one decimal.
+- All macro fields (calories/protein/carbs/fat/fiber/sugar) MUST be the values FOR ONE serving as defined above — NOT per-100g, NOT total amount the user might eat.
+- If the user describes a fraction or multiple ("half an avocado", "two slices of toast"), still return macros for ONE single natural serving and let the client apply the multiplier.
+- For foods with no natural unit (rice, pasta, oats, sauces), default to "1 cup cooked, ~Xg" or "100g" with macros for that amount.
+${FULL_LABEL_RULES}`
 
 // ─── Food analysis (always returns ingredients) ───────────────────────────────
 
@@ -367,6 +417,42 @@ export async function analyzePlannerDescription(description) {
   return parseJSON(data)
 }
 
+// describeFoodCandidates — returns up to 5-10 ranked candidates so the
+// caller can present a picker when the query is ambiguous (e.g. "banana"
+// → small / medium / large / frozen / baby food). For unambiguous
+// branded items the model is allowed to return a single candidate; the
+// caller decides whether to skip the picker UI.
+//
+// Sorted by confidence DESC. Each candidate carries the same per-serving
+// shape MACROS_ONLY_PROMPT defines, so consumers that already know how
+// to render one result can render any one of these unchanged.
+const CANDIDATES_PROMPT = `Respond ONLY with a JSON object, no markdown, no explanation. Format:
+{"candidates":[{"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"confidence":"low|medium|high"}]}
+
+Return between 1 and 10 candidates ranked by relevance (best first).
+- For ambiguous generic queries ("banana", "avocado", "pizza"), return 3-7 distinct serving sizes / variants the user might mean (small / medium / large / cup / slice / etc).
+- For specific branded queries ("McDonald's Big Mac", "Quest Cookies & Cream protein bar"), a SINGLE candidate is fine.
+- Each candidate's macros are FOR ONE serving as defined in its own serving_description (NOT per-100g). serving_grams is a NUMBER. serving_oz = serving_grams / 28.3495, one decimal.
+- serving_description MUST always include an approximate gram weight.
+- Sort by descending confidence.`
+
+export async function describeFoodCandidates(description) {
+  const data = await callProxy('planner', [{
+    role: 'user',
+    content: `User typed: "${description}"
+
+List the most likely foods this could be, with per-serving macros for each. Cover the common serving sizes when the query is generic.
+
+${CANDIDATES_PROMPT}`
+  }], { max_tokens: 1500, action: 'describe_food_candidates' })
+  const parsed = parseJSON(data)
+  // Defensive: model occasionally wraps a single result in {name,...}
+  // instead of {candidates:[...]}. Coerce so callers get a uniform shape.
+  if (Array.isArray(parsed?.candidates)) return parsed
+  if (parsed?.name) return { candidates: [parsed] }
+  return { candidates: [] }
+}
+
 // ─── Recipe-specific AI calls ─────────────────────────────────────────────────
 
 export async function extractIngredients(recipeName, description, servings) {
@@ -416,13 +502,16 @@ export async function analyzeFoodItem(description) {
     content: `Nutrition facts for this single food item: "${description}"
 
 If this is a specific branded product, look up its actual nutrition label values.
-If it's a generic food, use standard USDA values.
+If it's a generic food (avocado, banana, toast, egg, apple, slice of pizza, cup of rice, etc.), use standard USDA values for ONE natural serving.
 
 Respond ONLY with a JSON object, no markdown:
 {
   "name": "exact product/food name",
   "brand": "brand name or empty string",
-  "serving_size": "e.g. 1 bar (40g), 1 cup (240ml)",
+  "serving_size": "free-text label, same content as serving_description",
+  "serving_description": "plain-language single-serving unit with grams, e.g. '1 medium avocado, ~150g' or '1 slice of toast (~30g)' or '1 large egg (~50g)' or '1 cup cooked rice, ~195g'",
+  "serving_grams": number,
+  "serving_oz": number,
   "calories": number,
   "protein": number,
   "carbs": number,
@@ -430,10 +519,18 @@ Respond ONLY with a JSON object, no markdown:
   "fiber": number,
   "sugar": number,
   "sodium": number,
+  ${FULL_LABEL_FIELDS}
   "confidence": "low|medium|high",
   "notes": "any caveats or empty string"
-}`
-  }], { max_tokens: 600, action: 'analyze_food_item' })
+}
+
+Rules:
+- serving_description MUST always include an approximate gram weight, even for branded items.
+- serving_grams is a NUMBER (not a string). serving_oz = serving_grams / 28.3495, one decimal.
+- Macros are FOR ONE serving as defined above (NOT per-100g, NOT for any fractional amount the user described).
+- If user said "half an avocado", still return per-1-medium-avocado macros — the client applies the 0.5 multiplier.
+${FULL_LABEL_RULES}`
+  }], { max_tokens: 800, action: 'analyze_food_item' })
   return parseJSON(data)
 }
 
@@ -649,11 +746,16 @@ Respond ONLY with a JSON object, no markdown:
   "fiber": number,
   "sugar": number,
   "sodium": number,
+  ${FULL_LABEL_FIELDS}
   "confidence": "high",
   "notes": "any values that were unclear"
-}` }
+}
+${FULL_LABEL_RULES}
+- If the label shows "Trans Fat 0g", record 0 (not null) — that IS visible information.
+- "Includes Xg Added Sugars" → sugar_added_g. "Total Sugars" → sugar_total_g.
+- Cholesterol on US labels is in mg. Vitamin D is usually mcg (sometimes IU — convert IU→mcg by dividing by 40).` }
     ]
-  }], { max_tokens: 600, action: 'analyze_nutrition_label' })
+  }], { max_tokens: 900, action: 'analyze_nutrition_label' })
   return parseJSON(data)
 }
 
