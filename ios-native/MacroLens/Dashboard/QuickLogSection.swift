@@ -453,37 +453,21 @@ struct QuickLogSection: View {
     }
 
     /// USDA-sourced generic foods (avocado, banana, oats, …). Read-only
-    /// shared table; populated by scripts/import-usda-foods.js. Hits two
-    /// columns in parallel — `name` for substring match and `aliases`
-    /// for the depluralized/comma-stripped variants — then merges by id.
-    /// Lets a known-good generic food short-circuit the AI describe
-    /// fallback, which is the whole point of the table.
+    /// shared table; populated by scripts/import-usda-foods.js. Calls the
+    /// `search_generic_foods_ranked` RPC which applies the composite
+    /// ranking server-side: exact-prefix match (1000) + substring match
+    /// (100) + global_log_count when ≥5 distinct users have logged it +
+    /// USDA Foundation bonus (50). Returns rows already sorted, so we
+    /// just project to QuickLogItem in iteration order.
     private func searchGenericFoods(_ q: String) async throws -> [QuickLogItem] {
-        let pattern = "%\(escapeLike(q))%"
-        async let byName: [GenericFoodRow] = (try? await SupabaseService.client
-            .from("generic_foods")
-            .select()
-            .ilike("name", pattern: pattern)
-            .order("name", ascending: true)
-            .limit(8)
+        struct Params: Encodable { let p_query: String; let p_limit: Int }
+        let rows: [GenericFoodRow] = try await SupabaseService.client
+            .rpc("search_generic_foods_ranked",
+                 params: Params(p_query: q, p_limit: 8))
             .execute()
-            .value) ?? []
-        async let byAlias: [GenericFoodRow] = (try? await SupabaseService.client
-            .from("generic_foods")
-            .select()
-            .contains("aliases", value: [q.lowercased()])
-            .limit(4)
-            .execute()
-            .value) ?? []
-        let nameHits = await byName
-        let aliasHits = await byAlias
-        var seen = Set<String>()
-        var out: [QuickLogItem] = []
-        // Alias hits first — an exact alias like "banana" should beat a
-        // partial name match like "Banana cream pie".
-        for row in aliasHits + nameHits {
-            if !seen.insert(row.id).inserted { continue }
-            out.append(QuickLogItem(
+            .value
+        return rows.map { row in
+            QuickLogItem(
                 id: "generic-\(row.id)",
                 name: row.name,
                 calories: row.kcal ?? 0,
@@ -495,54 +479,25 @@ struct QuickLogSection: View {
                 foodItemId: nil,
                 foodItem: nil,
                 kind: .generic
-            ))
+            )
         }
-        return out
     }
 
-    /// Case-insensitive substring search on food_items, hitting both
-    /// the name column and the brand column.
-    ///
-    /// Implementation note: an earlier version used PostgREST's `or`
-    /// filter (`name.ilike.%q%,brand.ilike.%q%`). The `.or()` method
-    /// on supabase-swift passes the filter string verbatim into the
-    /// URL, where `%` becomes `%25` after URL-encoding — which works
-    /// in some PostgREST versions but not reliably (the canonical
-    /// URL wildcard is `*`, with `%` only working when the entire
-    /// pattern survives unescaped through the value parser). To
-    /// avoid that ambiguity entirely, we issue two `.ilike()` calls
-    /// in parallel and merge — `.ilike(column:pattern:)` is the same
-    /// path autoSaveFoodItem uses successfully, so wildcard handling
-    /// is well-tested.
+    /// Search the user's own food_items library via the
+    /// `search_food_items_ranked` RPC, which applies the composite
+    /// formula server-side: exact-prefix(1000) + substring(100) +
+    /// user_log_count_last_30d (×10) + global_log_count when ≥5
+    /// distinct users have logged it. Tiebreaker is name ASC.
+    /// Substring match runs against name OR brand so a vendor name
+    /// still surfaces the row. Returns rows already sorted.
     private func searchFoodItems(_ q: String) async throws -> [QuickLogItem] {
-        let userId = try await SupabaseService.client.auth.session.user.id.uuidString
-        let pattern = "%\(escapeLike(q))%"
-        async let byName = ilikeFoodItems(userId: userId, column: "name", pattern: pattern)
-        async let byBrand = ilikeFoodItems(userId: userId, column: "brand", pattern: pattern)
-        let nameHits = (try? await byName) ?? []
-        let brandHits = (try? await byBrand) ?? []
-        // Dedup by id; name hits win position over brand hits since
-        // most users search by food name, not vendor.
-        var seenIds = Set<String>()
-        var merged: [FoodItemRow] = []
-        for f in nameHits + brandHits {
-            if seenIds.insert(f.id).inserted {
-                merged.append(f)
-            }
-        }
-        return merged.prefix(10).map { Self.makeFoodItem(from: $0) }
-    }
-
-    private func ilikeFoodItems(userId: String, column: String, pattern: String) async throws -> [FoodItemRow] {
-        try await SupabaseService.client
-            .from("food_items")
-            .select()
-            .eq("user_id", value: userId)
-            .ilike(column, pattern: pattern)
-            .order("updated_at", ascending: false)
-            .limit(10)
+        struct Params: Encodable { let p_query: String; let p_limit: Int }
+        let rows: [FoodItemRow] = try await SupabaseService.client
+            .rpc("search_food_items_ranked",
+                 params: Params(p_query: q, p_limit: 10))
             .execute()
             .value
+        return rows.map { Self.makeFoodItem(from: $0) }
     }
 
     /// Case-insensitive ilike on meal_log.name. Pulls a wider window
