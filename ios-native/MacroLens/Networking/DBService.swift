@@ -328,6 +328,9 @@ enum DBService {
             let name: String
             let brand: String?
             let serving_size: String?
+            let serving_description: String?
+            let serving_grams: Double?
+            let serving_oz: Double?
             let calories: Double
             let protein: Double
             let carbs: Double
@@ -347,6 +350,9 @@ enum DBService {
             name: item.name,
             brand: item.brand,
             serving_size: item.servingSize,
+            serving_description: item.servingDescription,
+            serving_grams: item.servingGrams,
+            serving_oz: item.servingOz,
             calories: item.calories ?? 0,
             protein: item.protein ?? 0,
             carbs: item.carbs ?? 0,
@@ -654,6 +660,12 @@ struct FoodItemUpsert {
     var components: [FoodComponent]?
     var notes: String?
     var source: String?
+    /// Structured single-serving description (worker-serving-units).
+    /// Optional — manual editor + barcode/label paths can leave nil and
+    /// fall back to servingSize for display.
+    var servingDescription: String?
+    var servingGrams: Double?
+    var servingOz: Double?
 }
 
 struct MealEntryPatch {

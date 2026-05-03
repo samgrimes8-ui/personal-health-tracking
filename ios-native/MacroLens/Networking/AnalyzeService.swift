@@ -42,6 +42,48 @@ enum AnalyzeService {
         )
     }
 
+    /// Multi-result variant of describeFood. The Dashboard's text-describe
+    /// path uses this so ambiguous queries ("banana") can present a picker
+    /// covering small/medium/large/etc. The single-result fast path stays
+    /// when the model returns exactly one candidate. Each element carries
+    /// the same shape as a regular AnalysisResult — same render code reuses.
+    static func describeFoodCandidates(_ description: String) async throws -> [AnalysisResult] {
+        let prompt = """
+        User typed: "\(description)"
+
+        List the most likely foods this could be, with per-serving macros for each. Cover the common serving sizes when the query is generic.
+
+        \(candidatesPrompt)
+        """
+        let raw = try await rawTextResponse(
+            feature: "planner",
+            action: "describe_food_candidates",
+            inputType: "text",
+            content: .text(prompt),
+            maxTokens: 2000
+        )
+        let cleaned = extractJSON(from: raw)
+        guard let data = cleaned.data(using: .utf8) else { throw AnalyzeError.parse }
+        // Try the {candidates:[...]} envelope first.
+        if let env = try? JSONDecoder().decode(CandidatesEnvelope.self, from: data),
+           !env.candidates.isEmpty {
+            return env.candidates
+        }
+        // Defensive: model occasionally returns a bare AnalysisResult
+        // when the query is unambiguous. Wrap as a one-element list so
+        // the caller can take the single-result fast path uniformly.
+        if let single = try? JSONDecoder().decode(AnalysisResult.self, from: data) {
+            return [single]
+        }
+        throw AnalyzeError.parse
+    }
+
+    /// Wrapper for the {candidates:[...]} JSON envelope describeFood-
+    /// Candidates expects. Internal — callers see [AnalysisResult].
+    private struct CandidatesEnvelope: Codable {
+        let candidates: [AnalysisResult]
+    }
+
     static func analyzeFoodPhoto(_ imageBase64: String, hint: String? = nil) async throws -> AnalysisResult {
         let promptText = """
         Analyze this image. It may be a food photo, a recipe page, a recipe card, or a screenshot of a recipe. Extract the recipe name, estimate macros per serving, and list all ingredients. \(fullAnalysisPrompt)
@@ -390,33 +432,98 @@ enum AnalyzeService {
 
     // MARK: - Prompts (kept in sync with src/lib/ai.js)
 
-    private static let macrosOnlyPrompt = """
-    Respond ONLY with a JSON object, no markdown, no explanation. Format:
-    {"name":"meal name","calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"confidence":"low|medium|high"}
+    // Full-label fields injected into every prompt. Model returns null for any
+    // value it cannot confidently read — opt-in UI shows "not tracked" for
+    // nulls. Fabricated zeros would silently corrupt the goals view.
+    private static let fullLabelFields = """
+    "saturated_fat_g": number|null,
+      "trans_fat_g": number|null,
+      "cholesterol_mg": number|null,
+      "sodium_mg": number|null,
+      "fiber_g": number|null,
+      "sugar_total_g": number|null,
+      "sugar_added_g": number|null,
+      "vitamin_a_mcg": number|null,
+      "vitamin_c_mg": number|null,
+      "vitamin_d_mcg": number|null,
+      "calcium_mg": number|null,
+      "iron_mg": number|null,
+      "potassium_mg": number|null,
     """
 
-    private static let fullAnalysisPrompt = """
-    Respond ONLY with a JSON object, no markdown, no explanation. Format:
-    {
-      "name": "meal name",
-      "description": "brief 1-sentence description",
-      "servings": number,
-      "calories": number,
-      "protein": number,
-      "carbs": number,
-      "fat": number,
-      "fiber": number,
-      "sugar": number,
-      "confidence": "low|medium|high",
-      "notes": "any important caveats or empty string",
-      "ingredients": [
-        {"name": "ingredient name", "amount": number, "unit": "oz/lbs/cups/tbsp/tsp/cloves/whole/slices", "category": "produce|protein|dairy|pantry|spices|grains|frozen|bakery|beverages"}
-      ]
+    private static let fullLabelRules = """
+
+    Rules for full-label fields (saturated_fat_g, trans_fat_g, cholesterol_mg, sodium_mg, fiber_g, sugar_total_g, sugar_added_g, vitamin_a_mcg, vitamin_c_mg, vitamin_d_mcg, calcium_mg, iron_mg, potassium_mg):
+    - Use null for any value you cannot read or confidently infer. Do NOT fabricate zeros.
+    - vitamin_a_mcg is RAE (retinol activity equivalents), not IU.
+    - All values are PER SERVING, matching serving_description / serving_grams.
+    - These come from packaged-product labels, USDA data for generic foods, or restaurant nutrition info. If none of those apply, return null.
+    """
+
+    private static var macrosOnlyPrompt: String {
+        """
+        Respond ONLY with a JSON object, no markdown, no explanation. Format:
+        {"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g' or '1 slice of bread, ~30g' or '1 cup cooked rice, ~195g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,\(fullLabelFields)"confidence":"low|medium|high"}
+
+        Rules for serving fields:
+        - serving_description MUST be a clear, human-readable single-serving unit. Prefer natural units (1 medium avocado, 1 large banana, 1 slice of toast, 1 large egg, 1 cup cooked rice). Always include an approximate gram weight in parentheses or after a comma — e.g. "1 medium avocado, ~150g" or "1 slice of toast (~30g)".
+        - serving_grams must be a NUMBER (the same gram weight referenced in serving_description). serving_oz = serving_grams / 28.3495, rounded to one decimal.
+        - All macro fields (calories/protein/carbs/fat/fiber/sugar) MUST be the values FOR ONE serving as defined above — NOT per-100g, NOT total amount the user might eat.
+        - If the user describes a fraction or multiple ("half an avocado", "two slices of toast"), still return macros for ONE single natural serving and let the client apply the multiplier.
+        - For foods with no natural unit (rice, pasta, oats, sauces), default to "1 cup cooked, ~Xg" or "100g" with macros for that amount.
+        \(fullLabelRules)
+        """
     }
 
-    Rules:
-    - amount must be a NUMBER (not a string)
-    - category required on every ingredient: produce|protein|dairy|pantry|spices|grains|frozen|bakery|beverages
-    - List every ingredient needed; empty array only if it's a packaged item with no recipe
-    """
+    /// Prompt for the multi-candidate describeFood path. Kept in sync
+    /// with CANDIDATES_PROMPT in src/lib/ai.js. Each candidate carries
+    /// the same per-serving shape macrosOnlyPrompt defines, so the same
+    /// AnalysisResult struct can decode either flavor.
+    private static var candidatesPrompt: String {
+        """
+        Respond ONLY with a JSON object, no markdown, no explanation. Format:
+        {"candidates":[{"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"confidence":"low|medium|high"}]}
+
+        Return between 1 and 10 candidates ranked by relevance (best first).
+        - For ambiguous generic queries ("banana", "avocado", "pizza"), return 3-7 distinct serving sizes / variants the user might mean (small / medium / large / cup / slice / etc).
+        - For specific branded queries ("McDonald's Big Mac", "Quest Cookies & Cream protein bar"), a SINGLE candidate is fine.
+        - Each candidate's macros are FOR ONE serving as defined in its own serving_description (NOT per-100g). serving_grams is a NUMBER. serving_oz = serving_grams / 28.3495, one decimal.
+        - serving_description MUST always include an approximate gram weight.
+        - Sort by descending confidence.
+        """
+    }
+
+    private static var fullAnalysisPrompt: String {
+        """
+        Respond ONLY with a JSON object, no markdown, no explanation. Format:
+        {
+          "name": "meal name",
+          "description": "brief 1-sentence description",
+          "servings": number,
+          "serving_description": "plain-language single-serving unit, e.g. '1 medium avocado, ~150g' or '1 cup cooked, ~195g' or '1 slice (~30g)'",
+          "serving_grams": number,
+          "serving_oz": number,
+          "calories": number,
+          "protein": number,
+          "carbs": number,
+          "fat": number,
+          "fiber": number,
+          "sugar": number,
+          \(fullLabelFields)
+          "confidence": "low|medium|high",
+          "notes": "any important caveats or empty string",
+          "ingredients": [
+            {"name": "ingredient name", "amount": number, "unit": "oz/lbs/cups/tbsp/tsp/cloves/whole/slices", "category": "produce|protein|dairy|pantry|spices|grains|frozen|bakery|beverages"}
+          ]
+        }
+
+        Rules:
+        - amount must be a NUMBER (not a string)
+        - category required on every ingredient: produce|protein|dairy|pantry|spices|grains|frozen|bakery|beverages
+        - List every ingredient needed; empty array only if it's a packaged item with no recipe
+        - serving_description MUST include an approximate gram weight; serving_grams is a NUMBER; serving_oz = serving_grams / 28.3495, one decimal
+        - Macro fields (calories/protein/carbs/fat/fiber/sugar) are PER SERVING (one of "servings"), matching serving_description / serving_grams. NOT per-100g, NOT whole-recipe totals.
+        \(fullLabelRules)
+        """
+    }
 }

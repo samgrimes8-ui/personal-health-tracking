@@ -8,16 +8,23 @@ import Foundation
 /// snake_case here for clarity vs. the web codebase.
 
 /// One row of public.goals — daily macro targets, one per user.
-/// Mirrors the web schema exactly: only calories / protein / carbs / fat
-/// columns exist. Fiber is tracked on individual log rows but NOT as a
-/// goal target (web never wired it as a goal either). Adding `fiber`
-/// here breaks the SELECT + upsert because the column doesn't exist on
-/// the table — keep this struct lean.
+/// Mirrors the web schema: calories / protein / carbs / fat are the
+/// canonical 4 macros. The full-label opt-in (track_full_label) adds
+/// optional sodium / fiber / saturated-fat / added-sugar targets that
+/// only render when the toggle is on.
 struct Goals: Codable, Hashable {
     var calories: Int?
     var protein: Int?
     var carbs: Int?
     var fat: Int?
+    /// Account-level opt-in for the full nutrition label UI.
+    /// Stored on goals because every full-label query touches goals
+    /// anyway — no need for a separate user_settings row.
+    var track_full_label: Bool?
+    var sodium_mg_max: Double?
+    var fiber_g_min: Double?
+    var saturated_fat_g_max: Double?
+    var sugar_added_g_max: Double?
 }
 
 /// One row of public.meal_log — what gets logged when a user records
@@ -39,6 +46,30 @@ struct MealLogEntry: Codable, Identifiable, Hashable {
     var recipe_id: String?
     var food_item_id: String?
     var servings_consumed: Double?
+    // Per-serving description copied from the AI describe response or
+    // from the linked food_item at log time. e.g. "1 medium avocado, ~150g".
+    // Combined with servings_consumed, the row can render as
+    // "0.5 medium avocados (75g)" without a food_items join.
+    var serving_description: String?
+    var serving_grams: Double?
+    var serving_oz: Double?
+    // Full nutrition label (opt-in). NULL when not tracked. UI shows
+    // "not tracked" for nulls when the Track full nutrition label
+    // toggle is on. Never coerce nulls to 0 — that would silently
+    // corrupt micro-target progress.
+    var saturated_fat_g: Double?
+    var trans_fat_g: Double?
+    var cholesterol_mg: Double?
+    var sodium_mg: Double?
+    var fiber_g: Double?
+    var sugar_total_g: Double?
+    var sugar_added_g: Double?
+    var vitamin_a_mcg: Double?
+    var vitamin_c_mg: Double?
+    var vitamin_d_mcg: Double?
+    var calcium_mg: Double?
+    var iron_mg: Double?
+    var potassium_mg: Double?
 }
 
 /// One row of public.recipes — the user's recipe library. Only the
@@ -82,6 +113,28 @@ struct AnalysisResult: Codable, Hashable {
     var confidence: String?
     var notes: String?
     var ingredients: [Ingredient]?
+    // New (worker-serving-units): structured single-serving description
+    // so generic foods like "avocado" come back as "1 medium avocado, ~150g"
+    // with the macros explicitly defined as PER-serving. Optional because
+    // older callers + the macros-only flavor still decode the same struct.
+    var serving_description: String?
+    var serving_grams: Double?
+    var serving_oz: Double?
+    // Full nutrition label (opt-in). Model returns null when it can't
+    // confidently read the value — never coerce to 0.
+    var saturated_fat_g: Double?
+    var trans_fat_g: Double?
+    var cholesterol_mg: Double?
+    var sodium_mg: Double?
+    var fiber_g: Double?
+    var sugar_total_g: Double?
+    var sugar_added_g: Double?
+    var vitamin_a_mcg: Double?
+    var vitamin_c_mg: Double?
+    var vitamin_d_mcg: Double?
+    var calcium_mg: Double?
+    var iron_mg: Double?
+    var potassium_mg: Double?
 }
 
 /// One row of public.checkins. Carries the basic weigh-in fields plus
@@ -328,6 +381,64 @@ struct DailyMacroTotals: Equatable {
     }
 }
 
+/// Sum of full-label fields across a day's meal_log rows. NULL contributions
+/// are skipped (not coerced to 0) so a single "not tracked" entry doesn't
+/// quietly drag the daily total down. `_count` records how many rows had a
+/// non-null value per field — the UI shows "X / Y meals tracked" so the user
+/// sees coverage without us inventing data.
+struct DailyFullLabelTotals: Equatable {
+    var saturatedFat: (sum: Double, count: Int) = (0, 0)
+    var transFat: (sum: Double, count: Int) = (0, 0)
+    var cholesterol: (sum: Double, count: Int) = (0, 0)
+    var sodium: (sum: Double, count: Int) = (0, 0)
+    var fiber: (sum: Double, count: Int) = (0, 0)
+    var sugarTotal: (sum: Double, count: Int) = (0, 0)
+    var sugarAdded: (sum: Double, count: Int) = (0, 0)
+    var vitaminA: (sum: Double, count: Int) = (0, 0)
+    var vitaminC: (sum: Double, count: Int) = (0, 0)
+    var vitaminD: (sum: Double, count: Int) = (0, 0)
+    var calcium: (sum: Double, count: Int) = (0, 0)
+    var iron: (sum: Double, count: Int) = (0, 0)
+    var potassium: (sum: Double, count: Int) = (0, 0)
+
+    static func == (lhs: DailyFullLabelTotals, rhs: DailyFullLabelTotals) -> Bool {
+        lhs.saturatedFat == rhs.saturatedFat && lhs.transFat == rhs.transFat
+            && lhs.cholesterol == rhs.cholesterol && lhs.sodium == rhs.sodium
+            && lhs.fiber == rhs.fiber && lhs.sugarTotal == rhs.sugarTotal
+            && lhs.sugarAdded == rhs.sugarAdded && lhs.vitaminA == rhs.vitaminA
+            && lhs.vitaminC == rhs.vitaminC && lhs.vitaminD == rhs.vitaminD
+            && lhs.calcium == rhs.calcium && lhs.iron == rhs.iron
+            && lhs.potassium == rhs.potassium
+    }
+
+    static func sum(_ entries: [MealLogEntry]) -> DailyFullLabelTotals {
+        var t = DailyFullLabelTotals()
+        func bump(_ field: inout (sum: Double, count: Int), _ v: Double?) {
+            guard let v else { return }
+            field.sum += v
+            field.count += 1
+        }
+        for e in entries {
+            // Prefer the new fiber_g column; fall back to legacy `fiber` so
+            // pre-migration entries still contribute to the fiber total.
+            bump(&t.fiber, e.fiber_g ?? e.fiber)
+            bump(&t.saturatedFat, e.saturated_fat_g)
+            bump(&t.transFat, e.trans_fat_g)
+            bump(&t.cholesterol, e.cholesterol_mg)
+            bump(&t.sodium, e.sodium_mg)
+            bump(&t.sugarTotal, e.sugar_total_g)
+            bump(&t.sugarAdded, e.sugar_added_g)
+            bump(&t.vitaminA, e.vitamin_a_mcg)
+            bump(&t.vitaminC, e.vitamin_c_mg)
+            bump(&t.vitaminD, e.vitamin_d_mcg)
+            bump(&t.calcium, e.calcium_mg)
+            bump(&t.iron, e.iron_mg)
+            bump(&t.potassium, e.potassium_mg)
+        }
+        return t
+    }
+}
+
 // ─── Phase 0 / S2 — pre-declared shapes for the parallel tab workers ────────
 //
 // Worker rule: every struct that touches a public-schema row lives HERE so
@@ -406,6 +517,26 @@ struct FoodItemRow: Codable, Identifiable, Hashable {
     var notes: String?
     var source: String?               // "manual" | "ai" | "log" | "barcode"
     var updated_at: String?
+    // Structured single-serving description (added with worker-serving-units).
+    // Preferred over serving_size for display because we can pluralize it
+    // ("0.5 medium avocados") and trust the gram weight.
+    var serving_description: String?
+    var serving_grams: Double?
+    var serving_oz: Double?
+    // Full nutrition label (opt-in). Same convention: null = not tracked.
+    var saturated_fat_g: Double?
+    var trans_fat_g: Double?
+    var cholesterol_mg: Double?
+    var sodium_mg: Double?
+    var fiber_g: Double?
+    var sugar_total_g: Double?
+    var sugar_added_g: Double?
+    var vitamin_a_mcg: Double?
+    var vitamin_c_mg: Double?
+    var vitamin_d_mcg: Double?
+    var calcium_mg: Double?
+    var iron_mg: Double?
+    var potassium_mg: Double?
 }
 
 /// One row of public.user_profiles, projected to the columns the Account
@@ -476,6 +607,116 @@ struct TokenUsageRow: Codable, Identifiable, Hashable {
     var tokens_used: Int?
     var cost_usd: Double?
     var created_at: String?
+}
+
+// MARK: - Serving display helpers
+//
+// Renders a per-entry serving label like "1 medium avocado, ~150g" or
+// "0.5 medium avocados (75g)" — pluralizing the unit and recomputing the
+// gram weight when the user logged a fractional/multiple amount.
+//
+// We pluralize only the unit noun (avocado → avocados), not the whole
+// description. Heuristic: split on the first comma — left half is the
+// unit phrase, right half is the gram annotation. If there's no comma,
+// strip a parenthesized "(~Xg)" tail and treat the rest as the unit.
+
+enum ServingFormat {
+    /// Returns a display string for `servings` of the given unit, with
+    /// the gram weight scaled to match. Returns nil when there's no
+    /// usable description.
+    static func render(description: String?, grams: Double?, servings: Double) -> String? {
+        guard let desc = description?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty else { return nil }
+        // Split unit phrase from gram annotation.
+        let (unitRaw, _) = splitUnitFromGrams(desc)
+        let unit = stripLeadingOne(unitRaw)
+        let s = servings
+        let qtyStr: String
+        if abs(s - s.rounded()) < 0.01 {
+            qtyStr = String(Int(s.rounded()))
+        } else {
+            qtyStr = String(format: "%g", (s * 100).rounded() / 100)
+        }
+        let plural = (s != 1) ? pluralize(unit) : unit
+        // Recompute gram annotation from servings × grams when available.
+        if let g = grams, g > 0 {
+            let scaled = (g * s).rounded()
+            let intPart = Int(scaled)
+            return "\(qtyStr) \(plural) (\(intPart)g)"
+        }
+        return "\(qtyStr) \(plural)"
+    }
+
+    /// Returns just the unit phrase (no gram annotation, no leading "1") —
+    /// used by the Edit sheet's Servings input label so the field reads
+    /// "How many medium avocados?" rather than "Servings".
+    static func unitNoun(description: String?) -> String? {
+        guard let desc = description?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty else { return nil }
+        let (unitRaw, _) = splitUnitFromGrams(desc)
+        let unit = stripLeadingOne(unitRaw)
+        return unit.isEmpty ? nil : unit
+    }
+
+    private static func splitUnitFromGrams(_ s: String) -> (String, String?) {
+        // Prefer a comma split (e.g. "1 medium avocado, ~150g").
+        if let commaIdx = s.firstIndex(of: ",") {
+            let left = String(s[..<commaIdx]).trimmingCharacters(in: .whitespaces)
+            let right = String(s[s.index(after: commaIdx)...]).trimmingCharacters(in: .whitespaces)
+            return (left, right)
+        }
+        // Otherwise strip any "(~Xg)" / "(Xg)" tail.
+        if let parenIdx = s.firstIndex(of: "(") {
+            let left = String(s[..<parenIdx]).trimmingCharacters(in: .whitespaces)
+            let right = String(s[parenIdx...])
+            return (left, right)
+        }
+        return (s, nil)
+    }
+
+    private static func stripLeadingOne(_ s: String) -> String {
+        // Drop a leading "1 " so "1 medium avocado" → "medium avocado".
+        let trimmed = s.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("1 ") { return String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces) }
+        return trimmed
+    }
+
+    /// Naive English pluralizer. Good enough for common food units —
+    /// avocado → avocados, slice → slices, cup → cups, egg → eggs.
+    /// Special-cases sibilant endings (s/sh/ch/x) → +es. Skips words
+    /// that already end in 's'.
+    private static func pluralize(_ s: String) -> String {
+        guard !s.isEmpty else { return s }
+        let lower = s.lowercased()
+        if lower.hasSuffix("s") || lower.hasSuffix("ss") { return s }
+        if lower.hasSuffix("ch") || lower.hasSuffix("sh") || lower.hasSuffix("x") { return s + "es" }
+        if lower.hasSuffix("y"), let lastBefore = s.dropLast().last, !"aeiou".contains(lastBefore) {
+            return String(s.dropLast()) + "ies"
+        }
+        return s + "s"
+    }
+}
+
+/// One row of public.generic_foods — USDA FoodData Central reference rows
+/// shared across all users (read-only; populated by
+/// scripts/import-usda-foods.js with the service role key).
+///
+/// Quick Log searches this table before falling back to AnalyzeService's
+/// AI describe — a hit means an instant log with no AI cost. Macros are
+/// stored per-serving (not per-100g), so the search path can drop them
+/// straight into meal_log without re-scaling at log time.
+struct GenericFoodRow: Codable, Identifiable, Hashable {
+    var id: String
+    var name: String
+    var aliases: [String]?
+    var serving_description: String?
+    var serving_grams: Double?
+    var serving_oz: Double?
+    var kcal: Double?
+    var protein_g: Double?
+    var carbs_g: Double?
+    var fat_g: Double?
+    var fiber_g: Double?
+    var fdc_id: String?
+    var source: String?
 }
 
 /// Lightweight reference to a body-scan file in the body-scans bucket.

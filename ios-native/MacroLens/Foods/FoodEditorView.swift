@@ -424,7 +424,13 @@ struct FoodEditorView: View {
             sodium: item?.sodium ?? 0,
             components: components.isEmpty ? nil : components,
             notes: item?.notes,
-            source: item?.source ?? (hasComponents ? "manual" : "manual")
+            source: item?.source ?? (hasComponents ? "manual" : "manual"),
+            // Preserve any AI-supplied serving fields when editing a row;
+            // the manual editor doesn't surface them yet (followup), but
+            // we shouldn't blank them on every Save.
+            servingDescription: item?.serving_description,
+            servingGrams: item?.serving_grams,
+            servingOz: item?.serving_oz
         )
 
         do {

@@ -466,6 +466,11 @@ final class AppState {
             let protein: Int?
             let carbs: Int?
             let fat: Int?
+            let track_full_label: Bool?
+            let sodium_mg_max: Double?
+            let fiber_g_min: Double?
+            let saturated_fat_g_max: Double?
+            let sugar_added_g_max: Double?
         }
         let userId = try await currentUserID()
         let payload = Payload(
@@ -473,7 +478,12 @@ final class AppState {
             calories: next.calories,
             protein: next.protein,
             carbs: next.carbs,
-            fat: next.fat
+            fat: next.fat,
+            track_full_label: next.track_full_label,
+            sodium_mg_max: next.sodium_mg_max,
+            fiber_g_min: next.fiber_g_min,
+            saturated_fat_g_max: next.saturated_fat_g_max,
+            sugar_added_g_max: next.sugar_added_g_max
         )
         try await SupabaseService.client
             .from("goals")
@@ -590,6 +600,48 @@ final class AppState {
         await syncDayMacrosToHealthKit(dateKey: dateKey)
     }
 
+    /// Bundle of full-nutrition-label values for a single logged meal.
+    /// Every field is optional — model returns nil when it can't read
+    /// or confidently infer the value. We never coerce to 0 because
+    /// "not tracked" and "0g" mean different things on a goals view.
+    struct FullLabelPayload: Equatable {
+        var saturatedFatG: Double?
+        var transFatG: Double?
+        var cholesterolMg: Double?
+        var sodiumMg: Double?
+        var fiberG: Double?
+        var sugarTotalG: Double?
+        var sugarAddedG: Double?
+        var vitaminAMcg: Double?
+        var vitaminCMg: Double?
+        var vitaminDMcg: Double?
+        var calciumMg: Double?
+        var ironMg: Double?
+        var potassiumMg: Double?
+
+        /// Pull full-label fields out of an AnalysisResult, scaled by
+        /// servings_consumed so the persisted value matches the
+        /// already-scaled macros on the same meal_log row.
+        static func from(_ r: AnalysisResult, scaledBy servings: Double = 1.0) -> FullLabelPayload {
+            func scale(_ v: Double?) -> Double? { v.map { $0 * servings } }
+            return FullLabelPayload(
+                saturatedFatG: scale(r.saturated_fat_g),
+                transFatG:     scale(r.trans_fat_g),
+                cholesterolMg: scale(r.cholesterol_mg),
+                sodiumMg:      scale(r.sodium_mg),
+                fiberG:        scale(r.fiber_g),
+                sugarTotalG:   scale(r.sugar_total_g),
+                sugarAddedG:   scale(r.sugar_added_g),
+                vitaminAMcg:   scale(r.vitamin_a_mcg),
+                vitaminCMg:    scale(r.vitamin_c_mg),
+                vitaminDMcg:   scale(r.vitamin_d_mcg),
+                calciumMg:     scale(r.calcium_mg),
+                ironMg:        scale(r.iron_mg),
+                potassiumMg:   scale(r.potassium_mg)
+            )
+        }
+    }
+
     /// Insert a new meal_log row. Used by Quick log + Analyze food's
     /// "Log this meal" button. Today's log is updated locally so the
     /// macro tiles refresh immediately without a round trip.
@@ -607,7 +659,11 @@ final class AppState {
                  recipeId: String? = nil,
                  foodItemId: String? = nil,
                  servingsConsumed: Double = 1.0,
-                 loggedAt: Date? = nil) async throws {
+                 loggedAt: Date? = nil,
+                 servingDescription: String? = nil,
+                 servingGrams: Double? = nil,
+                 servingOz: Double? = nil,
+                 fullLabel: FullLabelPayload? = nil) async throws {
         struct Insert: Encodable {
             // public.meal_log column is `name` (not `meal_name` — that's
             // meal_planner's column). Mixed those up once already.
@@ -623,6 +679,26 @@ final class AppState {
             let food_item_id: String?
             let logged_at: String
             let servings_consumed: Double
+            let serving_description: String?
+            let serving_grams: Double?
+            let serving_oz: Double?
+            // Full nutrition label (opt-in). Always written to the row
+            // when the AI returned values, regardless of whether the
+            // user has the toggle on — flipping the toggle later then
+            // shows historical data without a backfill.
+            let saturated_fat_g: Double?
+            let trans_fat_g: Double?
+            let cholesterol_mg: Double?
+            let sodium_mg: Double?
+            let fiber_g: Double?
+            let sugar_total_g: Double?
+            let sugar_added_g: Double?
+            let vitamin_a_mcg: Double?
+            let vitamin_c_mg: Double?
+            let vitamin_d_mcg: Double?
+            let calcium_mg: Double?
+            let iron_mg: Double?
+            let potassium_mg: Double?
         }
         let userId = try await currentUserID()
         // Auto-save to food_items if not already linked. Mirrors the web's
@@ -641,7 +717,10 @@ final class AppState {
                 protein: protein,
                 carbs: carbs,
                 fat: fat,
-                fiber: fiber
+                fiber: fiber,
+                servingDescription: servingDescription,
+                servingGrams: servingGrams,
+                servingOz: servingOz
             )
         }
         // Auto-assign meal_type from the local clock when the caller
@@ -668,7 +747,26 @@ final class AppState {
             recipe_id: recipeId,
             food_item_id: resolvedFoodItemId,
             logged_at: ISO8601DateFormatter().string(from: when),
-            servings_consumed: servingsConsumed
+            servings_consumed: servingsConsumed,
+            serving_description: servingDescription,
+            serving_grams: servingGrams,
+            serving_oz: servingOz,
+            saturated_fat_g: fullLabel?.saturatedFatG,
+            trans_fat_g:     fullLabel?.transFatG,
+            cholesterol_mg:  fullLabel?.cholesterolMg,
+            sodium_mg:       fullLabel?.sodiumMg,
+            // fiber_g defaults to the existing `fiber` value when the AI
+            // didn't return a separate full-label value — keeps the new
+            // column aligned with the legacy fiber field on day one.
+            fiber_g:         fullLabel?.fiberG ?? (fiber > 0 ? fiber : nil),
+            sugar_total_g:   fullLabel?.sugarTotalG,
+            sugar_added_g:   fullLabel?.sugarAddedG,
+            vitamin_a_mcg:   fullLabel?.vitaminAMcg,
+            vitamin_c_mg:    fullLabel?.vitaminCMg,
+            vitamin_d_mcg:   fullLabel?.vitaminDMcg,
+            calcium_mg:      fullLabel?.calciumMg,
+            iron_mg:         fullLabel?.ironMg,
+            potassium_mg:    fullLabel?.potassiumMg
         )
         let inserted: [MealLogEntry] = try await SupabaseService.client
             .from("meal_log")
@@ -713,7 +811,10 @@ final class AppState {
                                   protein: Double,
                                   carbs: Double,
                                   fat: Double,
-                                  fiber: Double) async throws -> String? {
+                                  fiber: Double,
+                                  servingDescription: String? = nil,
+                                  servingGrams: Double? = nil,
+                                  servingOz: Double? = nil) async throws -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -748,7 +849,7 @@ final class AppState {
             id: nil,
             name: trimmed,
             brand: nil,
-            servingSize: "1 serving",
+            servingSize: servingDescription ?? "1 serving",
             calories: calories,
             protein: protein,
             carbs: carbs,
@@ -758,7 +859,10 @@ final class AppState {
             sodium: 0,
             components: [],
             notes: nil,
-            source: "log"
+            source: "log",
+            servingDescription: servingDescription,
+            servingGrams: servingGrams,
+            servingOz: servingOz
         ))
         foods.insert(saved, at: 0)
         return saved.id
@@ -829,7 +933,10 @@ final class AppState {
             fat: item.fat ?? 0,
             fiber: item.fiber ?? 0,
             foodItemId: item.id,
-            loggedAt: loggedAt
+            loggedAt: loggedAt,
+            servingDescription: item.serving_description ?? item.serving_size,
+            servingGrams: item.serving_grams,
+            servingOz: item.serving_oz
         )
     }
 
@@ -915,7 +1022,7 @@ final class AppState {
         let userId = try await currentUserID()
         let response: [Goals] = try await SupabaseService.client
             .from("goals")
-            .select("calories, protein, carbs, fat")
+            .select("calories, protein, carbs, fat, track_full_label, sodium_mg_max, fiber_g_min, saturated_fat_g_max, sugar_added_g_max")
             .eq("user_id", value: userId)
             .limit(1)
             .execute()

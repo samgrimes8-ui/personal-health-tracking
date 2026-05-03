@@ -444,6 +444,25 @@ struct DashboardView: View {
         }
     }
 
+    /// Subtitle for a meal row. Combines the rendered serving (when the
+    /// entry has serving_description / serving_grams) with the meal type.
+    /// Returns nil when neither is available.
+    private func mealRowSubtitle(_ entry: MealLogEntry) -> String? {
+        let consumed = entry.servings_consumed ?? 1
+        let serving = ServingFormat.render(
+            description: entry.serving_description,
+            grams: entry.serving_grams,
+            servings: consumed
+        )
+        let mealType = entry.meal_type?.capitalized
+        switch (serving, mealType) {
+        case let (s?, m?): return "\(s) · \(m)"
+        case let (s?, nil): return s
+        case let (nil, m?): return m
+        default: return nil
+        }
+    }
+
     private func mealRow(_ entry: MealLogEntry) -> some View {
         Button {
             editingEntry = entry
@@ -454,8 +473,13 @@ struct DashboardView: View {
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(Theme.text)
                         .multilineTextAlignment(.leading)
-                    if let mealType = entry.meal_type {
-                        Text(mealType.capitalized)
+                    // Prefer a serving-aware subtitle over just the meal_type.
+                    // Renders "0.5 medium avocados (75g) · Snack" when the
+                    // entry has serving fields; falls back to the bare meal
+                    // type for older rows / recipe-linked rows that don't
+                    // carry serving info on meal_log.
+                    if let label = mealRowSubtitle(entry) {
+                        Text(label)
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.text3)
                     }
@@ -523,6 +547,23 @@ private struct EditMealSheet: View {
 
     private static let mealTypes = ["breakfast", "lunch", "snack", "dinner"]
 
+    /// Field label for the Servings input. Reads "How many medium
+    /// avocados?" when the entry has a serving_description; falls back
+    /// to "Consumed" for older rows.
+    private var servingsFieldLabel: String {
+        if let unit = ServingFormat.unitNoun(description: entry.serving_description), !unit.isEmpty {
+            return "How many \(unit)?"
+        }
+        return "Consumed"
+    }
+
+    /// Footer hint under the Servings input. Surfaces the per-serving
+    /// gram weight so users know what one serving represents.
+    private var servingDescriptionLabel: String? {
+        guard let desc = entry.serving_description, !desc.isEmpty else { return nil }
+        return "1 serving = \(desc)"
+    }
+
     init(entry: MealLogEntry) {
         self.entry = entry
         let consumed = max(0.001, entry.servings_consumed ?? 1)
@@ -586,9 +627,9 @@ private struct EditMealSheet: View {
                         .font(.system(size: 11))
                 }
 
-                Section("Servings") {
+                Section {
                     HStack {
-                        Text("Consumed")
+                        Text(servingsFieldLabel)
                         Spacer()
                         TextField("1.0", value: $servings, format: .number.precision(.fractionLength(0...2)))
                             .keyboardType(.decimalPad)
@@ -602,6 +643,12 @@ private struct EditMealSheet: View {
                                 fat      = (baseFat      * s).rounded(toPlaces: 1)
                                 fiber    = (baseFiber    * s).rounded(toPlaces: 1)
                             }
+                    }
+                } header: {
+                    Text("Servings")
+                } footer: {
+                    if let label = servingDescriptionLabel {
+                        Text(label).font(.system(size: 11))
                     }
                 }
 

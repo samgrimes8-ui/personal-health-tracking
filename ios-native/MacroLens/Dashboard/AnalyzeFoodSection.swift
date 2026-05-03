@@ -30,6 +30,13 @@ struct AnalyzeFoodSection: View {
     @State private var analyzing: Bool = false
     @State private var stage: String?           // status text shown under the analyze button while the pipeline runs
     @State private var result: AnalysisResult?
+    /// Multi-candidate list returned by describeFoodCandidates. When set
+    /// AND has >1 entries, the picker sheet opens; the user's selection
+    /// gets unwrapped into `result` for the existing single-card render.
+    /// Length-1 results unwrap inline without prompting (single-result
+    /// fast path the user requested).
+    @State private var candidates: [AnalysisResult] = []
+    @State private var showCandidatePicker: Bool = false
     @State private var error: String?
     @State private var loggingResult: Bool = false
     @State private var savingRecipe: Bool = false
@@ -62,6 +69,14 @@ struct AnalyzeFoodSection: View {
         .sheet(isPresented: $showCamera) {
             CameraSheet(image: $image)
                 .ignoresSafeArea()
+        }
+        .sheet(isPresented: $showCandidatePicker) {
+            CandidatePickerSheet(candidates: candidates) { picked in
+                result = picked
+                showCandidatePicker = false
+            } onCancel: {
+                showCandidatePicker = false
+            }
         }
         .onChange(of: photoSelection) { _, newItem in
             Task {
@@ -315,6 +330,17 @@ struct AnalyzeFoodSection: View {
                     .foregroundStyle(Theme.text2)
             }
 
+            // Per-serving unit label — surfaces what one serving actually
+            // represents so the macro pills below have a clear referent.
+            // e.g. "1 medium avocado, ~150g". Falls back silently when
+            // the analysis didn't return a serving description (older
+            // prompt path).
+            if let serving = r.serving_description, !serving.isEmpty {
+                Text("Per serving: \(serving)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.text3)
+            }
+
             HStack(spacing: 6) {
                 pill("\(Int(r.calories)) kcal", color: Theme.cal)
                 pill("\(Int(r.protein))g P", color: Theme.protein)
@@ -445,21 +471,33 @@ struct AnalyzeFoodSection: View {
         defer { analyzing = false; stage = nil }
 
         do {
-            let r: AnalysisResult
             switch (mode, source) {
             case (.food, .write):
-                r = try await AnalyzeService.describeFood(text)
+                // Multi-candidate path. Single-result is the fast path —
+                // we surface the picker only when the model actually
+                // returned multiple distinct options. Empty list raises
+                // an error so the user sees a real failure rather than a
+                // silent "nothing happened".
+                let list = try await AnalyzeService.describeFoodCandidates(text)
+                if list.isEmpty {
+                    throw NSError(domain: "Analyze", code: 0, userInfo: [NSLocalizedDescriptionKey: "No matches — try being more specific"])
+                }
+                if list.count == 1 {
+                    result = list[0]
+                } else {
+                    candidates = list
+                    showCandidatePicker = true
+                }
             case (.food, .photo):
-                r = try await runFoodPhotoPipeline()
+                result = try await runFoodPhotoPipeline()
             case (.recipe, .write):
-                r = try await AnalyzeService.analyzeRecipeText(text)
+                result = try await AnalyzeService.analyzeRecipeText(text)
             case (.recipe, .photo):
                 guard let b64 = imageBase64ForUpload() else {
                     throw NSError(domain: "Analyze", code: 0, userInfo: [NSLocalizedDescriptionKey: "Couldn't encode the photo"])
                 }
-                r = try await AnalyzeService.analyzeRecipePhoto(b64)
+                result = try await AnalyzeService.analyzeRecipePhoto(b64)
             }
-            result = r
         } catch {
             self.error = error.localizedDescription
         }
@@ -550,7 +588,11 @@ struct AnalyzeFoodSection: View {
                 carbs: r.carbs,
                 fat: r.fat,
                 fiber: r.fiber ?? 0,
-                loggedAt: state.loggedAtForSelectedDate()
+                loggedAt: state.loggedAtForSelectedDate(),
+                servingDescription: r.serving_description,
+                servingGrams: r.serving_grams,
+                servingOz: r.serving_oz,
+                fullLabel: AppState.FullLabelPayload.from(r)
             )
             logged = true
         } catch {
@@ -571,6 +613,8 @@ struct AnalyzeFoodSection: View {
 
     private func resetResult() {
         result = nil
+        candidates = []
+        showCandidatePicker = false
         error = nil
         logged = false
         saved = false
@@ -581,5 +625,61 @@ struct AnalyzeFoodSection: View {
         image = nil
         photoSelection = nil
         resetResult()
+    }
+}
+
+/// Modal list of describeFood candidates. Surfaces when the AI returned
+/// more than one match for a generic query ("banana" → small / medium /
+/// large / frozen / etc). Tap a row to pick — the picker dismisses and
+/// the parent renders the chosen candidate as a normal result card.
+private struct CandidatePickerSheet: View {
+    let candidates: [AnalysisResult]
+    let onPick: (AnalysisResult) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List(Array(candidates.enumerated()), id: \.offset) { _, c in
+                Button {
+                    onPick(c)
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(c.name)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                        if let serving = c.serving_description, !serving.isEmpty {
+                            Text(serving)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.text2)
+                        }
+                        HStack(spacing: 8) {
+                            Text("\(Int(c.calories.rounded())) kcal")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.cal)
+                            Text("\(Int(c.protein.rounded()))P · \(Int(c.carbs.rounded()))C · \(Int(c.fat.rounded()))F")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.text3)
+                            Spacer()
+                            if let conf = c.confidence {
+                                Text(conf.uppercased())
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(Theme.text3)
+                                    .padding(.horizontal, 5).padding(.vertical, 2)
+                                    .background(Theme.bg3, in: .rect(cornerRadius: 4))
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.plain)
+            }
+            .navigationTitle("Pick the closest match")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onCancel() }
+                }
+            }
+        }
     }
 }

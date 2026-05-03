@@ -185,9 +185,14 @@ struct FoodsView: View {
                     }
                     Spacer(minLength: 8)
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(f.serving_size?.isEmpty == false ? f.serving_size! : "1 serving")
+                        // Prefer the AI-supplied serving_description (with
+                        // grams) over the legacy free-text serving_size,
+                        // and fall back to "1 serving" for ancient rows.
+                        Text(servingLabel(f))
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.text3)
+                            .multilineTextAlignment(.trailing)
+                            .lineLimit(2)
                         if let count = f.components?.count, count > 0 {
                             Text("\(count) component\(count == 1 ? "" : "s")")
                                 .font(.system(size: 11))
@@ -296,5 +301,14 @@ struct FoodsView: View {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             if toast == msg { toast = nil }
         }
+    }
+
+    /// Display label for a food card's serving cell. Order of preference:
+    /// serving_description (structured, AI-supplied), serving_size
+    /// (free-text legacy), or the literal "1 serving".
+    private func servingLabel(_ f: FoodItemRow) -> String {
+        if let desc = f.serving_description, !desc.isEmpty { return desc }
+        if let s = f.serving_size, !s.isEmpty { return s }
+        return "1 serving"
     }
 }
