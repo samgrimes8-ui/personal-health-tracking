@@ -27,6 +27,10 @@ struct HealthSettingsSection: View {
     @State private var pullError: String?
     @State private var resyncing: Bool = false
     @State private var resyncStatus: String?
+    /// Probe state for the "READ may be revoked" hint. nil = not yet
+    /// probed; true = read works; false = read returned 0 samples
+    /// even though we expected data (anchor exists from a prior sync).
+    @State private var readAccessProbe: Bool?
 
     var body: some View {
         Card {
@@ -85,6 +89,15 @@ struct HealthSettingsSection: View {
                         deniedHint(for: denied)
                     }
 
+                    // Banner shown when our pull toggle says ON but a
+                    // probe query returns no samples despite a prior
+                    // successful sync (anchor exists). Strong signal
+                    // that the user revoked READ in Settings → Health
+                    // → MacroLens after initially granting it.
+                    if pullWeightOn, readAccessProbe == false {
+                        readRevokedBanner
+                    }
+
                     if pushMacrosOn {
                         Divider().background(Theme.border).padding(.vertical, 2)
                         resyncRow(userId: userId)
@@ -96,7 +109,60 @@ struct HealthSettingsSection: View {
                 }
             }
         }
-        .onAppear { hydrateToggles() }
+        .onAppear {
+            hydrateToggles()
+            Task { await runReadAccessProbeIfRelevant() }
+        }
+    }
+
+    // MARK: - Read-access probe
+
+    /// Runs a HKSampleQuery probe when the user has the pullWeight
+    /// toggle on AND has previously synced (anchor present). Surfaces
+    /// the read-revoked banner if the probe finds no samples — the
+    /// only reliable indicator that READ was revoked, since
+    /// authorizationStatus(for:) returns .notDetermined for any READ
+    /// regardless of actual state.
+    private func runReadAccessProbeIfRelevant() async {
+        guard let userId,
+              HealthKitService.shared.isAvailable,
+              HealthKitService.isToggleOn(.pullWeight, userId: userId),
+              HealthKitService.shared.hasPreviouslySyncedBodyMass(userId: userId) else {
+            readAccessProbe = nil
+            return
+        }
+        let result = await HealthKitService.shared.probeBodyMassReadAccess()
+        readAccessProbe = result
+    }
+
+    private var readRevokedBanner: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.fat)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Apple Health Read access looks revoked")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.text)
+                    Text("New weights from Apple Health aren't visible to MacroLens. Open Settings → Privacy & Security → Health → Macro Lens and turn Weight on under \"Allow Macro Lens to Read.\"")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Button {
+                HealthKitService.shared.openSystemSettings()
+            } label: {
+                Text("Open Settings →")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Theme.fat.opacity(0.08), in: .rect(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.fat.opacity(0.25), lineWidth: 1))
     }
 
     // MARK: - Toggle row
@@ -212,6 +278,10 @@ struct HealthSettingsSection: View {
             pullStatus = "Imported \(inserted) weight \(inserted == 1 ? "entry" : "entries") from Apple Health."
             // Refresh Goals data so the chart picks up the new rows.
             await state.loadGoals()
+            // Re-run the probe so the banner state reflects the auth
+            // outcome — if user just granted READ in the bundled sheet,
+            // probe should now succeed and any prior banner clears.
+            await runReadAccessProbeIfRelevant()
         } catch {
             pullError = "Couldn't read from Apple Health: \(error.localizedDescription)"
         }

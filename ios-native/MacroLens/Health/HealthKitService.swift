@@ -111,6 +111,8 @@ final class HealthKitService {
     private func types(for permission: Permission) -> (write: Set<HKSampleType>, read: Set<HKObjectType>) {
         switch permission {
         case .pushMacros:
+            // Macros are push-only — we don't pull diet data back from
+            // HK, so no read types here.
             let w: Set<HKSampleType> = [
                 HKQuantityType(.dietaryEnergyConsumed),
                 HKQuantityType(.dietaryProtein),
@@ -118,11 +120,61 @@ final class HealthKitService {
                 HKQuantityType(.dietaryFatTotal)
             ]
             return (w, [])
-        case .pushWeight:
-            return ([HKQuantityType(.bodyMass)], [])
-        case .pullWeight:
-            return ([], [HKQuantityType(.bodyMass)])
+        case .pushWeight, .pullWeight:
+            // Bundle WRITE + READ for bodyMass on either weight toggle.
+            // Reason: iOS shows the auth sheet only for types that are
+            // .notDetermined. If the user enabled push-weight first
+            // (write only), we never asked for read — when they later
+            // enable read, the auth call returns immediately without
+            // showing any sheet because read is still .notDetermined
+            // but iOS doesn't bother to re-prompt for a single section.
+            // Asking for both at once on either toggle guarantees the
+            // user sees both sections in a single sheet and can grant
+            // each independently. Already-granted types are silently
+            // skipped, so this is also safe to call repeatedly.
+            return ([HKQuantityType(.bodyMass)], [HKQuantityType(.bodyMass)])
         }
+    }
+
+    /// Probe whether READ access for bodyMass is actually granted.
+    /// `authorizationStatus(for:)` lies for read perms (returns
+    /// .notDetermined when user has denied — Apple's privacy quirk),
+    /// so the only reliable signal is "did a sample query return
+    /// anything we should be able to see?"
+    ///
+    /// Returns:
+    ///   - true  → at least one bodyMass sample is visible to us → READ works
+    ///   - false → either READ is denied OR HK has no bodyMass data
+    ///
+    /// Caller should disambiguate "denied vs empty store" by checking
+    /// some external signal (e.g. the persisted anchor exists, meaning
+    /// we previously synced successfully — so an empty result now
+    /// implies revocation).
+    func probeBodyMassReadAccess() async -> Bool {
+        guard isAvailable else { return false }
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let query = HKSampleQuery(
+                sampleType: HKQuantityType(.bodyMass),
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: nil
+            ) { _, samples, _ in
+                let hasAny = !(samples?.isEmpty ?? true)
+                Self.log.debug("probeBodyMassReadAccess returned \(hasAny, privacy: .public)")
+                cont.resume(returning: hasAny)
+            }
+            store.execute(query)
+        }
+    }
+
+    /// Has this user ever successfully synced from HK before? We use
+    /// the persisted anchor as the signal — if it exists, a previous
+    /// pullWeights succeeded at least once. Used by HealthSettingsSection
+    /// to decide whether a probe-returned-false should surface the
+    /// "read may be revoked" warning (a brand-new user with no HK data
+    /// shouldn't be nagged).
+    func hasPreviouslySyncedBodyMass(userId: String) -> Bool {
+        UserDefaults.standard.data(forKey: "macrolens_hk_weight_anchor_\(userId)") != nil
     }
 
     /// Best-effort deep link into Settings → Privacy → Health → Macro Lens.
