@@ -7018,7 +7018,10 @@ function wireGlobals() {
     try {
       const e = state.currentEntry
 
-      // Auto-save recipe with ingredients
+      // Auto-save recipe with ingredients — recipes have their own
+      // multi-serving editor and skip the meal-preview modal. The flow
+      // mirrors prior behavior: write the recipe to recipes table,
+      // log a single-serving meal_log entry.
       if (e.ingredients?.length) {
         getRecipeByName(state.user.id, e.name).then(existing => {
           if (!existing) {
@@ -7032,29 +7035,52 @@ function wireGlobals() {
             }).then(recipe => { state.recipes.unshift(recipe) }).catch(() => {})
           }
         }).catch(() => {})
+
+        const mealType = getMealTypeFromTime(new Date())
+        const entry = await addMealEntry(state.user.id, { ...e, meal_type: mealType, logged_at: buildLoggedAtForSelectedDay(mealType) })
+        state.log.unshift(entry)
+        state.currentEntry = null
+        updateStats()
+        refreshTodayLog()
+        const btn = document.getElementById('log-entry-btn')
+        if (btn) { btn.textContent = '✓ Logged!'; btn.className = 'log-btn logged' }
+        showToast(entry.name + ' logged!', 'success')
+        return
       }
 
-      // Auto-save to food_items and get the id to link in the log
-      const food_item_id = e.ingredients?.length ? null
-        : await autoSaveFoodItem(state.user.id, e, state.foodItems).then(id => {
-            if (id) {
-              // Add to local state if new
-              const isNew = !state.foodItems.find(f => f.id === id)
-              if (isNew) getFoodItems(state.user.id).then(items => { state.foodItems = items }).catch(() => {})
-            }
-            return id
-          }).catch(() => null)
+      // Single-food path: route through the unified preview modal so
+      // the user can adjust servings / unit before commit. The modal
+      // handles auto-save into food_items (via the "Save and log" path
+      // calling addMealEntry, which is auto-linked by autoSaveFoodItem
+      // afterwards). Mirrors iOS b382aaf preview-before-save.
+      let food_item_id = null
+      try {
+        food_item_id = await autoSaveFoodItem(state.user.id, e, state.foodItems)
+        if (food_item_id && !state.foodItems.find(f => f.id === food_item_id)) {
+          getFoodItems(state.user.id).then(items => { state.foodItems = items }).catch(() => {})
+        }
+      } catch (autoErr) {
+        console.warn('autoSaveFoodItem failed:', autoErr.message)
+      }
 
-      const mealType = getMealTypeFromTime(new Date())
-      const entry = await addMealEntry(state.user.id, { ...e, food_item_id, meal_type: mealType, logged_at: buildLoggedAtForSelectedDay(mealType) })
-      state.log.unshift(entry)
+      const result = await openMealPreviewAndPersist({
+        ...e,
+        food_item_id,
+        base_calories: e.calories ?? 0,
+        base_protein:  e.protein  ?? 0,
+        base_carbs:    e.carbs    ?? 0,
+        base_fat:      e.fat      ?? 0,
+        base_fiber:    e.fiber    ?? 0,
+        base_sugar:    e.sugar    ?? 0,
+      }, { allowSaveToFoods: false })
 
-      state.currentEntry = null
-      updateStats()
-      refreshTodayLog()
-      const btn = document.getElementById('log-entry-btn')
-      if (btn) { btn.textContent = '✓ Logged!'; btn.className = 'log-btn logged' }
-      showToast(entry.name + ' logged!', 'success')
+      if (result) {
+        // The "Save and log" path was taken — clear the result card so
+        // the analyze panel resets to its idle state.
+        state.currentEntry = null
+        const btn = document.getElementById('log-entry-btn')
+        if (btn) { btn.textContent = '✓ Logged!'; btn.className = 'log-btn logged' }
+      }
     } catch (err) { showToast('Failed to log: ' + err.message, 'error') }
   }
 
@@ -13104,21 +13130,17 @@ function wireGlobals() {
       }
     }
 
-    // Log as one food (default for foods without components or user chose "as one")
-    try {
-      const entry = await addMealEntry(state.user.id, {
-        ...item,
-        base_calories: item.calories, base_protein: item.protein,
-        base_carbs: item.carbs, base_fat: item.fat,
-        base_fiber: item.fiber, base_sugar: item.sugar,
-        servings_consumed: 1,
-        food_item_id: id
-      })
-      state.log.unshift(entry)
-      updateStats()
-      refreshTodayLog()
-      showToast(`${item.name} logged!`, 'success')
-    } catch (err) { showToast('Error: ' + err.message, 'error') }
+    // Log as one food (default for foods without components or user
+    // chose "as one"). Routes through the preview modal so the user
+    // can adjust servings/units before commit. Skip "Save to my foods"
+    // since this food is already in My Foods.
+    await openMealPreviewAndPersist({
+      ...item,
+      food_item_id: id,
+      base_calories: item.calories, base_protein: item.protein,
+      base_carbs: item.carbs, base_fat: item.fat,
+      base_fiber: item.fiber, base_sugar: item.sugar,
+    }, { allowSaveToFoods: false })
   }
 
   document.getElementById('food-item-modal')?.addEventListener('click', e => {
@@ -13942,23 +13964,24 @@ function quantityLabel(candidate, env) {
   return null
 }
 
-// Log a single AI-described candidate. Applies the envelope-level
-// parsed_quantity multiplier at insert (matches iOS 415dfb3).
+// Log a single AI-described candidate. Routes through the preview
+// modal so the user sees the parsed-quantity scaling AND can adjust
+// before commit. parsed_quantity multiplier is the modal's initial
+// servings value; user can change unit or amount before tapping Save.
 async function logCandidate(candidate, env) {
   const mult = quantityMultiplier(candidate, env)
-  const result = {
+  const meal = {
     name: candidate.name,
-    calories: (candidate.calories || 0) * mult,
-    protein:  (candidate.protein  || 0) * mult,
-    carbs:    (candidate.carbs    || 0) * mult,
-    fat:      (candidate.fat      || 0) * mult,
-    fiber:    (candidate.fiber    || 0) * mult,
-    sugar:    (candidate.sugar    || 0) * mult,
+    calories: candidate.calories || 0,
+    protein:  candidate.protein  || 0,
+    carbs:    candidate.carbs    || 0,
+    fat:      candidate.fat      || 0,
+    fiber:    candidate.fiber    || 0,
+    sugar:    candidate.sugar    || 0,
     serving_description: candidate.serving_description,
     serving_grams: candidate.serving_grams,
     serving_oz: candidate.serving_oz,
     confidence: candidate.confidence,
-    servings_consumed: mult,
     base_calories: candidate.calories || 0,
     base_protein:  candidate.protein  || 0,
     base_carbs:    candidate.carbs    || 0,
@@ -13966,9 +13989,375 @@ async function logCandidate(candidate, env) {
     base_fiber:    candidate.fiber    || 0,
     base_sugar:    candidate.sugar    || 0,
   }
-  state.currentEntry = result
-  showResult(result)
-  await logCurrentEntryHandler()
+  await openMealPreviewAndPersist(meal, { initialServings: mult, allowSaveToFoods: true })
+}
+
+// ─── Meal preview modal (parity with iOS preview-before-save) ─────────────────
+//
+// Unified pre-save modal used by every log entry point (Quick Log, AI
+// describe, Analyze result, Foods quick-log, USDA pick). Mirrors the
+// iOS MealLogEditor sheet shipped in b382aaf + 350f283:
+//
+//   • Editable amount with servings/grams/ounces unit cycling. Available
+//     units gate on serving_grams — foods without a gram weight stay in
+//     servings-only mode (toggle button hides).
+//   • Live macro recompute from per-serving base × current servings.
+//   • Fraction parsing on the amount input ("1/2", "1 1/2", "½", "1.5"
+//     all resolve to a number) — same as the iOS FractionalNumberField.
+//   • Three actions: "Save and log" (default), "Save to my foods"
+//     (skips the meal_log write but persists to food_items), Cancel.
+//
+// Returns Promise<{ action, servings, meal } | null>. Caller handles
+// the actual DB write — keeps the modal stateless w.r.t. food_item /
+// recipe / generic_foods lineage decisions.
+
+const MEAL_PREVIEW_UNIT_KEY = 'macrolens_meal_preview_unit'
+
+// Unicode-fraction → ascii numerator/denominator pairs.
+const _UNICODE_FRACTIONS = {
+  '½': 0.5, '⅓': 1/3, '⅔': 2/3, '¼': 0.25, '¾': 0.75,
+  '⅕': 0.2, '⅖': 0.4, '⅗': 0.6, '⅘': 0.8,
+  '⅙': 1/6, '⅚': 5/6, '⅛': 0.125, '⅜': 0.375, '⅝': 0.625, '⅞': 0.875,
+}
+
+// Parse the meal-preview amount field value. Accepts:
+//   "1.5"          → 1.5
+//   "1/2"          → 0.5
+//   "1 1/2"        → 1.5  (mixed number)
+//   "½"            → 0.5
+//   "1 ½"          → 1.5  (mixed unicode)
+//   ""             → null
+function parseFractionInput(raw) {
+  if (raw == null) return null
+  let s = String(raw).trim()
+  if (!s) return null
+  // Replace any unicode fraction with " <decimal>" so the existing
+  // mixed-number parser handles it. Whole part stays intact.
+  for (const [glyph, val] of Object.entries(_UNICODE_FRACTIONS)) {
+    if (s.includes(glyph)) s = s.split(glyph).join(' ' + val)
+  }
+  s = s.replace(/\s+/g, ' ').trim()
+  // Mixed number: "1 1/2" or "1 0.5"
+  const mixed = s.match(/^(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/)
+  if (mixed) {
+    const whole = parseFloat(mixed[1])
+    const num = parseFloat(mixed[2])
+    const den = parseFloat(mixed[3])
+    if (den === 0) return null
+    return whole + (num / den) * (whole < 0 ? -1 : 1)
+  }
+  // Mixed with space-decimal: "1 0.5" → 1.5
+  const mixedDec = s.match(/^(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$/)
+  if (mixedDec) return parseFloat(mixedDec[1]) + parseFloat(mixedDec[2])
+  // Pure fraction: "1/2"
+  const frac = s.match(/^(-?\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/)
+  if (frac) {
+    const den = parseFloat(frac[2])
+    if (den === 0) return null
+    return parseFloat(frac[1]) / den
+  }
+  // Plain number
+  const num = parseFloat(s)
+  return isNaN(num) ? null : num
+}
+
+// Format a number for display in the amount field. Strips trailing
+// zeros and unnecessary decimal points so 1.0 → "1" and 0.50 → "0.5".
+function formatPreviewAmount(n) {
+  if (n == null || isNaN(n)) return ''
+  return Number(n.toFixed(3)).toString()
+}
+
+// Determine which units the modal can offer for a given meal. Always
+// includes servings; adds grams when serving_grams is known; adds
+// ounces when serving_grams or serving_oz is known (oz can derive
+// from grams). Order matters — toggle cycles through this list.
+function availableMealUnits(meal) {
+  const out = ['servings']
+  if (meal?.serving_grams) out.push('grams')
+  if (meal?.serving_grams || meal?.serving_oz) out.push('ounces')
+  return out
+}
+
+// Convert a servings count to the meal's "amount in chosen unit"
+// representation. Used to seed the field after a unit cycle.
+function servingsToUnit(servings, unit, meal) {
+  if (unit === 'servings') return servings
+  if (unit === 'grams' && meal?.serving_grams) return servings * meal.serving_grams
+  if (unit === 'ounces') {
+    const oz = meal?.serving_oz ?? (meal?.serving_grams ? meal.serving_grams / 28.3495 : null)
+    return oz ? servings * oz : servings
+  }
+  return servings
+}
+
+// Inverse of servingsToUnit — used on commit to recover canonical
+// servings from whatever the user typed in the active unit.
+function unitToServings(amount, unit, meal) {
+  if (unit === 'servings') return amount
+  if (unit === 'grams' && meal?.serving_grams) return amount / Math.max(meal.serving_grams, 0.0001)
+  if (unit === 'ounces') {
+    const oz = meal?.serving_oz ?? (meal?.serving_grams ? meal.serving_grams / 28.3495 : null)
+    return oz ? amount / Math.max(oz, 0.0001) : amount
+  }
+  return amount
+}
+
+const _UNIT_LABELS = { servings: 'servings', grams: 'g', ounces: 'oz' }
+
+// Open the preview modal. Returns Promise resolving to:
+//   { action: 'log' | 'save_to_foods', servings, meal }
+//   null on cancel
+//
+// `meal` shape expectations (any may be missing):
+//   name (required), calories, protein, carbs, fat, fiber, sugar,
+//   serving_description, serving_grams, serving_oz,
+//   base_calories / base_protein / base_carbs / base_fat / base_fiber / base_sugar
+//   (when base_* missing, the consumed values are taken as the per-serving baseline)
+//
+// opts:
+//   initialServings — defaults to 1 (or to the parsed_quantity multiplier from the picker)
+//   allowSaveToFoods — show the "Save to my foods" button (default true unless meal.recipe_id)
+function openMealPreviewModal(meal, opts = {}) {
+  return new Promise(resolve => {
+    const allowSaveToFoods = opts.allowSaveToFoods ?? !meal.recipe_id
+    const baseCal   = meal.base_calories ?? meal.calories ?? 0
+    const baseP     = meal.base_protein  ?? meal.protein  ?? 0
+    const baseC     = meal.base_carbs    ?? meal.carbs    ?? 0
+    const baseF     = meal.base_fat      ?? meal.fat      ?? 0
+    const baseFiber = meal.base_fiber    ?? meal.fiber    ?? 0
+    const baseSugar = meal.base_sugar    ?? meal.sugar    ?? 0
+
+    const units = availableMealUnits(meal)
+    let unit = (() => {
+      const saved = (typeof localStorage !== 'undefined') ? localStorage.getItem(MEAL_PREVIEW_UNIT_KEY) : null
+      return units.includes(saved) ? saved : 'servings'
+    })()
+    let servings = Math.max(0.001, opts.initialServings ?? 1)
+
+    const sheet = document.createElement('div')
+    sheet.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:flex-end;justify-content:center'
+
+    // 1 serving = ... hint. Pulls from serving_description first (carries
+    // the gram weight in plain-language form) then falls back to a bare
+    // "≈ Xg" when only the gram weight is known. Hidden when neither.
+    const servingHint = meal.serving_description
+      ? `1 serving = ${esc(meal.serving_description)}`
+      : (meal.serving_grams ? `1 serving ≈ ${meal.serving_grams}g` : null)
+
+    sheet.innerHTML = `
+      <div id="mp-card" style="background:var(--bg2);border-radius:var(--r3) var(--r3) 0 0;width:100%;max-width:480px;padding:20px 20px 28px;max-height:90vh;overflow-y:auto">
+        <div style="width:36px;height:4px;background:var(--border2);border-radius:2px;margin:0 auto 16px"></div>
+
+        <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px;font-family:'DM Serif Display',serif">${esc(meal.name || 'Untitled')}</div>
+        ${servingHint ? `<div style="font-size:12px;color:var(--text3);margin-bottom:16px">⚖️ ${servingHint}</div>` : '<div style="margin-bottom:16px"></div>'}
+
+        <!-- Amount + unit toggle -->
+        <div style="display:flex;align-items:flex-end;gap:8px;margin-bottom:14px">
+          <div style="flex:1">
+            <label class="field-label" id="mp-amount-label" style="display:block;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Amount</label>
+            <input id="mp-amount" type="text" inputmode="decimal"
+              style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:11px 12px;color:var(--text);font-size:16px;font-family:inherit;outline:none">
+          </div>
+          ${units.length > 1 ? `
+          <button id="mp-unit-toggle"
+            style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:11px 14px;color:var(--accent);font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;min-width:64px">
+            ${_UNIT_LABELS[unit]}
+          </button>` : `
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:11px 14px;color:var(--text3);font-size:14px;font-weight:600;font-family:inherit;min-width:64px;text-align:center">
+            ${_UNIT_LABELS[unit]}
+          </div>`}
+        </div>
+
+        <!-- Live macro recompute -->
+        <div id="mp-macros" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:6px"></div>
+        <div id="mp-servings-hint" style="font-size:11px;color:var(--text3);margin-bottom:18px;text-align:center"></div>
+
+        <!-- Actions -->
+        <button id="mp-log"
+          style="width:100%;padding:13px;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:8px">
+          ✓ Save and log
+        </button>
+        ${allowSaveToFoods ? `
+        <button id="mp-save"
+          style="width:100%;padding:12px;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:8px">
+          🍎 Save to my foods (don't log)
+        </button>` : ''}
+        <button id="mp-cancel"
+          style="width:100%;padding:11px;background:none;border:none;color:var(--text3);font-size:13px;font-family:inherit;cursor:pointer">
+          Cancel
+        </button>
+      </div>
+    `
+    document.body.appendChild(sheet)
+    const amountEl = document.getElementById('mp-amount')
+    const macrosEl = document.getElementById('mp-macros')
+    const hintEl = document.getElementById('mp-servings-hint')
+    const labelEl = document.getElementById('mp-amount-label')
+
+    const renderMacros = () => {
+      const cal = baseCal * servings
+      const p = baseP * servings
+      const c = baseC * servings
+      const f = baseF * servings
+      macrosEl.innerHTML = `
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px 6px;text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--accent);font-family:'DM Serif Display',serif">${Math.round(cal)}</div>
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">kcal</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px 6px;text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--protein);font-family:'DM Serif Display',serif">${Math.round(p)}<span style="font-size:11px;color:var(--text3);font-family:inherit">g</span></div>
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">protein</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px 6px;text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--carbs);font-family:'DM Serif Display',serif">${Math.round(c)}<span style="font-size:11px;color:var(--text3);font-family:inherit">g</span></div>
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">carbs</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:var(--r);padding:8px 6px;text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--fat);font-family:'DM Serif Display',serif">${Math.round(f)}<span style="font-size:11px;color:var(--text3);font-family:inherit">g</span></div>
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px">fat</div>
+        </div>
+      `
+      // Servings hint — shows the canonical servings count when the user
+      // is in g/oz mode, so they know what's actually being committed.
+      if (unit === 'servings') {
+        hintEl.textContent = ''
+      } else {
+        hintEl.textContent = `≈ ${formatPreviewAmount(servings)} serving${Math.abs(servings - 1) < 0.001 ? '' : 's'}`
+      }
+      if (labelEl) labelEl.textContent = `Amount (${_UNIT_LABELS[unit]})`
+    }
+
+    // Seed the input with the initial amount in the active unit.
+    const seedAmount = () => {
+      amountEl.value = formatPreviewAmount(servingsToUnit(servings, unit, meal))
+    }
+    seedAmount()
+    renderMacros()
+    setTimeout(() => { amountEl.focus(); amountEl.select?.() }, 30)
+
+    // On every keystroke, parse and recompute. Don't re-format the
+    // value while the field is focused — the user is mid-edit and
+    // re-formatting would clobber their cursor.
+    amountEl.addEventListener('input', () => {
+      const parsed = parseFractionInput(amountEl.value)
+      if (parsed != null && parsed >= 0) {
+        servings = unitToServings(parsed, unit, meal)
+        renderMacros()
+      }
+    })
+    // On blur, normalize the displayed value (resolves "1/2" → "0.5").
+    amountEl.addEventListener('blur', () => {
+      const parsed = parseFractionInput(amountEl.value)
+      if (parsed != null && parsed >= 0) {
+        amountEl.value = formatPreviewAmount(parsed)
+      }
+    })
+
+    if (units.length > 1) {
+      document.getElementById('mp-unit-toggle').onclick = () => {
+        const i = units.indexOf(unit)
+        unit = units[(i + 1) % units.length]
+        try { localStorage.setItem(MEAL_PREVIEW_UNIT_KEY, unit) } catch {}
+        document.getElementById('mp-unit-toggle').textContent = _UNIT_LABELS[unit]
+        seedAmount()
+        renderMacros()
+      }
+    }
+
+    const close = (result) => {
+      if (sheet.parentNode) document.body.removeChild(sheet)
+      resolve(result)
+    }
+    const finish = (action) => {
+      // Re-parse one more time in case input never blurred.
+      const parsed = parseFractionInput(amountEl.value)
+      if (parsed != null && parsed >= 0) servings = unitToServings(parsed, unit, meal)
+      if (servings <= 0) { showToast('Amount must be greater than zero', 'error'); return }
+      close({
+        action,
+        servings,
+        meal,
+        scaled: {
+          calories: baseCal * servings,
+          protein:  baseP * servings,
+          carbs:    baseC * servings,
+          fat:      baseF * servings,
+          fiber:    baseFiber * servings,
+          sugar:    baseSugar * servings,
+        }
+      })
+    }
+    document.getElementById('mp-log').onclick = () => finish('log')
+    if (allowSaveToFoods) document.getElementById('mp-save').onclick = () => finish('save_to_foods')
+    document.getElementById('mp-cancel').onclick = () => close(null)
+    sheet.onclick = (e) => { if (e.target === sheet) close(null) }
+  })
+}
+
+// Open preview modal + persist the user's choice. Used by every entry
+// point that needs the modal but doesn't already manage its own DB
+// write logic. Returns the inserted log entry (or null on cancel /
+// save-to-foods).
+async function openMealPreviewAndPersist(meal, opts = {}) {
+  const result = await openMealPreviewModal(meal, opts)
+  if (!result) return null
+  const { action, servings, scaled } = result
+
+  // Build the entry shape both code paths need.
+  const baseCal   = meal.base_calories ?? meal.calories ?? 0
+  const baseP     = meal.base_protein  ?? meal.protein  ?? 0
+  const baseC     = meal.base_carbs    ?? meal.carbs    ?? 0
+  const baseF     = meal.base_fat      ?? meal.fat      ?? 0
+  const baseFiber = meal.base_fiber    ?? meal.fiber    ?? 0
+  const baseSugar = meal.base_sugar    ?? meal.sugar    ?? 0
+
+  if (action === 'save_to_foods') {
+    try {
+      const saved = await upsertFoodItem(state.user.id, {
+        name: meal.name,
+        brand: meal.brand || '',
+        serving_size: meal.serving_description || meal.serving_size || '1 serving',
+        calories: baseCal, protein: baseP, carbs: baseC, fat: baseF,
+        fiber: baseFiber, sugar: baseSugar,
+        sodium: meal.sodium || 0,
+        notes: meal.notes || '',
+        source: meal.source || 'manual',
+      })
+      const idx = state.foodItems.findIndex(f => f.id === saved.id)
+      if (idx === -1) state.foodItems.unshift(saved); else state.foodItems[idx] = saved
+      showToast(`Saved "${saved.name}" to My Foods`, 'success')
+      return null
+    } catch (e) {
+      showToast('Save failed: ' + (e?.message || 'unknown'), 'error')
+      return null
+    }
+  }
+
+  // action === 'log'
+  try {
+    const mealType = meal.meal_type || getMealTypeFromTime(new Date())
+    const entry = await addMealEntry(state.user.id, {
+      ...meal,
+      calories: scaled.calories, protein: scaled.protein,
+      carbs: scaled.carbs, fat: scaled.fat,
+      fiber: scaled.fiber, sugar: scaled.sugar,
+      base_calories: baseCal, base_protein: baseP,
+      base_carbs: baseC, base_fat: baseF,
+      base_fiber: baseFiber, base_sugar: baseSugar,
+      servings_consumed: servings,
+      meal_type: mealType,
+      logged_at: buildLoggedAtForSelectedDay(mealType),
+    })
+    state.log.unshift(entry)
+    updateStats()
+    refreshTodayLog()
+    showToast(`${entry.name} logged!`, 'success')
+    return entry
+  } catch (e) {
+    showToast('Log failed: ' + (e?.message || 'unknown'), 'error')
+    return null
+  }
 }
 
 function showCandidatePicker(query, candidates, env) {
@@ -14320,6 +14709,7 @@ function filterQuickLog() {
     try {
       const isRecipe = id.startsWith('recipe::')
       const isFood = id.startsWith('food::')
+      const isGeneric = id.startsWith('generic::')
 
       // Link recipe_id if logging from a recipe
       const recipe_id = isRecipe ? meal.id : (meal.recipe_id ?? null)
@@ -14341,10 +14731,13 @@ function filterQuickLog() {
         }
       }
 
-      console.log('[quickLogMeal] inserting entry — isRecipe:', isRecipe, 'isFood:', isFood, 'recipe_id:', recipe_id, 'food_item_id:', food_item_id)
+      console.log('[quickLogMeal] previewing entry — isRecipe:', isRecipe, 'isFood:', isFood, 'recipe_id:', recipe_id, 'food_item_id:', food_item_id)
 
-      const qlMealType = meal.meal_type || getMealTypeFromTime(new Date())
-      const entry = await addMealEntry(state.user.id, {
+      // Hand off to the unified preview modal. "Save to my foods" only
+      // makes sense for non-recipe items that aren't already a saved
+      // food (foods + generics qualify; recipes don't).
+      const allowSaveToFoods = !isRecipe && !meal.food_item_id
+      const previewMeal = {
         ...meal,
         base_calories: meal.base_calories ?? meal.calories,
         base_protein: meal.base_protein ?? meal.protein,
@@ -14352,19 +14745,16 @@ function filterQuickLog() {
         base_fat: meal.base_fat ?? meal.fat,
         base_fiber: meal.base_fiber ?? meal.fiber ?? 0,
         base_sugar: meal.base_sugar ?? meal.sugar ?? 0,
-        servings_consumed: 1,
         food_item_id,
         recipe_id,
-        meal_type: qlMealType,
-        logged_at: buildLoggedAtForSelectedDay(qlMealType),
-      })
-      state.log.unshift(entry)
+      }
+      const result = await openMealPreviewAndPersist(previewMeal, { allowSaveToFoods })
       const input = document.getElementById('quick-log-search')
       if (input) input.value = ''
-      document.getElementById('quick-log-list').innerHTML = ''
-      updateStats()
-      refreshTodayLog()
-      showToast(`${meal.name} logged!`, 'success')
+      const listEl = document.getElementById('quick-log-list')
+      if (listEl) listEl.innerHTML = ''
+      // Don't surface a second error here — openMealPreviewAndPersist
+      // already toasts on failure / success.
     } catch (err) {
       console.error('[quickLogMeal] failed:', err)
       showToast('Failed to log: ' + (err?.message || 'unknown error'), 'error')
