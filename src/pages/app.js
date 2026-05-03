@@ -21,7 +21,7 @@ import {
   copyMealPlanShareToPlanner, saveSharedRecipeFromPlannerRow,
   deleteMyAccount,
   getMyIdentities, linkGoogleIdentity, unlinkIdentity,
-  searchGenericFoods,
+  searchGenericFoods, searchFoodItemsRanked,
   saveTrackFullNutrition,
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
@@ -13921,15 +13921,27 @@ function renderQuickLogResults(list, local, generic, q, loadingGeneric) {
     return
   }
 
+  // Stash food_items rows so quickLogMeal('food::<id>') can resolve a
+  // row that might not yet be in state.foodItems if the dashboard load
+  // and the search response interleaved.
+  window._lastQuickLogFoodItems = local.filter(i => i.source === 'food')
   const localHtml = local.map(item => {
-    const mealRef = item.source === 'recipe' ? 'recipe::' + item.id : item.id
+    const mealRef = item.source === 'recipe' ? 'recipe::' + item.id
+                  : item.source === 'food' ? 'food::' + item.id
+                  : item.id
+    const labelColor = item.source === 'recipe' ? 'var(--protein)'
+                     : item.source === 'food' ? 'var(--carbs)'
+                     : 'var(--text3)'
+    const label = item.source === 'recipe' ? '⭐ Recipe'
+                : item.source === 'food' ? `🥫 Saved food${item.brand ? ' · ' + esc(item.brand) : ''}`
+                : '📋 Log history'
     return `
     <div class="history-pick-item" data-quicklog-ref="${esc(String(mealRef))}"
       style="border-radius:var(--r)">
       <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
         <span class="hpi-name">${esc(item.name)}</span>
-        <span style="font-size:10px;color:${item.source === 'recipe' ? 'var(--protein)' : 'var(--text3)'}">
-          ${item.source === 'recipe' ? '⭐ Recipe' : '📋 Log history'}
+        <span style="font-size:10px;color:${labelColor}">
+          ${label}
         </span>
       </div>
       <div style="text-align:right;flex-shrink:0">
@@ -13961,34 +13973,55 @@ function renderQuickLogResults(list, local, generic, q, loadingGeneric) {
   list.innerHTML = localHtml + genericHtml + loadingHtml
 }
 
-// Token gate that keeps stale generic_foods responses from clobbering a
-// fresher search. Each scheduleGenericLookup() call bumps the seq, and
+// Token gate that keeps stale RPC responses from clobbering a
+// fresher search. Each scheduleAsyncLookup() call bumps the seq, and
 // the response only renders if its seq is still the latest.
 let _genericLookupSeq = 0
 
 /**
- * Debounce + fire a generic_foods search for the current query. Keeps
- * the in-memory results onscreen while the network call is in flight,
- * then re-renders with both. Stale responses are dropped on a seq
- * mismatch — typing fast doesn't produce flicker.
+ * Debounce + fire the composite-ranked food_items + generic_foods
+ * searches for the current query. Both RPCs apply the same Quick Log
+ * formula server-side: exact-prefix(1000) + substring(100) +
+ * user_log_count_last_30d (×10, food_items only) + global_log_count
+ * when ≥5 distinct users (privacy floor) + USDA Foundation bonus
+ * (50, generic_foods only). Tiebreaker: name ASC.
+ *
+ * food_items hits prepend to the local list (user's own data wins
+ * cross-source ties), then generic_foods is rendered as the USDA strip
+ * below — matching the iOS QuickLogSection ordering. Stale responses
+ * drop on a seq mismatch, so fast typing doesn't flicker.
  */
-function scheduleGenericLookup(list, q, localFiltered) {
+function scheduleAsyncLookup(list, q, localFiltered) {
   const seq = ++_genericLookupSeq
   clearTimeout(filterQuickLog._genericTimer)
   filterQuickLog._genericTimer = setTimeout(async () => {
-    try {
-      const generic = await searchGenericFoods(q, 8)
-      if (seq !== _genericLookupSeq) return
-      // Live read from the DOM in case the user blanked the input — a
-      // stale render after they cleared the box would be jarring.
-      const cur = document.getElementById('quick-log-search')?.value.toLowerCase().trim() ?? ''
-      if (cur !== q) return
-      renderQuickLogResults(list, localFiltered, generic, q, /*loadingGeneric*/ false)
-    } catch (e) {
-      console.warn('[filterQuickLog] generic_foods lookup failed', e)
-      if (seq !== _genericLookupSeq) return
-      renderQuickLogResults(list, localFiltered, [], q, false)
-    }
+    // Run both ranked searches in parallel. Either can fail
+    // independently; the catch on each returns [] so the other still
+    // renders.
+    const [foodItems, generic] = await Promise.all([
+      searchFoodItemsRanked(q, 10).catch(e => {
+        console.warn('[filterQuickLog] food_items ranked lookup failed', e)
+        return []
+      }),
+      searchGenericFoods(q, 8).catch(e => {
+        console.warn('[filterQuickLog] generic_foods lookup failed', e)
+        return []
+      }),
+    ])
+    if (seq !== _genericLookupSeq) return
+    // Live read from the DOM in case the user blanked the input — a
+    // stale render after they cleared the box would be jarring.
+    const cur = document.getElementById('quick-log-search')?.value.toLowerCase().trim() ?? ''
+    if (cur !== q) return
+    // Project food_items into the local-row shape (source: 'food'),
+    // dedupe by lowercase name against what the in-memory pass already
+    // surfaced, and merge in front so the personalized library leads.
+    const existingNames = new Set(localFiltered.map(i => (i.name || '').toLowerCase()))
+    const foodRows = foodItems
+      .filter(f => !existingNames.has((f.name || '').toLowerCase()))
+      .map(f => ({ ...f, source: 'food' }))
+    const merged = [...foodRows, ...localFiltered]
+    renderQuickLogResults(list, merged, generic, q, /*loadingGeneric*/ false)
   }, 220)
 }
 
@@ -14649,7 +14682,7 @@ function filterQuickLog() {
   // "banana" should still see USDA hits even when "Banana smoothie" is
   // already in their recipe library.
   renderQuickLogResults(list, filtered, [], q, /*loadingGeneric*/ true)
-  scheduleGenericLookup(list, q, filtered)
+  scheduleAsyncLookup(list, q, filtered)
 
   if (!list._quickLogWired) {
     list._quickLogWired = true
@@ -14670,7 +14703,11 @@ function filterQuickLog() {
       if (!meal) console.warn('[quickLogMeal] recipe not found:', rid)
     } else if (id.startsWith('food::')) {
       const fid = id.replace('food::', '')
+      // Prefer state.foodItems, but fall back to the search-side cache
+      // so a row surfaced by the ranked RPC still logs even if state
+      // hasn't loaded the user's full food_items list yet.
       const food = state.foodItems.find(f => f.id === fid)
+                 || (window._lastQuickLogFoodItems || []).find(f => f.id === fid)
       if (!food) console.warn('[quickLogMeal] food item not found:', fid)
       // Shape the food item like a log entry so the rest of the handler works
       if (food) meal = {

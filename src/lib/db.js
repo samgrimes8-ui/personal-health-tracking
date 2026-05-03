@@ -2108,34 +2108,35 @@ export async function saveSharedRecipeFromPlannerRow(userId, plannerMealId) {
  * (banana, avocado, oats, …) skip the Claude roundtrip and just log
  * directly with the USDA macros.
  *
- * Hits two columns in parallel and merges:
- *   - `aliases` exact-match: depluralized + comma-stripped variants, so
- *     a search for "banana" hits "Bananas, raw" via the "banana" alias.
- *   - `name` ilike: catches anything the alias derivation missed (e.g.
- *     mid-string match like "banana cream pie").
- *
- * Returns at most `limit` rows; alias hits are placed first so an exact
- * alias beats a partial name match.
+ * Calls the `search_generic_foods_ranked` RPC, which applies the composite
+ * Quick Log ranking server-side: exact-prefix(1000) + substring(100) +
+ * global_log_count when ≥5 distinct users have logged it + USDA Foundation
+ * bonus (50). Tiebreaker is name ASC. Mirrors iOS QuickLogSection.
  */
 export async function searchGenericFoods(query, limit = 8) {
   if (!supabase || !query?.trim()) return []
-  const q = query.trim()
-  const lower = q.toLowerCase()
-  // Escape ilike wildcards in user input — a stray % shouldn't widen the
-  // match. Same logic the iOS QuickLogSection.escapeLike uses.
-  const pattern = '%' + lower.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_') + '%'
-  const [aliasRes, nameRes] = await Promise.all([
-    supabase.from('generic_foods').select('*').contains('aliases', [lower]).limit(Math.max(2, Math.floor(limit / 2))),
-    supabase.from('generic_foods').select('*').ilike('name', pattern).order('name', { ascending: true }).limit(limit),
-  ])
-  const seen = new Set()
-  const out = []
-  for (const row of [...(aliasRes.data || []), ...(nameRes.data || [])]) {
-    if (seen.has(row.id)) continue
-    seen.add(row.id)
-    out.push(row)
-    if (out.length >= limit) break
-  }
-  return out
+  const { data, error } = await supabase.rpc('search_generic_foods_ranked', {
+    p_query: query.trim(),
+    p_limit: limit,
+  })
+  if (error) throw error
+  return data || []
+}
+
+/**
+ * Search the user's own food_items library via the matching RPC, which
+ * applies the composite Quick Log formula server-side: exact-prefix(1000)
+ * + substring(100) + user_log_count_last_30d (×10) + global_log_count
+ * when ≥5 distinct users have logged it. Tiebreaker is name ASC.
+ * Substring match runs against name OR brand. Returns rows already sorted.
+ */
+export async function searchFoodItemsRanked(query, limit = 10) {
+  if (!supabase || !query?.trim()) return []
+  const { data, error } = await supabase.rpc('search_food_items_ranked', {
+    p_query: query.trim(),
+    p_limit: limit,
+  })
+  if (error) throw error
+  return data || []
 }
 
