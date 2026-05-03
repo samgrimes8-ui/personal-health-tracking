@@ -21,6 +21,7 @@ import {
   copyMealPlanShareToPlanner, saveSharedRecipeFromPlannerRow,
   deleteMyAccount,
   getMyIdentities, linkGoogleIdentity, unlinkIdentity,
+  searchGenericFoods,
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
 import { categorizeByName, parseAmount, canonicalizeName } from '../lib/categorize.js'
@@ -123,11 +124,42 @@ let state = {
   cookingVoiceOff: localStorage.getItem('macrolens_voice_off') === '1', // silent step-through mode
   editingCheckinId: null, // when set, the checkin modal is in edit-mode for this row
   checkinExpanded: new Set(), // bucket keys ('wk:YYYY-MM-DD', 'mo:YYYY-MM', 'yr:YYYY') currently expanded
+  selectedDate: null, // 'YYYY-MM-DD' for the day Dashboard shows; null = today (init lazily; localDateStr isn't hoisted)
 }
 
 // Safe local date string — avoids UTC timezone shift from toISOString()
 function localDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+// Dashboard day-nav helpers — selectedDate is 'YYYY-MM-DD' or null (= today).
+function todayStr() { return localDateStr(new Date()) }
+function getSelectedDateStr() { return state.selectedDate || todayStr() }
+function isSelectedToday() { return getSelectedDateStr() === todayStr() }
+function dateStrToDate(s) {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+function shiftSelectedDate(days) {
+  const d = dateStrToDate(getSelectedDateStr())
+  d.setDate(d.getDate() + days)
+  // Don't allow navigating past today
+  const next = localDateStr(d)
+  if (next > todayStr()) return getSelectedDateStr()
+  state.selectedDate = next
+  return next
+}
+function formatSelectedDateLabel(s) {
+  const today = todayStr()
+  if (s === today) return 'Today'
+  const d = dateStrToDate(s)
+  const yest = new Date(); yest.setDate(yest.getDate() - 1)
+  if (s === localDateStr(yest)) return 'Yesterday'
+  // Same year — short label (Mon, May 1). Different year — include year.
+  const sameYear = d.getFullYear() === new Date().getFullYear()
+  return d.toLocaleDateString([], sameYear
+    ? { weekday: 'short', month: 'short', day: 'numeric' }
+    : { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 function getWeekStart() {
@@ -1549,7 +1581,7 @@ function normalizeMealType(t) {
 
 function getTodayPlannedMeals() {
   if (!state.planner?.meals) return []
-  const dow = new Date().getDay()
+  const dow = dateStrToDate(getSelectedDateStr()).getDay()
   return (state.planner.meals[dow] || []).filter(m =>
     !m.is_leftover && !m.leftover && !(m.meal_name || m.name || '').toLowerCase().includes('(leftover')
   )
@@ -5158,6 +5190,23 @@ function renderAccount(container) {
       </div>
     </div>
 
+    <!-- Nutrition tracking opt-in -->
+    <div class="upload-card" style="margin-bottom:16px">
+      <div class="section-title">Nutrition tracking</div>
+      <label style="display:flex;gap:14px;align-items:flex-start;cursor:pointer;padding:6px 2px">
+        <input type="checkbox" id="track-full-label-toggle"
+          ${state.goals?.track_full_label ? 'checked' : ''}
+          onchange="toggleTrackFullLabel(this)"
+          style="margin-top:3px;width:18px;height:18px;accent-color:var(--accent);cursor:pointer">
+        <div style="flex:1">
+          <div style="font-weight:500;color:var(--text);font-size:14px">Track full nutrition label</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:3px;line-height:1.45">
+            Adds saturated fat, sodium, fiber, sugars, and key vitamins to daily totals + food cards. AI fills these in when it can read a label or knows the food.
+          </div>
+        </div>
+      </label>
+    </div>
+
     <!-- Data & history -->
     <div class="upload-card" style="margin-bottom:16px">
       <div class="section-title">Your data</div>
@@ -5783,7 +5832,9 @@ function updateSidebar() {
 }
 
 function updateStats() {
-  const today = getTodayLog()
+  // Dashboard tiles reflect the SELECTED day so users see hit-vs-target
+  // for whatever day they're navigating; sidebar widget keeps "today".
+  const today = getSelectedDayLog()
   const t = totals(today)
   const g = state.goals
 
@@ -5890,9 +5941,16 @@ function refreshTodayLog() {
   if (!el) return
   // Replace element entirely to kill any stacked event listeners
   const newEl = el.cloneNode(false)
-  newEl.innerHTML = renderTodayMeals(getTodayLog())
+  newEl.innerHTML = renderTodayMeals(getSelectedDayLog())
   el.parentNode.replaceChild(newEl, el)
   wireTodayLogClicks(newEl)
+  // Also refresh the date-nav header in case selectedDate changed
+  const navEl = document.getElementById('day-nav-label')
+  if (navEl) navEl.textContent = formatSelectedDateLabel(getSelectedDateStr())
+  const fwd = document.getElementById('day-nav-next')
+  if (fwd) fwd.disabled = isSelectedToday()
+  const todayBtn = document.getElementById('day-nav-today')
+  if (todayBtn) todayBtn.style.display = isSelectedToday() ? 'none' : ''
 }
 
 function wireTodayLogClicks(container) {
@@ -5926,6 +5984,12 @@ function getTodayLog() {
   return state.log.filter(e => new Date(e.logged_at || e.timestamp).toDateString() === today)
 }
 
+// Logs for whichever day the dashboard is currently showing (today by default).
+function getSelectedDayLog() {
+  const target = dateStrToDate(getSelectedDateStr()).toDateString()
+  return state.log.filter(e => new Date(e.logged_at || e.timestamp).toDateString() === target)
+}
+
 function totals(entries) {
   return entries.reduce((a, e) => ({
     cal: a.cal + (e.calories || 0),
@@ -5937,12 +6001,23 @@ function totals(entries) {
 
 function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
 
-function showToast(msg, type) {
+let _toastTimeout = null
+function showToast(msg, type, opts) {
   const t = document.getElementById('toast')
   if (!t) return
+  if (_toastTimeout) { clearTimeout(_toastTimeout); _toastTimeout = null }
   t.textContent = msg
   t.className = 'toast show ' + (type || '')
-  setTimeout(() => { t.className = 'toast' }, 3000)
+  if (!opts?.persist) {
+    _toastTimeout = setTimeout(() => { t.className = 'toast'; _toastTimeout = null }, 3000)
+  }
+}
+
+function hideToast() {
+  const t = document.getElementById('toast')
+  if (!t) return
+  if (_toastTimeout) { clearTimeout(_toastTimeout); _toastTimeout = null }
+  t.className = 'toast'
 }
 
 function wireFileInput() {
@@ -7503,6 +7578,27 @@ function wireGlobals() {
       showToast('Body metrics saved!', 'success')
       renderPage()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  // Persist the full-nutrition-label opt-in onto the goals row. The
+  // column travels with goals.* so the rest of the app reads it via
+  // state.goals.track_full_label without a separate fetch.
+  window.toggleTrackFullLabel = async (el) => {
+    const next = !!el.checked
+    const prior = state.goals?.track_full_label === true
+    state.goals = { ...(state.goals || {}), track_full_label: next }
+    try {
+      await dbSaveGoals(state.user.id, state.goals)
+      showToast(next ? 'Tracking full nutrition label' : 'Reverted to 4-macro tracking', 'success')
+      // Re-render whichever page is showing so the expanded sections
+      // appear/disappear immediately. renderPage() routes based on
+      // state.currentPage and is what switchPage uses.
+      if (typeof renderPage === 'function') renderPage()
+    } catch (err) {
+      el.checked = prior
+      state.goals = { ...(state.goals || {}), track_full_label: prior }
+      showToast('Could not save: ' + err.message, 'error')
+    }
   }
 
   window.saveGoalsHandler = async () => {
@@ -11153,6 +11249,27 @@ function wireGlobals() {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel()
     _isPaused = false
   }
+
+  // Loading indicator for premium TTS fetches. Quick/cached responses
+  // resolve before the 250ms timer fires, so they never flash a toast.
+  // Slower first-loads show "Loading voice…" until audio is ready.
+  let _audioLoadingTimer = null
+  let _audioLoadingVisible = false
+  function showAudioLoadingToast() {
+    if (_audioLoadingTimer || _audioLoadingVisible) return
+    _audioLoadingTimer = setTimeout(() => {
+      _audioLoadingTimer = null
+      _audioLoadingVisible = true
+      showToast('Loading voice…', '', { persist: true })
+    }, 250)
+  }
+  function hideAudioLoadingToast() {
+    if (_audioLoadingTimer) { clearTimeout(_audioLoadingTimer); _audioLoadingTimer = null }
+    if (_audioLoadingVisible) {
+      _audioLoadingVisible = false
+      hideToast()
+    }
+  }
   // Pause/resume the active read-aloud, whether premium MP3 or browser TTS.
   // Both helpers no-op (return false) if nothing is currently in a state we
   // can act on, so a stray tap on Pause when audio has ended doesn't flip
@@ -11285,6 +11402,7 @@ function wireGlobals() {
       // Track this fetch so a fast user (Next > Next > Next) only ever
       // hears the latest one. Older fetches that resolve late get dropped.
       const ticket = ++_audioTicket
+      showAudioLoadingToast()
       fetchRecipeAudio({
         recipeId: ctx.recipeId,
         stepIndex: ctx.stepIndex,
@@ -11293,6 +11411,7 @@ function wireGlobals() {
         instructionsVersion: ctx.instructionsVersion,
       }).then(({ url }) => {
         if (ticket !== _audioTicket) return  // user moved on
+        hideAudioLoadingToast()
         audio.src = url
         audio.play().catch(err => {
           // Autoplay blocked or codec issue — fall back to browser TTS
@@ -11302,6 +11421,7 @@ function wireGlobals() {
         })
       }).catch(err => {
         if (ticket !== _audioTicket) return
+        hideAudioLoadingToast()
         console.warn('[cooking] premium TTS failed, falling back:', err?.message)
         speakStepFree(text)
       })
@@ -11540,6 +11660,7 @@ function wireGlobals() {
 
   window.closeCookingMode = () => {
     stopAudio()
+    hideAudioLoadingToast()
     state.cookingMode = null
     document.getElementById('cooking-mode-modal')?.remove()
   }
@@ -13364,6 +13485,135 @@ function wireGlobals() {
   document.getElementById('recipe-modal')?.addEventListener('click', e => { if (e.target.id === 'recipe-modal') closeRecipeModal() })
 }
 
+/**
+ * Render the Quick Log search list. Pulls in three sources:
+ *   - in-memory recipes / log history (`local`)
+ *   - USDA generic_foods rows fetched async (`generic`)
+ * If `loadingGeneric` is true, shows a "searching common foods…" hint
+ * row so the user knows the async leg is in flight.
+ *
+ * Empty-state rendering: if both sources came back empty, show an
+ * "Analyze with AI" affordance pointing at the food-describe flow above
+ * — mirrors the iOS Quick Log fallback so users always have a one-tap
+ * out of the search box.
+ */
+function renderQuickLogResults(list, local, generic, q, loadingGeneric) {
+  // Dedup the generic hits against names already shown locally — a user
+  // who already logged "Banana, raw" shouldn't see the USDA copy too.
+  const localKeys = new Set(local.map(i => (i.name || '').toLowerCase()))
+  const genericFiltered = (generic || []).filter(g => !localKeys.has((g.name || '').toLowerCase()))
+  // Stash the rendered generic rows so quickLogMeal('generic::<id>') can
+  // resolve the macros without a re-fetch. Window-scoped so a click
+  // handler attached during a different render still works.
+  window._lastQuickLogGeneric = genericFiltered
+
+  if (!local.length && !genericFiltered.length && !loadingGeneric) {
+    list.innerHTML = `
+      <div style="padding:8px 4px;font-size:13px;color:var(--text3);margin-bottom:6px">No matches found.</div>
+      <button onclick="describeQuickLogQuery()" style="width:100%;padding:10px;background:color-mix(in srgb, var(--accent) 15%, transparent);border:1px solid color-mix(in srgb, var(--accent) 40%, transparent);border-radius:var(--r);font-size:13px;font-weight:600;color:var(--accent);font-family:inherit;cursor:pointer">
+        ✨ Describe "${esc(q)}" with AI
+      </button>`
+    return
+  }
+
+  const localHtml = local.map(item => {
+    const mealRef = item.source === 'recipe' ? 'recipe::' + item.id : item.id
+    return `
+    <div class="history-pick-item" data-quicklog-ref="${esc(String(mealRef))}"
+      style="border-radius:var(--r)">
+      <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
+        <span class="hpi-name">${esc(item.name)}</span>
+        <span style="font-size:10px;color:${item.source === 'recipe' ? 'var(--protein)' : 'var(--text3)'}">
+          ${item.source === 'recipe' ? '⭐ Recipe' : '📋 Log history'}
+        </span>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div class="hpi-cal">${Math.round(item.calories || 0)} kcal</div>
+        <div style="font-size:10px;color:var(--text3)">P${Math.round(item.protein || 0)} C${Math.round(item.carbs || 0)} F${Math.round(item.fat || 0)}</div>
+      </div>
+    </div>`
+  }).join('')
+
+  const genericHtml = genericFiltered.map(g => `
+    <div class="history-pick-item" data-quicklog-ref="generic::${esc(String(g.id))}"
+      style="border-radius:var(--r)">
+      <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
+        <span class="hpi-name">${esc(g.name)}</span>
+        <span style="font-size:10px;color:var(--carbs)">
+          🌿 USDA${g.serving_description ? ' · ' + esc(g.serving_description) : ''}
+        </span>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div class="hpi-cal">${Math.round(g.kcal || 0)} kcal</div>
+        <div style="font-size:10px;color:var(--text3)">P${Math.round(g.protein_g || 0)} C${Math.round(g.carbs_g || 0)} F${Math.round(g.fat_g || 0)}</div>
+      </div>
+    </div>`).join('')
+
+  const loadingHtml = loadingGeneric
+    ? `<div style="padding:6px 4px;font-size:11px;color:var(--text3);text-align:center">Searching common foods…</div>`
+    : ''
+
+  list.innerHTML = localHtml + genericHtml + loadingHtml
+}
+
+// Token gate that keeps stale generic_foods responses from clobbering a
+// fresher search. Each scheduleGenericLookup() call bumps the seq, and
+// the response only renders if its seq is still the latest.
+let _genericLookupSeq = 0
+
+/**
+ * Debounce + fire a generic_foods search for the current query. Keeps
+ * the in-memory results onscreen while the network call is in flight,
+ * then re-renders with both. Stale responses are dropped on a seq
+ * mismatch — typing fast doesn't produce flicker.
+ */
+function scheduleGenericLookup(list, q, localFiltered) {
+  const seq = ++_genericLookupSeq
+  clearTimeout(filterQuickLog._genericTimer)
+  filterQuickLog._genericTimer = setTimeout(async () => {
+    try {
+      const generic = await searchGenericFoods(q, 8)
+      if (seq !== _genericLookupSeq) return
+      // Live read from the DOM in case the user blanked the input — a
+      // stale render after they cleared the box would be jarring.
+      const cur = document.getElementById('quick-log-search')?.value.toLowerCase().trim() ?? ''
+      if (cur !== q) return
+      renderQuickLogResults(list, localFiltered, generic, q, /*loadingGeneric*/ false)
+    } catch (e) {
+      console.warn('[filterQuickLog] generic_foods lookup failed', e)
+      if (seq !== _genericLookupSeq) return
+      renderQuickLogResults(list, localFiltered, [], q, false)
+    }
+  }, 220)
+}
+
+/**
+ * "Describe with AI" fallback fired from the Quick Log empty state.
+ * Mirrors the iOS aiDescribeAndLog path — runs the meal text through
+ * analyzePlannerDescription, then logs it as a meal_log row using the
+ * existing handler so all the post-log cleanup (autoSaveFoodItem,
+ * Today's Meals refresh) happens for free.
+ */
+window.describeQuickLogQuery = async function describeQuickLogQuery() {
+  const input = document.getElementById('quick-log-search')
+  const q = input?.value?.trim()
+  if (!q) return
+  const list = document.getElementById('quick-log-list')
+  if (list) list.innerHTML = `<div style="padding:12px 4px;font-size:13px;color:var(--text3);text-align:center">✨ Describing "${esc(q)}" with AI…</div>`
+  try {
+    const result = await analyzePlannerDescription(q)
+    showResult(result)
+    // Drop into the existing "log this meal" path so we share the
+    // post-insert cleanup with the rest of the analyze flow.
+    state.currentEntry = result
+    await logCurrentEntryHandler()
+    if (input) input.value = ''
+    filterQuickLog()
+  } catch (e) {
+    if (list) list.innerHTML = `<div style="padding:8px 4px;font-size:13px;color:var(--text3)">AI describe failed: ${esc(e.message || String(e))}</div>`
+  }
+}
+
 function filterQuickLog() {
   const q = document.getElementById('quick-log-search')?.value.toLowerCase() ?? ''
   const list = document.getElementById('quick-log-list')
@@ -13482,7 +13732,11 @@ function filterQuickLog() {
     return
   }
 
-  // Merge recipes + unique log entries
+  // Merge recipes + unique log entries from in-memory state, then layer
+  // USDA generic_foods on top via a debounced async hop. The async hop
+  // is what lets the Quick Log search hit common foods (banana, oats,
+  // …) before falling back to "Describe with AI" — same path the iOS
+  // QuickLogSection takes.
   const items = []
   const seen = new Set()
 
@@ -13499,28 +13753,14 @@ function filterQuickLog() {
 
   const filtered = items.filter(i => i.name.toLowerCase().includes(q)).slice(0, 8)
 
-  if (!filtered.length) {
-    list.innerHTML = `<div style="padding:8px 4px;font-size:13px;color:var(--text3)">No matches — try analyzing a new meal above</div>`
-    return
-  }
+  // Render the synchronous (in-memory) hits immediately so the input
+  // feels responsive, then kick off the generic_foods lookup and append
+  // results when they arrive. We always fire the lookup — a user typing
+  // "banana" should still see USDA hits even when "Banana smoothie" is
+  // already in their recipe library.
+  renderQuickLogResults(list, filtered, [], q, /*loadingGeneric*/ true)
+  scheduleGenericLookup(list, q, filtered)
 
-  list.innerHTML = filtered.map(item => {
-    const mealRef = item.source === 'recipe' ? 'recipe::' + item.id : item.id
-    return `
-    <div class="history-pick-item" data-quicklog-ref="${esc(String(mealRef))}"
-      style="border-radius:var(--r)">
-      <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
-        <span class="hpi-name">${esc(item.name)}</span>
-        <span style="font-size:10px;color:${item.source === 'recipe' ? 'var(--protein)' : 'var(--text3)'}">
-          ${item.source === 'recipe' ? '⭐ Recipe' : '📋 Log history'}
-        </span>
-      </div>
-      <div style="text-align:right;flex-shrink:0">
-        <div class="hpi-cal">${Math.round(item.calories || 0)} kcal</div>
-        <div style="font-size:10px;color:var(--text3)">P${Math.round(item.protein || 0)} C${Math.round(item.carbs || 0)} F${Math.round(item.fat || 0)}</div>
-      </div>
-    </div>`
-  }).join('')
   if (!list._quickLogWired) {
     list._quickLogWired = true
     list.addEventListener('click', e => {
@@ -13550,6 +13790,28 @@ function filterQuickLog() {
         base_carbs: food.carbs, base_fat: food.fat,
         base_fiber: food.fiber, base_sugar: food.sugar,
       }
+    } else if (id.startsWith('generic::')) {
+      // USDA generic_foods row — fetch the latest copy from the search
+      // result list rendered into the DOM. Macros are already
+      // per-serving, so we shape it to look like a log entry and let
+      // the regular insert path take over (no autoSave needed — the
+      // user can save it from history later if they want it in Foods).
+      const gid = id.replace('generic::', '')
+      const generic = (window._lastQuickLogGeneric || []).find(g => g.id === gid)
+      if (!generic) console.warn('[quickLogMeal] generic_foods row not found:', gid)
+      if (generic) meal = {
+        name: generic.name,
+        calories: generic.kcal || 0,
+        protein: generic.protein_g || 0,
+        carbs: generic.carbs_g || 0,
+        fat: generic.fat_g || 0,
+        fiber: generic.fiber_g || 0,
+        sugar: 0,
+        base_calories: generic.kcal || 0,
+        base_protein: generic.protein_g || 0,
+        base_carbs: generic.carbs_g || 0,
+        base_fat: generic.fat_g || 0,
+      }
     } else {
       meal = state.log.find(e => String(e.id) === String(id))
       if (!meal) console.warn('[quickLogMeal] log entry not found:', id, 'log length:', state.log.length)
@@ -13558,7 +13820,11 @@ function filterQuickLog() {
       showToast('Could not find that meal — try refreshing', 'error')
       return
     }
-    console.log('[quickLogMeal] found meal:', meal.name, 'source:', id.startsWith('recipe::') ? 'recipe' : id.startsWith('food::') ? 'food' : 'log')
+    console.log('[quickLogMeal] found meal:', meal.name, 'source:',
+      id.startsWith('recipe::') ? 'recipe'
+      : id.startsWith('food::') ? 'food'
+      : id.startsWith('generic::') ? 'generic'
+      : 'log')
 
     // Check if this meal is linked to a food item with components
     const linkedFood = meal.food_item_id

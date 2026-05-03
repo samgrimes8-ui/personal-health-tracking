@@ -2027,3 +2027,46 @@ export async function saveSharedRecipeFromPlannerRow(userId, plannerMealId) {
 
   return recipe
 }
+
+// ─── Generic foods (USDA reference data) ─────────────────────────────────────
+
+/**
+ * Search the public.generic_foods table for a query string. The table is
+ * USDA FoodData Central reference data, populated by
+ * scripts/import-usda-foods.js. Read-only for all authenticated users.
+ *
+ * Quick Log calls this BEFORE the AI describe fallback so common foods
+ * (banana, avocado, oats, …) skip the Claude roundtrip and just log
+ * directly with the USDA macros.
+ *
+ * Hits two columns in parallel and merges:
+ *   - `aliases` exact-match: depluralized + comma-stripped variants, so
+ *     a search for "banana" hits "Bananas, raw" via the "banana" alias.
+ *   - `name` ilike: catches anything the alias derivation missed (e.g.
+ *     mid-string match like "banana cream pie").
+ *
+ * Returns at most `limit` rows; alias hits are placed first so an exact
+ * alias beats a partial name match.
+ */
+export async function searchGenericFoods(query, limit = 8) {
+  if (!supabase || !query?.trim()) return []
+  const q = query.trim()
+  const lower = q.toLowerCase()
+  // Escape ilike wildcards in user input — a stray % shouldn't widen the
+  // match. Same logic the iOS QuickLogSection.escapeLike uses.
+  const pattern = '%' + lower.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_') + '%'
+  const [aliasRes, nameRes] = await Promise.all([
+    supabase.from('generic_foods').select('*').contains('aliases', [lower]).limit(Math.max(2, Math.floor(limit / 2))),
+    supabase.from('generic_foods').select('*').ilike('name', pattern).order('name', { ascending: true }).limit(limit),
+  ])
+  const seen = new Set()
+  const out = []
+  for (const row of [...(aliasRes.data || []), ...(nameRes.data || [])]) {
+    if (seen.has(row.id)) continue
+    seen.add(row.id)
+    out.push(row)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
