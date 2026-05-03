@@ -586,8 +586,6 @@ struct MealLogEditor: View {
     /// FractionalNumberField; the canonical servings value is
     /// recomputed via `currentServings` whenever this commits.
     @State private var displayedAmount: Double = 1.0
-    /// User-default key for the per-session unit preference.
-    private static let unitPreferenceKey = "macrolens.mealLogEditor.unit"
 
     /// Per-serving "base" macros — divide consumed values by servings to
     /// recover base, then re-multiply when the user changes servings.
@@ -667,25 +665,11 @@ struct MealLogEditor: View {
             _fat      = State(initialValue: draft.fat)
             _fiber    = State(initialValue: draft.fiber)
         }
-        // Resolve initial unit from UserDefaults preference, falling back
-        // to .servings when the source food doesn't carry the gram weight
-        // needed for conversion.
-        let saved = UserDefaults.standard.string(forKey: Self.unitPreferenceKey)
-            .flatMap(MealLogUnitMode.init(rawValue:)) ?? .servings
-        let resolvedMode: MealLogUnitMode = {
-            switch saved {
-            case .servings: return .servings
-            case .grams, .ounces:
-                // Need serving_grams to do any non-servings conversion.
-                let grams: Double? = {
-                    switch mode {
-                    case .new(let d): return d.servingGrams
-                    case .edit(let e): return e.serving_grams
-                    }
-                }()
-                return grams != nil ? saved : .servings
-            }
-        }()
+        // Default unit is always .servings per spec — most foods are
+        // most natural in servings; the user picks grams/ounces from
+        // the dropdown when they want precision. Don't change the
+        // global default based on the user's last pick.
+        let resolvedMode: MealLogUnitMode = .servings
         self._unitMode = State(initialValue: resolvedMode)
         // Initial displayed amount: 1 serving's worth in the chosen unit.
         let g: Double? = {
@@ -749,12 +733,14 @@ struct MealLogEditor: View {
         case .ounces:   return servingOz.map    { displayedAmount / max($0, 0.0001) } ?? displayedAmount
         }
     }
-    /// Cycle to the next available unit. Re-formats displayedAmount
-    /// so the SAME servings value reads correctly in the new unit.
-    private func cycleUnit() {
-        let units = availableUnits
-        guard units.count > 1, let i = units.firstIndex(of: unitMode) else { return }
-        let next = units[(i + 1) % units.count]
+    /// Switch to a specific unit. Re-formats displayedAmount so the
+    /// SAME servings value reads correctly in the new unit. No-op if
+    /// the unit is already active. Called from the dropdown's
+    /// per-option Button — also updates the macro fields once the
+    /// new displayed amount lands so the consumed kcal/P/C/F preview
+    /// matches the new unit's value immediately.
+    private func setUnit(_ next: MealLogUnitMode) {
+        guard next != unitMode else { return }
         let s = currentServings()
         switch next {
         case .servings: displayedAmount = s
@@ -762,12 +748,68 @@ struct MealLogEditor: View {
         case .ounces:   displayedAmount = (servingOz.map    { s * $0 }) ?? s
         }
         unitMode = next
-        UserDefaults.standard.set(next.rawValue, forKey: Self.unitPreferenceKey)
+        recomputeMacrosFromAmount()
     }
+    /// Dropdown for picking the unit (Serving / Gram / Ounce). Sits
+    /// to the right of the amount field; tap a row to switch units.
+    /// Gram/Ounce options are hidden when the source food doesn't
+    /// carry a serving_grams weight (no conversion possible).
+    @ViewBuilder
+    private var unitPickerMenu: some View {
+        Menu {
+            // Always offer Serving — it's the default and never needs
+            // a conversion factor.
+            Button {
+                setUnit(.servings)
+            } label: {
+                if unitMode == .servings {
+                    Label(MealLogUnitMode.servings.displayName, systemImage: "checkmark")
+                } else {
+                    Text(MealLogUnitMode.servings.displayName)
+                }
+            }
+            if servingGrams != nil {
+                Button {
+                    setUnit(.grams)
+                } label: {
+                    if unitMode == .grams {
+                        Label(MealLogUnitMode.grams.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(MealLogUnitMode.grams.displayName)
+                    }
+                }
+                Button {
+                    setUnit(.ounces)
+                } label: {
+                    if unitMode == .ounces {
+                        Label(MealLogUnitMode.ounces.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(MealLogUnitMode.ounces.displayName)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(unitMode.displayName)
+                    .font(.system(size: 13, weight: .medium))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(Theme.text2)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Theme.bg3, in: Capsule())
+            .overlay(Capsule().stroke(Theme.border, lineWidth: 1))
+        }
+        .accessibilityLabel("Unit")
+        .accessibilityValue(unitMode.displayName)
+        .accessibilityHint("Choose serving, gram, or ounce")
+    }
+
     /// Recompute the consumed macro fields from the per-serving base
     /// times the current servings value. Called on amount-field commit
-    /// (and after unit cycling — same servings, but we still want to
-    /// roll any user-pending edit through).
+    /// and on unit changes so the kcal/P/C/F preview always matches
+    /// what'll be saved.
     private func recomputeMacrosFromAmount() {
         let s = max(0, currentServings())
         calories = (baseCalories * s).rounded(toPlaces: 1)
@@ -842,31 +884,16 @@ struct MealLogEditor: View {
 
                 Section {
                     HStack {
-                        Text(unitMode.label)
                         Spacer()
                         FractionalNumberField(
                             value: $displayedAmount,
                             placeholder: "1",
                             precision: unitMode == .servings ? 2 : 1,
-                            width: 90,
+                            width: 100,
                             keyboardFocused: $keyboardFocused,
                             onCommit: { recomputeMacrosFromAmount() }
                         )
-                        if availableUnits.count > 1 {
-                            Button {
-                                cycleUnit()
-                                recomputeMacrosFromAmount()
-                            } label: {
-                                Text(unitMode.symbol)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .frame(width: 30, height: 28)
-                                    .background(Theme.bg3, in: .rect(cornerRadius: 6))
-                                    .foregroundStyle(Theme.text2)
-                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border, lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Switch unit")
-                        }
+                        unitPickerMenu
                     }
                 } header: {
                     Text("Amount")
@@ -1154,7 +1181,7 @@ struct FractionalNumberField: View {
     var onCommit: (() -> Void)? = nil
 
     @State private var text: String
-    @FocusState private var focused: Bool
+    @State private var isFocused: Bool = false
 
     init(value: Binding<Double>,
          placeholder: String = "0",
@@ -1172,45 +1199,35 @@ struct FractionalNumberField: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
-            TextField(placeholder, text: $text)
-                .keyboardType(.decimalPad)
-                .focused($focused)
-                .modifier(SharedKeyboardFocus(shared: keyboardFocused, mine: $focused))
-                .multilineTextAlignment(.trailing)
-                .onChange(of: focused) { _, isFocused in
-                    if isFocused {
-                        // Defer one runloop tick so SwiftUI has marked our
-                        // TextField as the first responder; then send the
-                        // standard selectAll responder action so it lands
-                        // on this field specifically.
-                        DispatchQueue.main.async {
-                            UIApplication.shared.sendAction(
-                                #selector(UIResponder.selectAll(_:)),
-                                to: nil, from: nil, for: nil
-                            )
-                        }
-                    } else {
-                        commit()
-                    }
-                }
-                .onSubmit { commit() }
-            if focused && !text.isEmpty {
-                Button {
-                    text = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Theme.text3)
-                        .font(.system(size: 13))
-                }
-                .buttonStyle(.plain)
+        UIKitNumericField(
+            text: $text,
+            isFocused: $isFocused,
+            placeholder: placeholder,
+            onCommit: { commit() }
+        )
+        .frame(width: width, height: 32)
+        .onChange(of: isFocused) { _, isNowFocused in
+            // Mirror focus into the parent's shared keyboard binding so
+            // the "Done" toolbar button shows while any numeric field
+            // is up. Only flip the shared flag in the "gained focus"
+            // direction here; the reverse direction (Done tapped →
+            // unfocus) flows through the second onChange below.
+            if isNowFocused {
+                keyboardFocused?.wrappedValue = true
             }
         }
-        .frame(width: width)
+        .onChange(of: keyboardFocused?.wrappedValue ?? false) { _, sharedNow in
+            if !sharedNow && isFocused {
+                // Done (or any other shared-flag clear) → unfocus this
+                // field too. UIKitNumericField will resignFirstResponder
+                // on the next updateUIView pass.
+                isFocused = false
+            }
+        }
         .onChange(of: value) { _, newValue in
-            // External update (parent recomputed value, e.g. unit toggle).
-            // Don't clobber the user's mid-edit typing.
-            if !focused {
+            // External update (parent recomputed value, e.g. unit
+            // change). Don't clobber the user's mid-edit typing.
+            if !isFocused {
                 text = Self.format(newValue, precision: precision)
             }
         }
@@ -1242,31 +1259,114 @@ struct FractionalNumberField: View {
     }
 }
 
-/// FractionalNumberField needs its OWN @FocusState (so it knows when
-/// it specifically gained focus, for select-all + commit-on-blur), but
-/// the parent sheet wants ONE shared @FocusState driving the keyboard
-/// "Done" toolbar button. This modifier mirrors focus bidirectionally:
-/// the field's local focus drives the shared flag (so Done appears
-/// when ANY field is focused), and the shared flag clearing forces
-/// the field to give up focus (so tapping Done actually dismisses
-/// the keyboard).
-private struct SharedKeyboardFocus: ViewModifier {
-    let shared: FocusState<Bool>.Binding?
-    let mine: FocusState<Bool>.Binding
+/// Subclass that calls `selectAll(nil)` after a brief delay on
+/// becoming first responder, so a tap on a numeric field highlights
+/// the existing value — typing then immediately replaces it instead
+/// of appending. The 0.05s delay gives the system time to fully
+/// install the field as first responder + show the keyboard before
+/// the selection lands; without it, the selection sometimes gets
+/// stomped by the cursor placement.
+private final class SelectAllOnFocusTextField: UITextField {
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self, self.isFirstResponder else { return }
+                self.selectAll(nil)
+            }
+        }
+        return became
+    }
+}
 
-    func body(content: Content) -> some View {
-        if let shared {
-            content
-                .onChange(of: mine.wrappedValue) { _, new in
-                    if new { shared.wrappedValue = true }
-                }
-                .onChange(of: shared.wrappedValue) { _, new in
-                    // Done button (or any other clear) propagates to the
-                    // field if it's the one that's focused right now.
-                    if !new && mine.wrappedValue { mine.wrappedValue = false }
-                }
-        } else {
-            content
+/// SwiftUI bridge over the SelectAllOnFocusTextField subclass.
+/// FractionalNumberField wraps it; callers should generally use the
+/// SwiftUI wrapper rather than this directly. Standard iOS edit menu
+/// (cut/copy/paste/select) stays available on long-press because we
+/// don't override anything menu-related.
+private struct UIKitNumericField: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    var placeholder: String
+    var onCommit: () -> Void
+
+    func makeUIView(context: Context) -> SelectAllOnFocusTextField {
+        let tf = SelectAllOnFocusTextField()
+        tf.delegate = context.coordinator
+        tf.keyboardType = .decimalPad
+        tf.textAlignment = .right
+        tf.placeholder = placeholder
+        tf.font = .preferredFont(forTextStyle: .body)
+        tf.adjustsFontForContentSizeCategory = true
+        tf.borderStyle = .none
+        tf.clearButtonMode = .whileEditing  // standard ✕ inside the field
+        tf.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        tf.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return tf
+    }
+
+    func updateUIView(_ tf: SelectAllOnFocusTextField, context: Context) {
+        // Coordinator stores the latest props so its delegate callbacks
+        // see the current bindings (struct value capture is fine but
+        // closures hold the old `parent` until we refresh).
+        context.coordinator.parent = self
+        // Sync external text changes (unit toggle re-format etc.) only
+        // when the user isn't actively editing — otherwise we'd clobber
+        // their cursor + typing.
+        if !tf.isFirstResponder, tf.text != text {
+            tf.text = text
+        }
+        if tf.placeholder != placeholder {
+            tf.placeholder = placeholder
+        }
+        // Programmatic focus: parent setting isFocused = false (Done
+        // toolbar tap) should give up first responder.
+        if isFocused, !tf.isFirstResponder {
+            DispatchQueue.main.async { _ = tf.becomeFirstResponder() }
+        } else if !isFocused, tf.isFirstResponder {
+            DispatchQueue.main.async { _ = tf.resignFirstResponder() }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: UIKitNumericField
+        init(parent: UIKitNumericField) { self.parent = parent }
+
+        func textFieldDidBeginEditing(_ tf: UITextField) {
+            parent.isFocused = true
+        }
+
+        func textFieldDidEndEditing(_ tf: UITextField) {
+            parent.text = tf.text ?? ""
+            parent.isFocused = false
+            parent.onCommit()
+        }
+
+        // Mirror live keystrokes back to the binding so the parent's
+        // commit() (called on focus loss) sees the current text. Also
+        // covers the standard ✕ clear-button inside the field — it
+        // empties the text without firing didEndEditing.
+        func textField(_ tf: UITextField,
+                       shouldChangeCharactersIn range: NSRange,
+                       replacementString string: String) -> Bool {
+            if let cur = tf.text, let r = Range(range, in: cur) {
+                parent.text = cur.replacingCharacters(in: r, with: string)
+            } else {
+                parent.text = string
+            }
+            return true
+        }
+
+        func textFieldShouldClear(_ tf: UITextField) -> Bool {
+            parent.text = ""
+            return true
+        }
+
+        func textFieldShouldReturn(_ tf: UITextField) -> Bool {
+            tf.resignFirstResponder()
+            return true
         }
     }
 }
@@ -1328,25 +1428,22 @@ enum FractionParser {
     }
 }
 
-/// Display unit for the Servings field. Cycles servings → grams → oz
-/// as alternates are available (gated by serving_grams / serving_oz on
-/// the source row). User's last pick is persisted so opening another
-/// food in the same unit just works.
+/// Display unit for the Amount field in the meal-log preview. Default
+/// is always `.servings` per spec — most foods are most natural in
+/// servings; the user opts into grams/ounces when they want precision.
+/// Available alternates are gated by serving_grams / serving_oz on
+/// the source row (foods without a gram weight stay servings-only).
 enum MealLogUnitMode: String, CaseIterable {
     case servings, grams, ounces
 
-    var symbol: String {
+    /// Singular noun for the menu label + Amount section header.
+    /// Reads more naturally than the plural in the picker since the
+    /// picker is showing the unit *category*, not a count.
+    var displayName: String {
         switch self {
-        case .servings: return "×"
-        case .grams:    return "g"
-        case .ounces:   return "oz"
-        }
-    }
-    var label: String {
-        switch self {
-        case .servings: return "Servings"
-        case .grams:    return "Grams"
-        case .ounces:   return "Ounces"
+        case .servings: return "Serving"
+        case .grams:    return "Gram"
+        case .ounces:   return "Ounce"
         }
     }
 }
