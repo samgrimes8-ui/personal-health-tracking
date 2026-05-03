@@ -149,6 +149,24 @@ function shiftSelectedDate(days) {
   state.selectedDate = next
   return next
 }
+// When logging to a non-today date, anchor logged_at at a sensible
+// time-of-day for the meal_type so the entry sorts naturally and the
+// implicit meal_type fallback (getMealTypeFromTime) lands on the same bucket.
+function defaultHourForMealType(t) {
+  const norm = String(t || '').toLowerCase()
+  if (norm.startsWith('break')) return 8
+  if (norm.startsWith('lunch')) return 12
+  if (norm.startsWith('snack')) return 15
+  if (norm.startsWith('dinner')) return 18
+  return 12
+}
+function buildLoggedAtForSelectedDay(mealType) {
+  if (isSelectedToday()) return new Date().toISOString()
+  const d = dateStrToDate(getSelectedDateStr())
+  d.setHours(defaultHourForMealType(mealType), 0, 0, 0)
+  return d.toISOString()
+}
+
 function formatSelectedDateLabel(s) {
   const today = todayStr()
   if (s === today) return 'Today'
@@ -865,6 +883,104 @@ function renderAnalyticsPage(container) {
 // last 7 days and links through to the full analytics page. Kept
 // intentionally small (3 stat tiles + one sparkline) so it doesn't
 // clutter the main dashboard.
+// Renders the opt-in full-nutrition-label card on the dashboard. Only
+// invoked when state.goals.track_full_label is true. Sums the relevant
+// columns across today's meal_log rows, skipping nulls (so "not tracked"
+// meals don't drag totals down). Each row shows tracked/total alongside
+// the value so the user knows when AI didn't fill the field in.
+function renderDashboardFullLabel(todayLog) {
+  const rows = todayLog || []
+  const sumField = (key) => {
+    let sum = 0, count = 0
+    for (const r of rows) {
+      const v = r[key]
+      if (v == null) continue
+      sum += Number(v) || 0
+      count += 1
+    }
+    return { sum, count }
+  }
+  const fiber = (() => {
+    let sum = 0, count = 0
+    for (const r of rows) {
+      // Prefer fiber_g; fall back to legacy `fiber` so pre-migration
+      // meals still contribute.
+      const v = r.fiber_g != null ? r.fiber_g : r.fiber
+      if (v == null) continue
+      sum += Number(v) || 0
+      count += 1
+    }
+    return { sum, count }
+  })()
+  const totalsByKey = {
+    sodium_mg:       sumField('sodium_mg'),
+    fiber_g:         fiber,
+    saturated_fat_g: sumField('saturated_fat_g'),
+    sugar_added_g:   sumField('sugar_added_g'),
+    sugar_total_g:   sumField('sugar_total_g'),
+    trans_fat_g:     sumField('trans_fat_g'),
+    cholesterol_mg:  sumField('cholesterol_mg'),
+    potassium_mg:    sumField('potassium_mg'),
+    calcium_mg:      sumField('calcium_mg'),
+    iron_mg:         sumField('iron_mg'),
+    vitamin_a_mcg:   sumField('vitamin_a_mcg'),
+    vitamin_c_mg:    sumField('vitamin_c_mg'),
+    vitamin_d_mcg:   sumField('vitamin_d_mcg'),
+  }
+  const total = rows.length
+  const g = state.goals || {}
+  const fmt = (v, unit) => v < 10 ? `${(+v.toFixed(1))} ${unit}` : `${Math.round(v)} ${unit}`
+  const targetText = (max, min, unit) => {
+    if (max != null) return `max ${(+max).toString()} ${unit}`
+    if (min != null) return `min ${(+min).toString()} ${unit}`
+    return ''
+  }
+  const row = (label, key, unit, opts = {}) => {
+    const t = totalsByKey[key]
+    const max = opts.max
+    const min = opts.min
+    const tracked = total === 0 ? 'no meals'
+      : t.count === 0 ? 'not tracked'
+      : `${t.count}/${total} tracked`
+    const valueText = t.count === 0 ? '—' : fmt(t.sum, unit)
+    const overMax = max != null && t.count > 0 && t.sum > max
+    const underMin = min != null && t.count > 0 && t.sum < min
+    const valueColor = overMax ? 'var(--red)' : underMin ? 'var(--fat)' : 'var(--text)'
+    const target = targetText(max, min, unit)
+    return `
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:var(--r);gap:10px">
+        <div style="font-size:12px;color:var(--text2)">${label}</div>
+        <div style="text-align:right">
+          <div style="font-size:13px;font-weight:600;color:${valueColor}">${valueText}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:1px">${target ? target + ' · ' : ''}${tracked}</div>
+        </div>
+      </div>`
+  }
+  return `
+    <div class="upload-card" id="full-label-card" style="margin-bottom:16px">
+      <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Full nutrition today</span>
+        <button onclick="toggleFullLabelExpand(this)" data-expanded="false"
+          style="background:none;border:none;color:var(--accent);font-size:12px;font-weight:500;cursor:pointer;font-family:inherit">More ▾</button>
+      </div>
+      <div id="full-label-rows" style="display:none;flex-direction:column;gap:6px;margin-top:8px">
+        ${row('Sodium',        'sodium_mg',       'mg', { max: g.sodium_mg_max })}
+        ${row('Fiber',         'fiber_g',         'g',  { min: g.fiber_g_min })}
+        ${row('Saturated fat', 'saturated_fat_g', 'g',  { max: g.saturated_fat_g_max })}
+        ${row('Added sugar',   'sugar_added_g',   'g',  { max: g.sugar_added_g_max })}
+        ${row('Total sugar',   'sugar_total_g',   'g')}
+        ${row('Trans fat',     'trans_fat_g',     'g')}
+        ${row('Cholesterol',   'cholesterol_mg',  'mg')}
+        ${row('Potassium',     'potassium_mg',    'mg')}
+        ${row('Calcium',       'calcium_mg',      'mg')}
+        ${row('Iron',          'iron_mg',         'mg')}
+        ${row('Vitamin A',     'vitamin_a_mcg',   'mcg')}
+        ${row('Vitamin C',     'vitamin_c_mg',    'mg')}
+        ${row('Vitamin D',     'vitamin_d_mcg',   'mcg')}
+      </div>
+    </div>`
+}
+
 function renderDashboardAnalyticsWidget() {
   // Wrap the whole thing — this runs during dashboard render, and a crash
   // here takes the entire dashboard with it. Returning '' on any error
@@ -1590,7 +1706,7 @@ function getTodayPlannedMeals() {
 function renderDashboard(container) {
   const h = new Date().getHours()
   const greeting = h < 12 ? 'Good morning.' : h < 17 ? 'Good afternoon.' : 'Good evening.'
-  const todayLog = getTodayLog()
+  const todayLog = getSelectedDayLog()
 
   container.innerHTML = `
     <div class="greeting">${greeting}</div>
@@ -1768,10 +1884,19 @@ function renderDashboard(container) {
       <div class="stat-card"><div class="stat-label">Fat</div><div class="stat-val" style="color:var(--fat)" id="stat-f">0g</div><div class="stat-sub">of <span id="stat-f-goal">${state.goals.fat}</span>g</div></div>
     </div>
 
-    <!-- Today's meals -->
+    <!-- Today's meals (with day navigation) -->
     <div class="log-card" style="margin-bottom:16px">
-      <div class="log-header">
-        <span class="log-header-title">Today's meals</span>
+      <div class="log-header" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span class="log-header-title">${isSelectedToday() ? "Today's meals" : 'Meals'}</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button id="day-nav-prev" onclick="window.shiftDashboardDay(-1)" aria-label="Previous day"
+            style="width:30px;height:30px;border-radius:6px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);cursor:pointer;font-family:inherit;font-size:14px;display:flex;align-items:center;justify-content:center;padding:0">‹</button>
+          <span id="day-nav-label" style="font-size:13px;font-weight:500;color:var(--text2);min-width:90px;text-align:center">${formatSelectedDateLabel(getSelectedDateStr())}</span>
+          <button id="day-nav-next" onclick="window.shiftDashboardDay(1)" aria-label="Next day" ${isSelectedToday() ? 'disabled' : ''}
+            style="width:30px;height:30px;border-radius:6px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);cursor:pointer;font-family:inherit;font-size:14px;display:flex;align-items:center;justify-content:center;padding:0;opacity:${isSelectedToday() ? '0.4' : '1'}">›</button>
+          <button id="day-nav-today" onclick="window.goToToday()"
+            style="display:${isSelectedToday() ? 'none' : ''};margin-left:4px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--bg3);color:var(--accent);cursor:pointer;font-family:inherit;font-size:11px;font-weight:600">Today</button>
+        </div>
       </div>
       <div id="today-log-body">${renderTodayMeals(todayLog)}</div>
     </div>
@@ -1779,7 +1904,7 @@ function renderDashboard(container) {
     <!-- Macro breakdown / Goal progress -->
     <div class="chart-row">
       <div class="chart-card">
-        <div class="chart-title">Macro breakdown today</div>
+        <div class="chart-title">Macro breakdown ${isSelectedToday() ? 'today' : `· ${formatSelectedDateLabel(getSelectedDateStr())}`}</div>
         <div class="donut-wrap">
           <svg width="120" height="120" viewBox="0 0 120 120">
             <circle cx="60" cy="60" r="50" fill="none" stroke="var(--bg4)" stroke-width="18"/>
@@ -1806,6 +1931,8 @@ function renderDashboard(container) {
         </div>
       </div>
     </div>
+
+    ${state.goals?.track_full_label ? renderDashboardFullLabel(todayLog) : ''}
 
     <!-- Analytics -->
     ${renderDashboardAnalyticsWidget()}
@@ -4678,6 +4805,34 @@ function buildMacroFields(goals) {
   `
 }
 
+// Optional full-label goal targets — only rendered when track_full_label is on.
+// Fields show FDA daily-value defaults as placeholders; empty means "no target"
+// and saves as NULL. saveGoalsHandler reads these by id when the toggle is on.
+function buildFullLabelTargetFields(goals) {
+  const g = goals || {}
+  const v = (x) => x == null ? '' : String(x)
+  const fld = (id, label, value, placeholder) => `
+    <div>
+      <label class="field-label">${label}</label>
+      <input type="number" id="${id}" value="${v(value)}" placeholder="${placeholder}"
+        style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:9px 12px;color:var(--text);font-size:14px;font-family:inherit;outline:none">
+    </div>`
+  return `
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Full nutrition targets</div>
+        <div style="font-size:11px;color:var(--text3)">Optional · FDA defaults shown</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        ${fld('goal-sodium-max', 'Sodium max (mg)', g.sodium_mg_max, '2300')}
+        ${fld('goal-fiber-min', 'Fiber min (g)', g.fiber_g_min, '25')}
+        ${fld('goal-satfat-max', 'Sat. fat max (g)', g.saturated_fat_g_max, '13')}
+        ${fld('goal-addedsugar-max', 'Added sugar max (g)', g.sugar_added_g_max, '25')}
+      </div>
+    </div>
+  `
+}
+
 function renderGoalsPage(container) {
   const m = state.bodyMetrics || {}
   const bmr = calcBMR(m)
@@ -5013,6 +5168,7 @@ function renderGoalsPage(container) {
           <div style="font-size:11px;color:var(--text3)">Edit manually or use calculated targets above</div>
         </div>
         ${buildMacroFields(state.goals)}
+        ${state.goals?.track_full_label ? buildFullLabelTargetFields(state.goals) : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <button onclick="saveBodyMetricsOnly()"
             style="padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;font-weight:500;font-family:inherit;cursor:pointer"
@@ -5385,6 +5541,7 @@ function renderAccount(container) {
           <div style="font-size:11px;color:var(--text3)">Edit manually or use calculated targets above</div>
         </div>
         ${buildMacroFields(state.goals)}
+        ${state.goals?.track_full_label ? buildFullLabelTargetFields(state.goals) : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <button onclick="saveBodyMetricsOnly()"
             style="padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;font-weight:500;font-family:inherit;cursor:pointer"
@@ -6818,7 +6975,8 @@ function wireGlobals() {
             return id
           }).catch(() => null)
 
-      const entry = await addMealEntry(state.user.id, { ...e, food_item_id, meal_type: getMealTypeFromTime(new Date()) })
+      const mealType = getMealTypeFromTime(new Date())
+      const entry = await addMealEntry(state.user.id, { ...e, food_item_id, meal_type: mealType, logged_at: buildLoggedAtForSelectedDay(mealType) })
       state.log.unshift(entry)
 
       state.currentEntry = null
@@ -7578,6 +7736,16 @@ function wireGlobals() {
       showToast('Body metrics saved!', 'success')
       renderPage()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
+  }
+
+  // Show/hide the full-nutrition-label rows under the "More" header.
+  window.toggleFullLabelExpand = (btn) => {
+    const expanded = btn.dataset.expanded === 'true'
+    const next = !expanded
+    btn.dataset.expanded = String(next)
+    btn.textContent = next ? 'Hide ▴' : 'More ▾'
+    const rows = document.getElementById('full-label-rows')
+    if (rows) rows.style.display = next ? 'flex' : 'none'
   }
 
   // Persist the full-nutrition-label opt-in onto the goals row. The
@@ -13293,9 +13461,9 @@ function wireGlobals() {
     const m = allMeals.find(x => String(x.id) === String(plannerMealId))
     if (!m) return
     const mealName = m.meal_name || m.name || ''
-    const todayLog = getTodayLog()
+    const todayLog = getSelectedDayLog()
 
-    // If already logged — offer to unlog it
+    // If already logged on the selected day — offer to unlog it
     const existingEntry = todayLog.find(e => (e.name||'').toLowerCase() === mealName.toLowerCase())
     if (existingEntry) {
       try {
@@ -13321,6 +13489,7 @@ function wireGlobals() {
         base_fiber: m.fiber||0, base_sugar: m.sugar||0,
         servings_consumed: 1, meal_type: mealType,
         recipe_id: recipe?.id || null, food_item_id,
+        logged_at: buildLoggedAtForSelectedDay(mealType),
       })
       state.log.unshift(entry)
       updateStats()
@@ -13336,6 +13505,33 @@ function wireGlobals() {
     if (entry) entry.meal_type = next
     updateMealEntry(state.user.id, logId, { meal_type: next }).catch(() => {})
     refreshTodayLog()
+  }
+
+  // Dashboard day-nav: prev/next chevrons + Today button.
+  // Targeted DOM updates (vs renderPage) so an in-progress analyze result
+  // and any open Quick Log search aren't clobbered when scrubbing days.
+  window._refreshDayDependentTitles = () => {
+    const isToday = isSelectedToday()
+    const label = formatSelectedDateLabel(getSelectedDateStr())
+    const titleEl = document.querySelector('#today-log-body')?.parentElement?.querySelector('.log-header-title')
+    if (titleEl) titleEl.textContent = isToday ? "Today's meals" : 'Meals'
+    document.querySelectorAll('.chart-title').forEach(el => {
+      if (/Macro breakdown/.test(el.textContent)) {
+        el.textContent = isToday ? 'Macro breakdown today' : `Macro breakdown · ${label}`
+      }
+    })
+  }
+  window.shiftDashboardDay = (days) => {
+    shiftSelectedDate(days)
+    updateStats()
+    refreshTodayLog()
+    window._refreshDayDependentTitles()
+  }
+  window.goToToday = () => {
+    state.selectedDate = null
+    updateStats()
+    refreshTodayLog()
+    window._refreshDayDependentTitles()
   }
 
   // Check if user arrived via a "Save recipe" from a shared link
@@ -13874,6 +14070,8 @@ function filterQuickLog() {
 
       if (choice === 'components') {
         let logged = 0
+        const compMealType = getMealTypeFromTime(new Date())
+        const compLoggedAt = buildLoggedAtForSelectedDay(compMealType)
         for (const comp of components) {
           try {
             const entry = await addMealEntry(state.user.id, {
@@ -13885,6 +14083,8 @@ function filterQuickLog() {
               base_carbs: comp.carbs || 0, base_fat: comp.fat || 0,
               servings_consumed: comp.qty || 1,
               food_item_id: linkedFood.id,
+              meal_type: compMealType,
+              logged_at: compLoggedAt,
             })
             state.log.unshift(entry)
             logged++
@@ -13926,6 +14126,7 @@ function filterQuickLog() {
 
       console.log('[quickLogMeal] inserting entry — isRecipe:', isRecipe, 'isFood:', isFood, 'recipe_id:', recipe_id, 'food_item_id:', food_item_id)
 
+      const qlMealType = meal.meal_type || getMealTypeFromTime(new Date())
       const entry = await addMealEntry(state.user.id, {
         ...meal,
         base_calories: meal.base_calories ?? meal.calories,
@@ -13937,6 +14138,8 @@ function filterQuickLog() {
         servings_consumed: 1,
         food_item_id,
         recipe_id,
+        meal_type: qlMealType,
+        logged_at: buildLoggedAtForSelectedDay(qlMealType),
       })
       state.log.unshift(entry)
       const input = document.getElementById('quick-log-search')
