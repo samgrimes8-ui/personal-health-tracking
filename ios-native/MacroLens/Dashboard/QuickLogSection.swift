@@ -103,6 +103,10 @@ struct QuickLogSection: View {
                 defaultLoggedAt: state.loggedAtForSelectedDate() ?? Date()
             )
             .environment(state)
+            // Pin the sheet open while editing — a stray drag from
+            // tapping a numeric field was bouncing the whole sheet
+            // closed. The user can still dismiss via Cancel or Save.
+            .interactiveDismissDisabled(true)
         }
     }
 
@@ -260,37 +264,61 @@ struct QuickLogSection: View {
         .padding(.horizontal, 4)
     }
 
+    /// Two-target row: the body opens the preview sheet so the user can
+    /// review macros + servings + time before commit; the trailing +
+    /// button INSTANT-LOGs with default servings (1) and current time —
+    /// no preview, for users who already know what they want. The +
+    /// gets a 44×44 hit target (Apple HIG) so it's easy to tap without
+    /// accidentally opening the row body.
     private func quickLogRow(_ item: QuickLogItem) -> some View {
-        Button {
-            Task { await log(item) }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: item.kind.icon)
-                    .foregroundStyle(item.kind.tint)
-                    .font(.system(size: 12))
-                    .frame(width: 16)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(1)
-                    Text("\(Int(item.calories)) kcal · \(Int(item.protein))P · \(Int(item.carbs))C · \(Int(item.fat))F")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.text3)
+        HStack(spacing: 0) {
+            Button {
+                Task { await log(item) }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: item.kind.icon)
+                        .foregroundStyle(item.kind.tint)
+                        .font(.system(size: 12))
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.name)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                            .lineLimit(1)
+                            .multilineTextAlignment(.leading)
+                        Text("\(Int(item.calories)) kcal · \(Int(item.protein))P · \(Int(item.carbs))C · \(Int(item.fat))F")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                    }
+                    Spacer()
                 }
-                Spacer()
-                if loggingId == item.id {
-                    ProgressView().scaleEffect(0.7)
-                } else {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundStyle(Theme.accent)
-                        .font(.system(size: 18))
-                }
+                .padding(.leading, 10).padding(.vertical, 9)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10).padding(.vertical, 9)
-            .background(Theme.bg3, in: .rect(cornerRadius: 8))
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens preview to review and adjust before logging")
+
+            Button {
+                Task { await instantLog(item) }
+            } label: {
+                Group {
+                    if loggingId == item.id {
+                        ProgressView().scaleEffect(0.7)
+                    } else {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundStyle(Theme.accent)
+                            .font(.system(size: 22))
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(loggingId == item.id)
+            .accessibilityLabel("Log instantly")
+            .accessibilityHint("Logs one serving at the current time, no preview")
         }
-        .disabled(loggingId == item.id)
+        .background(Theme.bg3, in: .rect(cornerRadius: 8))
     }
 
     // MARK: - Data
@@ -417,36 +445,39 @@ struct QuickLogSection: View {
         var seenFoodIds = Set<String>()
         var seenNames = Set<String>()
         var out: [QuickLogItem] = []
-        // Order: user's own food_items first (canonical + brand info), then
-        // meal_log history, then USDA generic_foods, then recipe library.
-        // The user's own data wins ties so a personalized "Joe's protein
-        // shake" beats a generic USDA row for the same lowercased name.
-        for item in foodHits + mealHits + genericHits {
+        // Order: ALL personal sources before USDA generic_foods so a saved
+        // recipe / library food never gets buried under a generic match.
+        // Within personal: food_items (canonical + brand) → meal_log
+        // history → recipe library. The user expectation, per macro-tracker
+        // bug report: "I had a waffle recipe saved and it showed me generic
+        // waffles first." Recipes used to render after generics; this
+        // reorder makes the personal_item_boost behavior match the spec
+        // without needing scores from the SQL RPCs.
+        let lower = q.lowercased()
+        let recipeMatches: [QuickLogItem] = state.recipes
+            .filter { $0.name.lowercased().contains(lower) }
+            .map { r in
+                QuickLogItem(
+                    id: "recipe-\(r.id)",
+                    name: r.name,
+                    calories: r.calories ?? 0,
+                    protein: r.protein ?? 0,
+                    carbs: r.carbs ?? 0,
+                    fat: r.fat ?? 0,
+                    fiber: r.fiber ?? 0,
+                    recipeId: r.id,
+                    foodItemId: nil,
+                    foodItem: nil,
+                    kind: .recipe
+                )
+            }
+        for item in foodHits + mealHits + recipeMatches + genericHits {
             if let fid = item.foodItemId, seenFoodIds.contains(fid) { continue }
             let nameKey = item.name.lowercased()
             if seenNames.contains(nameKey) { continue }
             if let fid = item.foodItemId { seenFoodIds.insert(fid) }
             seenNames.insert(nameKey)
             out.append(item)
-        }
-        let lower = q.lowercased()
-        for r in state.recipes where r.name.lowercased().contains(lower) {
-            let key = r.name.lowercased()
-            if seenNames.contains(key) { continue }
-            seenNames.insert(key)
-            out.append(QuickLogItem(
-                id: "recipe-\(r.id)",
-                name: r.name,
-                calories: r.calories ?? 0,
-                protein: r.protein ?? 0,
-                carbs: r.carbs ?? 0,
-                fat: r.fat ?? 0,
-                fiber: r.fiber ?? 0,
-                recipeId: r.id,
-                foodItemId: nil,
-                foodItem: nil,
-                kind: .recipe
-            ))
         }
         searchResults = Array(out.prefix(20))
         lastSearchedQuery = q
@@ -580,7 +611,7 @@ struct QuickLogSection: View {
         }
     }
 
-    /// Tap path. Multi-component foods detour through the combo
+    /// Row-body tap. Multi-component foods detour through the combo
     /// prompt; everything else hands a draft to the preview sheet so
     /// the user reviews servings/time/macros before commit.
     private func log(_ item: QuickLogItem) async {
@@ -603,6 +634,36 @@ struct QuickLogSection: View {
             servingGrams: item.foodItem?.serving_grams,
             servingOz: item.foodItem?.serving_oz
         ))
+    }
+
+    /// "+" tap. Bypasses the preview entirely — writes meal_log with
+    /// 1 serving + current time (the dashboard's selectedDate via
+    /// loggedAtForSelectedDate). For combo foods we default to "as
+    /// one"; the macro-tracker's spec is "instant-log with default
+    /// servings (1)" which implies a single row, not the per-component
+    /// breakdown. Users who want to break out components can tap the
+    /// row body and pick from the combo prompt.
+    private func instantLog(_ item: QuickLogItem) async {
+        loggingId = item.id
+        defer { loggingId = nil }
+        do {
+            try await state.logMeal(
+                name: item.name,
+                calories: item.calories,
+                protein: item.protein,
+                carbs: item.carbs,
+                fat: item.fat,
+                fiber: item.fiber,
+                recipeId: item.recipeId,
+                foodItemId: item.foodItemId,
+                loggedAt: state.loggedAtForSelectedDate()
+            )
+            withAnimation { toast = "✓ Logged \(item.name)" }
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation { toast = nil }
+        } catch {
+            withAnimation { toast = "Couldn't log: \(error.localizedDescription)" }
+        }
     }
 
     // MARK: - Combo log helpers
