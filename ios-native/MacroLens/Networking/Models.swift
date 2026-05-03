@@ -9,18 +9,14 @@ import Foundation
 
 /// One row of public.goals — daily macro targets, one per user.
 /// Mirrors the web schema: calories / protein / carbs / fat are the
-/// canonical 4 macros. The full-label opt-in (track_full_label) adds
-/// optional sodium / fiber / saturated-fat / added-sugar targets that
-/// only render when the toggle is on.
+/// canonical 4 macros. Optional full-label targets (sodium / fiber /
+/// saturated-fat / added-sugar) live here too and only render when
+/// the user_profiles.track_full_nutrition toggle is on.
 struct Goals: Codable, Hashable {
     var calories: Int?
     var protein: Int?
     var carbs: Int?
     var fat: Int?
-    /// Account-level opt-in for the full nutrition label UI.
-    /// Stored on goals because every full-label query touches goals
-    /// anyway — no need for a separate user_settings row.
-    var track_full_label: Bool?
     var sodium_mg_max: Double?
     var fiber_g_min: Double?
     var saturated_fat_g_max: Double?
@@ -571,6 +567,13 @@ struct UserProfileRow: Codable, Hashable {
 
     // Per-user tag preset hiding (array of preset names)
     var hidden_tag_presets: [String]?
+
+    /// Full-nutrition-label opt-in. Canonical source so the toggle
+    /// syncs across iOS + web on auth (lives here rather than goals
+    /// because user_profiles is loaded earlier in the auth bootstrap
+    /// and the cross-device sync was unreliable when it lived on
+    /// goals).
+    var track_full_nutrition: Bool?
 }
 
 /// Provider directory listing — same row as UserProfileRow, projected
@@ -724,6 +727,96 @@ struct GenericFoodRow: Codable, Identifiable, Hashable {
     var fiber_g: Double?
     var fdc_id: String?
     var source: String?
+}
+
+/// Compact full-nutrition-label string for food / meal cards. Picks the
+/// 2–3 most informative non-null fields off a row and renders them as
+/// "Sodium 410 mg · Fiber 6 g · Sat fat 2 g". Skips fields the AI didn't
+/// know (so a partially-tracked row still gets a useful summary instead
+/// of a comma-separated list of dashes). Returns nil when the row has
+/// nothing extra to show — caller can hide the strip entirely.
+enum FullLabelDisplay {
+    /// Render a compact strip from a meal_log row. Prefer fields a user
+    /// scanning a card actually wants: sodium, fiber, sugar (added when
+    /// known else total), saturated fat. Caps at 3 chips.
+    static func compactSummary(entry: MealLogEntry) -> String? {
+        var chips: [String] = []
+        let fiber = entry.fiber_g ?? entry.fiber
+        if let v = entry.sodium_mg { chips.append("Sodium \(fmtMg(v))") }
+        if let v = fiber, v > 0 { chips.append("Fiber \(fmtG(v))") }
+        if let v = entry.sugar_added_g { chips.append("Added sugar \(fmtG(v))") }
+        else if let v = entry.sugar_total_g { chips.append("Sugar \(fmtG(v))") }
+        if chips.count < 3, let v = entry.saturated_fat_g { chips.append("Sat fat \(fmtG(v))") }
+        return chips.isEmpty ? nil : chips.prefix(3).joined(separator: " · ")
+    }
+
+    static func compactSummary(food: FoodItemRow) -> String? {
+        var chips: [String] = []
+        let fiber = food.fiber_g ?? food.fiber
+        if let v = food.sodium_mg ?? food.sodium { chips.append("Sodium \(fmtMg(v))") }
+        if let v = fiber, v > 0 { chips.append("Fiber \(fmtG(v))") }
+        if let v = food.sugar_added_g { chips.append("Added sugar \(fmtG(v))") }
+        else if let v = food.sugar_total_g ?? food.sugar { chips.append("Sugar \(fmtG(v))") }
+        if chips.count < 3, let v = food.saturated_fat_g { chips.append("Sat fat \(fmtG(v))") }
+        return chips.isEmpty ? nil : chips.prefix(3).joined(separator: " · ")
+    }
+
+    /// Detail rows for the food/meal editor — every non-null full-label
+    /// value with its unit. Returns ordered (label, formatted-value)
+    /// pairs so the caller can render whichever layout fits.
+    static func detailRows(entry: MealLogEntry) -> [(label: String, value: String)] {
+        let fiber = entry.fiber_g ?? entry.fiber
+        return rowsFrom([
+            ("Sat fat",       entry.saturated_fat_g, "g"),
+            ("Trans fat",     entry.trans_fat_g, "g"),
+            ("Cholesterol",   entry.cholesterol_mg, "mg"),
+            ("Sodium",        entry.sodium_mg, "mg"),
+            ("Fiber",         fiber, "g"),
+            ("Total sugar",   entry.sugar_total_g, "g"),
+            ("Added sugar",   entry.sugar_added_g, "g"),
+            ("Vitamin A",     entry.vitamin_a_mcg, "mcg"),
+            ("Vitamin C",     entry.vitamin_c_mg, "mg"),
+            ("Vitamin D",     entry.vitamin_d_mcg, "mcg"),
+            ("Calcium",       entry.calcium_mg, "mg"),
+            ("Iron",          entry.iron_mg, "mg"),
+            ("Potassium",     entry.potassium_mg, "mg"),
+        ])
+    }
+
+    static func detailRows(food: FoodItemRow) -> [(label: String, value: String)] {
+        let fiber = food.fiber_g ?? food.fiber
+        let sodium = food.sodium_mg ?? food.sodium
+        let totalSugar = food.sugar_total_g ?? food.sugar
+        return rowsFrom([
+            ("Sat fat",       food.saturated_fat_g, "g"),
+            ("Trans fat",     food.trans_fat_g, "g"),
+            ("Cholesterol",   food.cholesterol_mg, "mg"),
+            ("Sodium",        sodium, "mg"),
+            ("Fiber",         fiber, "g"),
+            ("Total sugar",   totalSugar, "g"),
+            ("Added sugar",   food.sugar_added_g, "g"),
+            ("Vitamin A",     food.vitamin_a_mcg, "mcg"),
+            ("Vitamin C",     food.vitamin_c_mg, "mg"),
+            ("Vitamin D",     food.vitamin_d_mcg, "mcg"),
+            ("Calcium",       food.calcium_mg, "mg"),
+            ("Iron",          food.iron_mg, "mg"),
+            ("Potassium",     food.potassium_mg, "mg"),
+        ])
+    }
+
+    private static func rowsFrom(_ src: [(String, Double?, String)]) -> [(label: String, value: String)] {
+        var out: [(String, String)] = []
+        for (label, value, unit) in src {
+            guard let v = value else { continue }
+            let fmt = (unit == "g") ? fmtG(v) : (unit == "mg" ? fmtMg(v) : fmtMcg(v))
+            out.append((label, fmt))
+        }
+        return out
+    }
+
+    private static func fmtG(_ v: Double)   -> String { v < 10 ? String(format: "%.1f g",   v) : "\(Int(v.rounded())) g"  }
+    private static func fmtMg(_ v: Double)  -> String { v < 10 ? String(format: "%.1f mg",  v) : "\(Int(v.rounded())) mg" }
+    private static func fmtMcg(_ v: Double) -> String { v < 10 ? String(format: "%.1f mcg", v) : "\(Int(v.rounded())) mcg" }
 }
 
 /// Lightweight reference to a body-scan file in the body-scans bucket.

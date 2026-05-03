@@ -467,40 +467,59 @@ struct DashboardView: View {
         Button {
             editingEntry = entry
         } label: {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name ?? "—")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Theme.text)
-                        .multilineTextAlignment(.leading)
-                    // Prefer a serving-aware subtitle over just the meal_type.
-                    // Renders "0.5 medium avocados (75g) · Snack" when the
-                    // entry has serving fields; falls back to the bare meal
-                    // type for older rows / recipe-linked rows that don't
-                    // carry serving info on meal_log.
-                    if let label = mealRowSubtitle(entry) {
-                        Text(label)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.name ?? "—")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                            .multilineTextAlignment(.leading)
+                        // Prefer a serving-aware subtitle over just the meal_type.
+                        // Renders "0.5 medium avocados (75g) · Snack" when the
+                        // entry has serving fields; falls back to the bare meal
+                        // type for older rows / recipe-linked rows that don't
+                        // carry serving info on meal_log.
+                        if let label = mealRowSubtitle(entry) {
+                            Text(label)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.text3)
+                        }
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("\(Int(entry.calories ?? 0)) kcal")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.cal)
+                        Text("\(Int(entry.protein ?? 0))P · \(Int(entry.carbs ?? 0))C · \(Int(entry.fat ?? 0))F")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.text3)
                     }
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(Int(entry.calories ?? 0)) kcal")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.cal)
-                    Text("\(Int(entry.protein ?? 0))P · \(Int(entry.carbs ?? 0))C · \(Int(entry.fat ?? 0))F")
-                        .font(.system(size: 11))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.text3)
                 }
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.text3)
+                if isTrackingFullLabel,
+                   let extras = FullLabelDisplay.compactSummary(entry: entry),
+                   !extras.isEmpty {
+                    Text(extras)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.text3)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// Mirrors AccountView/MacroBreakdownSection's read of the canonical
+    /// full-nutrition-label opt-in — profile column wins, AppStorage
+    /// cache fills in until the profile fetch completes.
+    @AppStorage("macrolens_track_full_nutrition") private var trackFullNutritionCached: Bool = false
+    private var isTrackingFullLabel: Bool {
+        state.profile?.track_full_nutrition ?? trackFullNutritionCached
     }
 
 }

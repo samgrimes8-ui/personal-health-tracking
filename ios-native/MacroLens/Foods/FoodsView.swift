@@ -22,6 +22,14 @@ struct FoodsView: View {
     @State private var toast: String?
     @FocusState private var searchFocused: Bool
 
+    /// Cold-start cache mirror of user_profiles.track_full_nutrition.
+    /// AccountView reconciles it with the canonical DB value the moment
+    /// the profile fetch returns.
+    @AppStorage("macrolens_track_full_nutrition") private var trackFullNutritionCached: Bool = false
+    private var isTrackingFullLabel: Bool {
+        state.profile?.track_full_nutrition ?? trackFullNutritionCached
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -220,6 +228,10 @@ struct FoodsView: View {
                     MacroChip(.fat, label: "F", amount: f.fat ?? 0)
                 }
 
+                if isTrackingFullLabel {
+                    fullLabelStrip(food: f)
+                }
+
                 Button {
                     handleQuickLog(f)
                 } label: {
@@ -239,6 +251,32 @@ struct FoodsView: View {
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
+    }
+
+    /// Compact full-nutrition-label strip rendered under the macro chips
+    /// when the toggle is on. Skips entirely if the row carries no
+    /// extras — pre-migration foods just get a "Tap to fill in nutrition
+    /// label" hint so the user knows the field is empty (vs assuming the
+    /// food contains 0 of everything).
+    @ViewBuilder
+    private func fullLabelStrip(food f: FoodItemRow) -> some View {
+        if let summary = FullLabelDisplay.compactSummary(food: f) {
+            Text(summary)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text2)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Theme.bg3, in: .rect(cornerRadius: 8))
+        } else {
+            Text("Full label not tracked yet — tap to add or re-analyze")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Theme.bg3, in: .rect(cornerRadius: 8))
+        }
     }
 
     // MARK: - Search

@@ -12,6 +12,15 @@ import Charts
 struct MacroBreakdownSection: View {
     @Environment(AppState.self) private var state
     @State private var showFullLabel: Bool = false
+    /// AppStorage cache of user_profiles.track_full_nutrition. Read on
+    /// first render so the dashboard can show the expanded card before
+    /// the profile fetch completes. AccountView keeps it in sync.
+    @AppStorage("macrolens_track_full_nutrition") private var trackFullNutritionCached: Bool = false
+
+    /// Source of truth: profile column wins when present, else cache.
+    private var isTrackingFullLabel: Bool {
+        state.profile?.track_full_nutrition ?? trackFullNutritionCached
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -36,7 +45,7 @@ struct MacroBreakdownSection: View {
             .background(Theme.bg2, in: .rect(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
 
-            if state.goals.track_full_label == true {
+            if isTrackingFullLabel {
                 fullLabelCard
             }
         }

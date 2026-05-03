@@ -22,6 +22,13 @@ import SwiftUI
 struct DailyTargetsDetailView: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
+    /// Mirror of user_profiles.track_full_nutrition for cold-start parity
+    /// with AccountView + MacroBreakdownSection.
+    @AppStorage("macrolens_track_full_nutrition") private var trackFullNutritionCached: Bool = false
+
+    private var isTrackingFullLabel: Bool {
+        state.profile?.track_full_nutrition ?? trackFullNutritionCached
+    }
 
     // body_metrics fields
     @State private var direction: String = "lose"
@@ -63,7 +70,7 @@ struct DailyTargetsDetailView: View {
                 targetCard
                 calculatedCard
                 macroCard
-                if state.goals.track_full_label == true {
+                if isTrackingFullLabel {
                     fullLabelCard
                 }
                 if let errorMsg {
@@ -514,9 +521,9 @@ struct DailyTargetsDetailView: View {
             nextBM.goal_body_fat_pct = Double(goalBodyFat)
             try await state.saveBodyMetrics(nextBM)
 
-            // Preserve the existing track_full_label flag so saving from
-            // the targets editor doesn't accidentally flip the toggle.
-            // Same goes for any micro target the user didn't edit.
+            // The track_full_nutrition flag lives on user_profiles now —
+            // saving goals can't touch it. Preserve micro targets the
+            // user didn't edit by patching onto the existing goals row.
             var nextGoals = state.goals
             nextGoals.calories = Int(calories.trimmingCharacters(in: .whitespaces))
             nextGoals.protein  = Int(protein.trimmingCharacters(in: .whitespaces))
@@ -527,7 +534,7 @@ struct DailyTargetsDetailView: View {
                 let t = s.trimmingCharacters(in: .whitespaces)
                 return t.isEmpty ? nil : Double(t)
             }
-            if state.goals.track_full_label == true {
+            if isTrackingFullLabel {
                 nextGoals.sodium_mg_max       = parseOptional(sodiumMax)
                 nextGoals.fiber_g_min         = parseOptional(fiberMin)
                 nextGoals.saturated_fat_g_max = parseOptional(satFatMax)

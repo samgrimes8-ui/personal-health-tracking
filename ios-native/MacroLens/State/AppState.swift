@@ -466,7 +466,6 @@ final class AppState {
             let protein: Int?
             let carbs: Int?
             let fat: Int?
-            let track_full_label: Bool?
             let sodium_mg_max: Double?
             let fiber_g_min: Double?
             let saturated_fat_g_max: Double?
@@ -479,7 +478,6 @@ final class AppState {
             protein: next.protein,
             carbs: next.carbs,
             fat: next.fat,
-            track_full_label: next.track_full_label,
             sodium_mg_max: next.sodium_mg_max,
             fiber_g_min: next.fiber_g_min,
             saturated_fat_g_max: next.saturated_fat_g_max,
@@ -490,6 +488,23 @@ final class AppState {
             .upsert(payload, onConflict: "user_id")
             .execute()
         self.goals = next
+    }
+
+    /// Upsert just the full-nutrition-label opt-in onto user_profiles.
+    /// Targeted update — must NOT overwrite display_name, role, or any
+    /// other column on the row. Returns nothing because the caller
+    /// updates state.profile + AppStorage cache directly.
+    func saveTrackFullNutrition(_ on: Bool) async throws {
+        struct Payload: Encodable { let track_full_nutrition: Bool }
+        let userId = try await currentUserID()
+        try await SupabaseService.client
+            .from("user_profiles")
+            .update(Payload(track_full_nutrition: on))
+            .eq("user_id", value: userId)
+            .execute()
+        var nextProfile = self.profile ?? UserProfileRow(user_id: userId)
+        nextProfile.track_full_nutrition = on
+        self.profile = nextProfile
     }
 
     /// Upsert body_metrics. Mirrors saveBodyMetrics in db.js — one row
@@ -1120,7 +1135,7 @@ final class AppState {
         let userId = try await currentUserID()
         let response: [Goals] = try await SupabaseService.client
             .from("goals")
-            .select("calories, protein, carbs, fat, track_full_label, sodium_mg_max, fiber_g_min, saturated_fat_g_max, sugar_added_g_max")
+            .select("calories, protein, carbs, fat, sodium_mg_max, fiber_g_min, saturated_fat_g_max, sugar_added_g_max")
             .eq("user_id", value: userId)
             .limit(1)
             .execute()

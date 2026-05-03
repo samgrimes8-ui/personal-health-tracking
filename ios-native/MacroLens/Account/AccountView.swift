@@ -15,13 +15,18 @@ struct AccountView: View {
     @Environment(AppState.self) private var state
     @Environment(AuthManager.self) private var auth
     @AppStorage("macrolens_theme") private var theme: String = "system"
+    /// Cold-start cache of the full-nutrition-label toggle. Mirrors
+    /// user_profiles.track_full_nutrition (canonical), but read first
+    /// so the dashboard can render the expanded card on launch without
+    /// waiting on the profile fetch. Refreshed from the DB the moment
+    /// loadAccount() returns.
+    @AppStorage("macrolens_track_full_nutrition") private var trackFullNutritionCached: Bool = false
 
     @State private var showDeleteConfirm = false
     @State private var deleteText: String = ""
     @State private var deleting = false
     @State private var deleteError: String?
     @State private var signOutInProgress = false
-    @State private var trackingFullLabel: Bool = false
     @State private var fullLabelSaving: Bool = false
     @State private var fullLabelError: String?
     @FocusState private var deleteFocused: Bool
@@ -49,11 +54,14 @@ struct AccountView: View {
         .refreshable { await state.loadAccount() }
         .task {
             await state.loadAccount()
-            // Hydrate the toggle from the persisted goals row. The Account
-            // tab can be the first one a user lands on (deep link), so we
-            // can't assume Goals has loaded yet — also load goals here.
             await state.loadGoals()
-            trackingFullLabel = state.goals.track_full_label ?? false
+            // Reconcile the AppStorage cache with the canonical DB value.
+            // If the user toggled on another device, this is where their
+            // change shows up after we refetch.
+            if let dbValue = state.profile?.track_full_nutrition,
+               dbValue != trackFullNutritionCached {
+                trackFullNutritionCached = dbValue
+            }
         }
         .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
@@ -196,22 +204,27 @@ struct AccountView: View {
     /// food editors expose the extended fields. When OFF, everything looks
     /// like before — the data is still stored but never surfaced.
     private var nutritionTrackingCard: some View {
+        // Source of truth is user_profiles.track_full_nutrition. The
+        // AppStorage cache mirrors it for cold-start render speed and
+        // is reconciled in .task. The toggle binding writes through
+        // both: cache flips immediately for snappy UI, DB write happens
+        // in the background; on failure we revert both.
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 cardLabel("Nutrition tracking")
                 Toggle(isOn: Binding(
-                    get: { trackingFullLabel },
+                    get: { state.profile?.track_full_nutrition ?? trackFullNutritionCached },
                     set: { newValue in
-                        let prior = trackingFullLabel
-                        trackingFullLabel = newValue
-                        Task { await saveTrackFullLabel(newValue, revertTo: prior) }
+                        let prior = state.profile?.track_full_nutrition ?? trackFullNutritionCached
+                        trackFullNutritionCached = newValue
+                        Task { await saveTrackFullNutrition(newValue, revertTo: prior) }
                     }
                 )) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Track full nutrition label")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(Theme.text)
-                        Text("Adds saturated fat, sodium, fiber, sugars, and key vitamins to daily totals + food cards. AI fills these in when it can read a label or knows the food.")
+                        Text("Adds saturated fat, sodium, fiber, sugars, and key vitamins to daily totals + food cards. AI fills these in when it can read a label or knows the food. Syncs across iOS and web.")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.text3)
                             .fixedSize(horizontal: false, vertical: true)
@@ -228,17 +241,15 @@ struct AccountView: View {
         }
     }
 
-    private func saveTrackFullLabel(_ on: Bool, revertTo prior: Bool) async {
+    private func saveTrackFullNutrition(_ on: Bool, revertTo prior: Bool) async {
         fullLabelSaving = true
         fullLabelError = nil
         defer { fullLabelSaving = false }
-        var next = state.goals
-        next.track_full_label = on
         do {
-            try await state.saveGoals(next)
+            try await state.saveTrackFullNutrition(on)
         } catch {
             fullLabelError = error.localizedDescription
-            trackingFullLabel = prior
+            trackFullNutritionCached = prior
         }
     }
 

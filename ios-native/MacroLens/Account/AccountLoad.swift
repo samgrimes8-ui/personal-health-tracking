@@ -33,7 +33,7 @@ extension AppState {
         let userId = try await SupabaseService.client.auth.session.user.id.uuidString
         let response: [UserProfileRow] = try await SupabaseService.client
             .from("user_profiles")
-            .select("user_id, email, role, account_status, is_admin, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url, credentials, spending_limit_usd, spending_limit_expires_at, total_spent_usd, hidden_tag_presets")
+            .select("user_id, email, role, account_status, is_admin, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url, credentials, spending_limit_usd, spending_limit_expires_at, total_spent_usd, hidden_tag_presets, track_full_nutrition")
             .eq("user_id", value: userId)
             .limit(1)
             .execute()
