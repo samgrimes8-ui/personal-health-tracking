@@ -1538,6 +1538,15 @@ function getMealTypeFromTime(date) {
   return 'Snack'
 }
 
+// iOS native writes lowercase meal_type ("breakfast"); web writes capitalized.
+// Normalize so MEAL_TYPES bucket lookups in renderTodayMeals match either.
+function normalizeMealType(t) {
+  if (!t) return null
+  const s = String(t).toLowerCase()
+  const cap = s.charAt(0).toUpperCase() + s.slice(1)
+  return MEAL_TYPES.includes(cap) ? cap : null
+}
+
 function getTodayPlannedMeals() {
   if (!state.planner?.meals) return []
   const dow = new Date().getDay()
@@ -1818,7 +1827,7 @@ function renderTodayMeals(logEntries) {
   const planned = getTodayPlannedMeals()
   const enriched = logEntries.map(e => ({
     ...e,
-    _mealType: e.meal_type || getMealTypeFromTime(new Date(e.logged_at || e.timestamp))
+    _mealType: normalizeMealType(e.meal_type) || getMealTypeFromTime(new Date(e.logged_at || e.timestamp))
   }))
   const loggedNames = new Set(logEntries.map(e => (e.name || '').toLowerCase()))
   const grouped = {}
@@ -1827,7 +1836,7 @@ function renderTodayMeals(logEntries) {
   const plannedByType = {}
   MEAL_TYPES.forEach(t => { plannedByType[t] = [] })
   planned.forEach((m, i) => {
-    const type = m.meal_type || MEAL_TYPES[Math.min(i, MEAL_TYPES.length - 1)]
+    const type = normalizeMealType(m.meal_type) || MEAL_TYPES[Math.min(i, MEAL_TYPES.length - 1)]
     if (plannedByType[type]) plannedByType[type].push(m)
   })
   const activeMealTypes = MEAL_TYPES.filter(t => grouped[t].length > 0 || plannedByType[t].length > 0)
