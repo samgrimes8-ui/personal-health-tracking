@@ -162,8 +162,65 @@ export default async function handler(req) {
     console.error('[analyze] record_usage failed:', err?.message || err)
   }
 
+  // ── Validate serving fields on describe-style actions ─────────────
+  // Every describe path is contracted to return serving_description + a
+  // numeric serving_grams (see prompts in src/lib/ai.js). When the model
+  // omits them, soft-fallback serving_description to "1 serving" so the
+  // client never renders a blank serving cell. We never fabricate a
+  // gram weight — guessing here would silently corrupt log totals
+  // (servings_consumed = parsed_quantity_g / serving_grams).
+  ensureServingFields(anthropicData, action)
+
   // ── Return result ─────────────────────────────────────────────────
   return json(anthropicData)
+}
+
+/// Mutates the Anthropic response in place: scans the JSON object the
+/// model emitted (inside the first text content block) and back-fills a
+/// minimal serving_description on each describe-style object that's
+/// missing one. No-op for non-describe actions and for responses that
+/// don't decode to JSON (web_search prose, classifier single words).
+const DESCRIBE_ACTIONS = new Set([
+  'analyze_food_item',
+  'analyze_planner_description',
+  'analyze_dashboard_describe',
+  'describe_food_candidates',
+  'analyze_nutrition_label',
+  'analyze_photo',
+  'analyze_recipe',
+  'analyze_recipe_photo',
+])
+
+function ensureServingFields(envelope, action) {
+  if (!action || !DESCRIBE_ACTIONS.has(action)) return
+  const blocks = Array.isArray(envelope?.content) ? envelope.content : []
+  const textIdx = blocks.findIndex(b => b?.type === 'text' && typeof b.text === 'string')
+  if (textIdx < 0) return
+  const raw = blocks[textIdx].text
+  // Pull out the outermost JSON object — same defensive parsing the
+  // client uses. Falls through silently if nothing parses.
+  const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+  const match = cleaned.match(/\{[\s\S]*\}/)
+  if (!match) return
+  let obj
+  try { obj = JSON.parse(match[0]) } catch { return }
+
+  let mutated = false
+  const fix = (o) => {
+    if (!o || typeof o !== 'object') return
+    if (typeof o.serving_description !== 'string' || !o.serving_description.trim()) {
+      o.serving_description = '1 serving'
+      mutated = true
+    }
+  }
+  fix(obj)
+  if (Array.isArray(obj.candidates)) obj.candidates.forEach(fix)
+  if (Array.isArray(obj.ingredients)) {
+    // ingredients have their own per-row schema, no serving_description
+    // expected — leave them alone.
+  }
+  if (!mutated) return
+  blocks[textIdx].text = JSON.stringify(obj)
 }
 
 function json(data, status = 200) {

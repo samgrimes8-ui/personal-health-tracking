@@ -25,6 +25,14 @@ struct FoodEditorView: View {
     @State private var name: String = ""
     @State private var brand: String = ""
     @State private var servingSize: String = "1 serving"
+    /// Structured single-serving description — required field. New rows
+    /// can't save without one; legacy rows hydrate from serving_size if
+    /// they don't already carry the structured field.
+    @State private var servingDescription: String = ""
+    /// Per-serving gram weight — also required for new rows. Stored as
+    /// String to keep input lenient; parsed at save time. Either grams
+    /// OR a populated description satisfies the soft DB constraint.
+    @State private var servingGramsText: String = ""
     @State private var components: [FoodComponent] = []
 
     // Manual macro fields (used only when there are no components).
@@ -126,8 +134,13 @@ struct FoodEditorView: View {
 
     private var nameCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            fieldLabeled("Food name") {
+            fieldLabeled("Food name *") {
                 TextField("Morning Protein Shake, Greek Yogurt Bowl…", text: $name)
+                    .focused($keyboardFocused)
+                    .textInputField()
+            }
+            fieldLabeled("Serving description *") {
+                TextField("e.g. 1 medium avocado, ~150g", text: $servingDescription)
                     .focused($keyboardFocused)
                     .textInputField()
             }
@@ -137,12 +150,16 @@ struct FoodEditorView: View {
                         .focused($keyboardFocused)
                         .textInputField()
                 }
-                fieldLabeled("Serving size") {
-                    TextField("1 shake, 1 cup…", text: $servingSize)
+                fieldLabeled("Grams per serving *") {
+                    TextField("150", text: $servingGramsText)
                         .focused($keyboardFocused)
+                        .keyboardType(.decimalPad)
                         .textInputField()
                 }
             }
+            Text("Required so logging \"15g\" of this food computes the right serving multiplier.")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text3)
         }
         .padding(14)
         .background(Theme.bg2, in: .rect(cornerRadius: 12))
@@ -391,6 +408,13 @@ struct FoodEditorView: View {
         name = item.name
         brand = item.brand ?? ""
         servingSize = (item.serving_size?.isEmpty == false) ? item.serving_size! : "1 serving"
+        // Prefer the structured serving_description when present; fall
+        // back to the legacy serving_size text for older rows so the
+        // editor doesn't open with a blank required field.
+        servingDescription = item.serving_description?.isEmpty == false
+            ? item.serving_description!
+            : (item.serving_size?.isEmpty == false ? item.serving_size! : "")
+        servingGramsText = item.serving_grams.map { String(format: "%g", $0) } ?? ""
         components = item.components ?? []
         calories = item.calories.map { String(Int($0.rounded())) } ?? ""
         protein  = item.protein.map  { String(Int($0.rounded())) } ?? ""
@@ -404,6 +428,15 @@ struct FoodEditorView: View {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             errorMsg = "Food needs a name"
+            return
+        }
+        let trimmedServing = servingDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedGrams = Double(servingGramsText.trimmingCharacters(in: .whitespacesAndNewlines))
+        // Phase C requires at least one of the two so logging can later
+        // compute servings. Both is best — description for the human,
+        // grams for the math — but one of the two is the floor.
+        guard !trimmedServing.isEmpty || (parsedGrams ?? 0) > 0 else {
+            errorMsg = "Add a serving description (e.g. \"1 medium avocado, ~150g\") or a per-serving gram weight."
             return
         }
         saving = true
@@ -436,12 +469,12 @@ struct FoodEditorView: View {
             components: components.isEmpty ? nil : components,
             notes: item?.notes,
             source: item?.source ?? (hasComponents ? "manual" : "manual"),
-            // Preserve any AI-supplied serving fields when editing a row;
-            // the manual editor doesn't surface them yet (followup), but
-            // we shouldn't blank them on every Save.
-            servingDescription: item?.serving_description,
-            servingGrams: item?.serving_grams,
-            servingOz: item?.serving_oz
+            // Form-supplied serving fields. Editor surfaces them now —
+            // user must fill description OR grams (Phase C requirement).
+            // serving_oz derived from grams for display parity.
+            servingDescription: trimmedServing.isEmpty ? nil : trimmedServing,
+            servingGrams: parsedGrams,
+            servingOz: parsedGrams.map { ($0 / 28.3495 * 10).rounded() / 10 }
         )
 
         do {
