@@ -32,12 +32,13 @@
 - `api/barcode.js` — Open Food Facts proxy
 
 ## Database Tables (public schema)
-- `user_profiles` — user data
-- `goals` — daily macro targets (one row per user, upsert with onConflict:'user_id')
-- `meal_log` — food entries (has meal_type, servings_consumed, base_macros, food_item_id, recipe_id)
+- `user_profiles` — user data (also holds `track_full_nutrition` boolean — opt-in flag for the full nutrition label UI; canonical source for both iOS and web so the toggle syncs cross-device)
+- `goals` — daily macro targets (one row per user, upsert with onConflict:'user_id'). Holds optional full-label goal targets when the toggle is on: sodium_mg_max, fiber_g_min, saturated_fat_g_max, sugar_added_g_max
+- `meal_log` — food entries (has meal_type, servings_consumed, base_macros, food_item_id, recipe_id, plus 13 nullable full-label columns: saturated_fat_g, trans_fat_g, cholesterol_mg, sodium_mg, fiber_g, sugar_total_g, sugar_added_g, vitamin_a_mcg, vitamin_c_mg, vitamin_d_mcg, calcium_mg, iron_mg, potassium_mg)
 - `meal_planner` — weekly meal plan (has actual_date, planned_servings, meal_type, recipe_id)
 - `recipes` — recipes (has ingredients jsonb, instructions jsonb, source_url, share_token, is_shared, og_cache)
-- `food_items` — saved food items (has components jsonb)
+- `food_items` — saved food items (has components jsonb, plus the same 13 full-label columns as meal_log)
+- `generic_foods` — USDA-imported common foods (has the same 13 full-label columns)
 - `body_metrics` — current body stats per user (one row, upsert)
 - `checkins` — weekly check-in history (has scan_date, all InBody/DEXA metrics, scan_data jsonb)
 - `token_usage` — AI usage tracking
