@@ -35,6 +35,13 @@ struct DailyTargetsDetailView: View {
     @State private var carbs: String = ""
     @State private var fat: String = ""
 
+    // Full-label opt-in goal targets (only rendered when toggle is on).
+    // Empty string means "no target set" — saves as NULL.
+    @State private var sodiumMax: String = ""
+    @State private var fiberMin: String = ""
+    @State private var satFatMax: String = ""
+    @State private var addedSugarMax: String = ""
+
     // Lock state for macro lock-to-balance. Default: calories +
     // fat locked, carbs unlocks to balance.
     @State private var lockCal: Bool = true
@@ -55,6 +62,9 @@ struct DailyTargetsDetailView: View {
                 targetCard
                 calculatedCard
                 macroCard
+                if state.goals.track_full_label == true {
+                    fullLabelCard
+                }
                 if let errorMsg {
                     Text(errorMsg)
                         .font(.system(size: 12))
@@ -246,6 +256,52 @@ struct DailyTargetsDetailView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
     }
 
+    // MARK: - Full-label goal targets (opt-in)
+
+    /// Optional goal targets for the full-nutrition-label opt-in. FDA
+    /// recommendations are pre-filled as placeholders so the user has a
+    /// reasonable starting point. Empty fields persist as NULL — the
+    /// dashboard simply won't show a target line for that field.
+    private var fullLabelCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                sectionLabel("Full nutrition targets")
+                Spacer()
+                Text("Optional")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.text3)
+            }
+            HStack(spacing: 8) {
+                fullLabelField("Sodium max (mg)", text: $sodiumMax, placeholder: "2300")
+                fullLabelField("Fiber min (g)", text: $fiberMin, placeholder: "25")
+            }
+            HStack(spacing: 8) {
+                fullLabelField("Sat. fat max (g)", text: $satFatMax, placeholder: "13")
+                fullLabelField("Added sugar max (g)", text: $addedSugarMax, placeholder: "25")
+            }
+            Text("Defaults follow FDA daily-value guidance. Leave a field empty to skip that target.")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text3)
+        }
+        .padding(14)
+        .background(Theme.bg2, in: .rect(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+    }
+
+    private func fullLabelField(_ label: String, text: Binding<String>, placeholder: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11))
+                .tracking(0.8)
+                .textCase(.uppercase)
+                .foregroundStyle(Theme.text3)
+            TextField(placeholder, text: text)
+                .keyboardType(.decimalPad)
+                .textInputField()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     /// One-liner showing the current macro arithmetic so the user can
     /// see whether their lock combo balances. Mirrors the web's
     /// `macro-balance-hint` div.
@@ -417,6 +473,10 @@ struct DailyTargetsDetailView: View {
         protein  = g.protein.map(String.init)  ?? ""
         carbs    = g.carbs.map(String.init)    ?? ""
         fat      = g.fat.map(String.init)      ?? ""
+        sodiumMax     = g.sodium_mg_max.map { String(format: "%g", $0) } ?? ""
+        fiberMin      = g.fiber_g_min.map  { String(format: "%g", $0) } ?? ""
+        satFatMax     = g.saturated_fat_g_max.map { String(format: "%g", $0) } ?? ""
+        addedSugarMax = g.sugar_added_g_max.map  { String(format: "%g", $0) } ?? ""
     }
 
     private func applyCalculated(_ c: Goals) {
@@ -441,12 +501,25 @@ struct DailyTargetsDetailView: View {
             nextBM.goal_body_fat_pct = Double(goalBodyFat)
             try await state.saveBodyMetrics(nextBM)
 
-            let nextGoals = Goals(
-                calories: Int(calories.trimmingCharacters(in: .whitespaces)),
-                protein:  Int(protein.trimmingCharacters(in: .whitespaces)),
-                carbs:    Int(carbs.trimmingCharacters(in: .whitespaces)),
-                fat:      Int(fat.trimmingCharacters(in: .whitespaces))
-            )
+            // Preserve the existing track_full_label flag so saving from
+            // the targets editor doesn't accidentally flip the toggle.
+            // Same goes for any micro target the user didn't edit.
+            var nextGoals = state.goals
+            nextGoals.calories = Int(calories.trimmingCharacters(in: .whitespaces))
+            nextGoals.protein  = Int(protein.trimmingCharacters(in: .whitespaces))
+            nextGoals.carbs    = Int(carbs.trimmingCharacters(in: .whitespaces))
+            nextGoals.fat      = Int(fat.trimmingCharacters(in: .whitespaces))
+            // Empty input means "no target" → NULL in the DB.
+            func parseOptional(_ s: String) -> Double? {
+                let t = s.trimmingCharacters(in: .whitespaces)
+                return t.isEmpty ? nil : Double(t)
+            }
+            if state.goals.track_full_label == true {
+                nextGoals.sodium_mg_max       = parseOptional(sodiumMax)
+                nextGoals.fiber_g_min         = parseOptional(fiberMin)
+                nextGoals.saturated_fat_g_max = parseOptional(satFatMax)
+                nextGoals.sugar_added_g_max   = parseOptional(addedSugarMax)
+            }
             try await state.saveGoals(nextGoals)
             dismiss()
         } catch {

@@ -720,7 +720,8 @@ final class AppState {
                 fiber: fiber,
                 servingDescription: servingDescription,
                 servingGrams: servingGrams,
-                servingOz: servingOz
+                servingOz: servingOz,
+                fullLabel: fullLabel
             )
         }
         // Auto-assign meal_type from the local clock when the caller
@@ -814,7 +815,8 @@ final class AppState {
                                   fiber: Double,
                                   servingDescription: String? = nil,
                                   servingGrams: Double? = nil,
-                                  servingOz: Double? = nil) async throws -> String? {
+                                  servingOz: Double? = nil,
+                                  fullLabel: FullLabelPayload? = nil) async throws -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -862,7 +864,20 @@ final class AppState {
             source: "log",
             servingDescription: servingDescription,
             servingGrams: servingGrams,
-            servingOz: servingOz
+            servingOz: servingOz,
+            saturatedFatG: fullLabel?.saturatedFatG,
+            transFatG:     fullLabel?.transFatG,
+            cholesterolMg: fullLabel?.cholesterolMg,
+            sodiumMg:      fullLabel?.sodiumMg,
+            fiberG:        fullLabel?.fiberG,
+            sugarTotalG:   fullLabel?.sugarTotalG,
+            sugarAddedG:   fullLabel?.sugarAddedG,
+            vitaminAMcg:   fullLabel?.vitaminAMcg,
+            vitaminCMg:    fullLabel?.vitaminCMg,
+            vitaminDMcg:   fullLabel?.vitaminDMcg,
+            calciumMg:     fullLabel?.calciumMg,
+            ironMg:        fullLabel?.ironMg,
+            potassiumMg:   fullLabel?.potassiumMg
         ))
         foods.insert(saved, at: 0)
         return saved.id

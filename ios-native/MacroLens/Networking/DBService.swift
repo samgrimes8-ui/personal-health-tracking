@@ -341,6 +341,21 @@ enum DBService {
             let components: [FoodComponent]?
             let notes: String?
             let source: String?
+            // Full nutrition label (opt-in). Always written when the AI
+            // returned values; only displayed when the toggle is on.
+            let saturated_fat_g: Double?
+            let trans_fat_g: Double?
+            let cholesterol_mg: Double?
+            let sodium_mg: Double?
+            let fiber_g: Double?
+            let sugar_total_g: Double?
+            let sugar_added_g: Double?
+            let vitamin_a_mcg: Double?
+            let vitamin_c_mg: Double?
+            let vitamin_d_mcg: Double?
+            let calcium_mg: Double?
+            let iron_mg: Double?
+            let potassium_mg: Double?
         }
         let userId = try await currentUserID()
         let payload = Payload(
@@ -362,7 +377,20 @@ enum DBService {
             sodium: item.sodium ?? 0,
             components: item.components,
             notes: item.notes,
-            source: item.source ?? "manual"
+            source: item.source ?? "manual",
+            saturated_fat_g: item.saturatedFatG,
+            trans_fat_g:     item.transFatG,
+            cholesterol_mg:  item.cholesterolMg,
+            sodium_mg:       item.sodiumMg,
+            fiber_g:         item.fiberG,
+            sugar_total_g:   item.sugarTotalG,
+            sugar_added_g:   item.sugarAddedG,
+            vitamin_a_mcg:   item.vitaminAMcg,
+            vitamin_c_mg:    item.vitaminCMg,
+            vitamin_d_mcg:   item.vitaminDMcg,
+            calcium_mg:      item.calciumMg,
+            iron_mg:         item.ironMg,
+            potassium_mg:    item.potassiumMg
         )
         let rows: [FoodItemRow] = try await client
             .from("food_items")
@@ -666,6 +694,22 @@ struct FoodItemUpsert {
     var servingDescription: String?
     var servingGrams: Double?
     var servingOz: Double?
+    /// Full nutrition label (opt-in). Optional — older paths and
+    /// manual edits leave them nil. The food editor only surfaces
+    /// these fields when the toggle is on.
+    var saturatedFatG: Double?
+    var transFatG: Double?
+    var cholesterolMg: Double?
+    var sodiumMg: Double?
+    var fiberG: Double?
+    var sugarTotalG: Double?
+    var sugarAddedG: Double?
+    var vitaminAMcg: Double?
+    var vitaminCMg: Double?
+    var vitaminDMcg: Double?
+    var calciumMg: Double?
+    var ironMg: Double?
+    var potassiumMg: Double?
 }
 
 struct MealEntryPatch {

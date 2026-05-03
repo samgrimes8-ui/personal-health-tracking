@@ -21,12 +21,16 @@ struct AccountView: View {
     @State private var deleting = false
     @State private var deleteError: String?
     @State private var signOutInProgress = false
+    @State private var trackingFullLabel: Bool = false
+    @State private var fullLabelSaving: Bool = false
+    @State private var fullLabelError: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 profileCard
                 appearanceCard
+                nutritionTrackingCard
                 bodyMetricsCard
                 HealthSettingsSection()
                 spendingCard
@@ -42,7 +46,14 @@ struct AccountView: View {
         .background(Theme.bg)
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await state.loadAccount() }
-        .task { await state.loadAccount() }
+        .task {
+            await state.loadAccount()
+            // Hydrate the toggle from the persisted goals row. The Account
+            // tab can be the first one a user lands on (deep link), so we
+            // can't assume Goals has loaded yet — also load goals here.
+            await state.loadGoals()
+            trackingFullLabel = state.goals.track_full_label ?? false
+        }
         .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -165,6 +176,60 @@ struct AccountView: View {
         case "light": return "light"
         case "dark":  return "dark"
         default:      return "system"
+        }
+    }
+
+    // MARK: - Nutrition tracking opt-in
+
+    /// Toggle for the full nutrition label opt-in. When ON, the dashboard
+    /// shows expanded micros under daily totals, the Goals tab adds optional
+    /// micro targets (sodium / fiber / saturated fat / added sugar), and
+    /// food editors expose the extended fields. When OFF, everything looks
+    /// like before — the data is still stored but never surfaced.
+    private var nutritionTrackingCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                cardLabel("Nutrition tracking")
+                Toggle(isOn: Binding(
+                    get: { trackingFullLabel },
+                    set: { newValue in
+                        let prior = trackingFullLabel
+                        trackingFullLabel = newValue
+                        Task { await saveTrackFullLabel(newValue, revertTo: prior) }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Track full nutrition label")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                        Text("Adds saturated fat, sodium, fiber, sugars, and key vitamins to daily totals + food cards. AI fills these in when it can read a label or knows the food.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .disabled(fullLabelSaving)
+                .tint(Theme.accent)
+                if let fullLabelError {
+                    Text(fullLabelError)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.red)
+                }
+            }
+        }
+    }
+
+    private func saveTrackFullLabel(_ on: Bool, revertTo prior: Bool) async {
+        fullLabelSaving = true
+        fullLabelError = nil
+        defer { fullLabelSaving = false }
+        var next = state.goals
+        next.track_full_label = on
+        do {
+            try await state.saveGoals(next)
+        } catch {
+            fullLabelError = error.localizedDescription
+            trackingFullLabel = prior
         }
     }
 
