@@ -325,7 +325,7 @@ export async function getUsageSummary(userId) {
   startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0)
 
   const [profileRes, usageRes] = await Promise.all([
-    supabase.from('user_profiles').select('spending_limit_usd, spending_limit_expires_at, total_spent_usd, is_admin, account_status, role, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url, credentials, hidden_tag_presets').eq('user_id', userId).maybeSingle(),
+    supabase.from('user_profiles').select('spending_limit_usd, spending_limit_expires_at, total_spent_usd, is_admin, account_status, role, provider_name, provider_slug, provider_bio, provider_specialty, provider_avatar_url, credentials, hidden_tag_presets, track_full_nutrition').eq('user_id', userId).maybeSingle(),
     supabase.from('token_usage').select('cost_usd, tokens_used, feature').eq('user_id', userId).gte('created_at', startOfMonth.toISOString())
   ])
 
@@ -413,6 +413,10 @@ export async function getUsageSummary(userId) {
     // the user has chosen to delete from their suggestion list. UI
     // reads this from state.usage.hiddenTagPresets.
     hiddenTagPresets: Array.isArray(profile.hidden_tag_presets) ? profile.hidden_tag_presets : [],
+    // Full-nutrition-label opt-in — canonical source for the toggle.
+    // localStorage caches it for cold-start render speed; the UI reads
+    // from state.usage.trackFullNutrition once getUsageSummary lands.
+    trackFullNutrition: profile.track_full_nutrition === true,
     // Override visibility for admin UI. null when no override set.
     override: hasOverride ? {
       active: overrideActive,
@@ -428,6 +432,24 @@ export async function getUsageSummary(userId) {
       return acc
     }, {})
   }
+}
+
+// Targeted update: just user_profiles.track_full_nutrition. Canonical
+// store for the full-nutrition-label opt-in (used to live on goals; the
+// goals row isn't always loaded before the toggle renders, so cross-
+// device sync was unreliable). Caller is responsible for caching the
+// value in localStorage so a cold-launched tab sees the user's setting
+// before the auth/profile fetch returns.
+export async function saveTrackFullNutrition(userId, on) {
+  if (!supabase) {
+    setLocalFallback('macrolens_track_full_nutrition', !!on)
+    return
+  }
+  const { error } = await supabase
+    .from('user_profiles')
+    .update({ track_full_nutrition: !!on })
+    .eq('user_id', userId)
+  if (error) throw error
 }
 
 // Admin only — get all users.

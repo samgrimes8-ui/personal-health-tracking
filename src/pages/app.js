@@ -22,6 +22,7 @@ import {
   deleteMyAccount,
   getMyIdentities, linkGoogleIdentity, unlinkIdentity,
   searchGenericFoods,
+  saveTrackFullNutrition,
 } from '../lib/db.js'
 import { TIERS, nextTierFromRole, formatBucks, bucksCount, usdToBucks } from '../lib/pricing.js'
 import { categorizeByName, parseAmount, canonicalizeName } from '../lib/categorize.js'
@@ -311,9 +312,23 @@ async function loadAll() {
     safe(() => getFollowedProviders(state.user.id)),
     safe(() => getIngredientSynonyms(state.user.id)),
   ])
-  state.goals = { calories: goals?.calories ?? 2000, protein: goals?.protein ?? 150, carbs: goals?.carbs ?? 200, fat: goals?.fat ?? 65 }
+  state.goals = { calories: goals?.calories ?? 2000, protein: goals?.protein ?? 150, carbs: goals?.carbs ?? 200, fat: goals?.fat ?? 65,
+    sodium_mg_max: goals?.sodium_mg_max ?? null,
+    fiber_g_min: goals?.fiber_g_min ?? null,
+    saturated_fat_g_max: goals?.saturated_fat_g_max ?? null,
+    sugar_added_g_max: goals?.sugar_added_g_max ?? null,
+  }
   state.log = log ?? []
   state.usage = usage
+  // Reconcile the localStorage cache with the canonical
+  // user_profiles.track_full_nutrition value so a future cold-launched
+  // tab (or a new session before getUsageSummary returns) reads the
+  // user's most-recent setting instead of a stale cache.
+  try {
+    if (usage && 'trackFullNutrition' in usage) {
+      localStorage.setItem('macrolens_track_full_nutrition', usage.trackFullNutrition ? '1' : '0')
+    }
+  } catch {}
   state.recipes = recipes ?? []
   state.weeksWithMeals = weeksWithMeals ?? []
   state.foodItems = foodItems ?? []
@@ -884,7 +899,7 @@ function renderAnalyticsPage(container) {
 // intentionally small (3 stat tiles + one sparkline) so it doesn't
 // clutter the main dashboard.
 // Renders the opt-in full-nutrition-label card on the dashboard. Only
-// invoked when state.goals.track_full_label is true. Sums the relevant
+// invoked when state.usage.trackFullNutrition is true. Sums the relevant
 // columns across today's meal_log rows, skipping nulls (so "not tracked"
 // meals don't drag totals down). Each row shows tracked/total alongside
 // the value so the user knows when AI didn't fill the field in.
@@ -1932,7 +1947,7 @@ function renderDashboard(container) {
       </div>
     </div>
 
-    ${state.goals?.track_full_label ? renderDashboardFullLabel(todayLog) : ''}
+    ${isTrackingFullLabel() ? renderDashboardFullLabel(todayLog) : ''}
 
     <!-- Analytics -->
     ${renderDashboardAnalyticsWidget()}
@@ -2044,11 +2059,16 @@ function renderTodayMeals(logEntries) {
     })
 
     // Logged rows — data-log-id for click delegation
+    const showFullLabel = isTrackingFullLabel()
     logs.forEach(e => {
       const timeStr = new Date(e.logged_at || e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       const servingTxt = e.servings_consumed && e.servings_consumed != 1
         ? '<span style="font-size:10px;color:var(--text3);margin-left:4px">×' + e.servings_consumed + '</span>' : ''
       const entryIcon = MEAL_TYPE_ICONS[e._mealType] || ''
+      // Compact full-label strip on each meal row when toggle is on. Skips
+      // when the row has no extras tracked — keeps pre-migration meals
+      // looking the same as before.
+      const fullLabelLine = showFullLabel ? fullLabelCompactSummary(e) : null
       html += '<div data-log-id="' + e.id + '" style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer">'
         + '<div style="flex:1;min-width:0">'
         + '<div style="font-size:13px;color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(e.name) + servingTxt + '</div>'
@@ -2056,7 +2076,9 @@ function renderTodayMeals(logEntries) {
         + '<span>' + timeStr + '</span>'
         + '<span data-type-btn="' + e.id + '" data-current-type="' + e._mealType + '" style="cursor:pointer;color:var(--text3);font-size:10px;padding:1px 4px;border-radius:3px;border:1px solid var(--border)">'
         + entryIcon + ' ' + e._mealType + ' ▾</span>'
-        + '</div></div>'
+        + '</div>'
+        + (fullLabelLine ? '<div style="font-size:10px;color:var(--text3);margin-top:3px;line-height:1.3">' + esc(fullLabelLine) + '</div>' : '')
+        + '</div>'
         + '<div style="text-align:right;flex-shrink:0;font-size:12px">'
         + '<div style="color:var(--accent);font-weight:600">' + Math.round(e.calories) + ' kcal</div>'
         + '<div style="color:var(--text3)">P' + Math.round(e.protein) + ' C' + Math.round(e.carbs) + ' F' + Math.round(e.fat) + '</div>'
@@ -3155,6 +3177,12 @@ function renderFoodCard(f) {
         <span class="macro-pill pill-c" style="font-size:11px;padding:2px 8px">${Math.round(f.carbs)}g C</span>
         <span class="macro-pill pill-f" style="font-size:11px;padding:2px 8px">${Math.round(f.fat)}g F</span>
       </div>
+      ${isTrackingFullLabel() ? (() => {
+        const summary = fullLabelCompactSummary(f)
+        return summary
+          ? `<div style="font-size:11px;color:var(--text2);background:var(--bg3);padding:6px 10px;border-radius:var(--r);margin-bottom:10px">${esc(summary)}</div>`
+          : `<div style="font-size:11px;color:var(--text3);background:var(--bg3);padding:6px 10px;border-radius:var(--r);margin-bottom:10px">Full label not tracked yet — tap to add or re-analyze</div>`
+      })() : ''}
       <button onclick="quickLogFoodItem('${f.id}');event.stopPropagation()"
         style="width:100%;background:color-mix(in srgb, var(--accent) 10%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);border-radius:var(--r);padding:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer">
         + Log this
@@ -4805,7 +4833,7 @@ function buildMacroFields(goals) {
   `
 }
 
-// Optional full-label goal targets — only rendered when track_full_label is on.
+// Optional full-label goal targets — only rendered when trackFullNutrition is on.
 // Fields show FDA daily-value defaults as placeholders; empty means "no target"
 // and saves as NULL. saveGoalsHandler reads these by id when the toggle is on.
 function buildFullLabelTargetFields(goals) {
@@ -5219,7 +5247,7 @@ function renderGoalsPage(container) {
           <div style="font-size:11px;color:var(--text3)">Edit manually or use calculated targets above</div>
         </div>
         ${buildMacroFields(state.goals)}
-        ${state.goals?.track_full_label ? buildFullLabelTargetFields(state.goals) : ''}
+        ${isTrackingFullLabel() ? buildFullLabelTargetFields(state.goals) : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <button onclick="saveBodyMetricsOnly()"
             style="padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;font-weight:500;font-family:inherit;cursor:pointer"
@@ -5407,7 +5435,7 @@ function renderAccount(container) {
       <div class="section-title">Nutrition tracking</div>
       <label style="display:flex;gap:14px;align-items:flex-start;cursor:pointer;padding:6px 2px">
         <input type="checkbox" id="track-full-label-toggle"
-          ${state.goals?.track_full_label ? 'checked' : ''}
+          ${isTrackingFullLabel() ? 'checked' : ''}
           onchange="toggleTrackFullLabel(this)"
           style="margin-top:3px;width:18px;height:18px;accent-color:var(--accent);cursor:pointer">
         <div style="flex:1">
@@ -5600,7 +5628,7 @@ function renderAccount(container) {
           <div style="font-size:11px;color:var(--text3)">Edit manually or use calculated targets above</div>
         </div>
         ${buildMacroFields(state.goals)}
-        ${state.goals?.track_full_label ? buildFullLabelTargetFields(state.goals) : ''}
+        ${isTrackingFullLabel() ? buildFullLabelTargetFields(state.goals) : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <button onclick="saveBodyMetricsOnly()"
             style="padding:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text2);font-size:13px;font-weight:500;font-family:inherit;cursor:pointer"
@@ -6227,6 +6255,41 @@ function totals(entries) {
 }
 
 function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
+
+// Source-of-truth read for the full-nutrition-label opt-in. user_profiles
+// .track_full_nutrition is canonical (returned in state.usage.trackFullNutrition
+// after getUsageSummary lands). localStorage holds a cached copy so a
+// cold-rendered dashboard already knows the answer before the auth +
+// usage fetch resolve. Both clients (iOS + web) write to user_profiles
+// directly, so a toggle on either device shows up on the other after a
+// page refresh / app foreground.
+function isTrackingFullLabel() {
+  if (typeof state !== 'undefined' && state?.usage && 'trackFullNutrition' in state.usage) {
+    return state.usage.trackFullNutrition === true
+  }
+  try { return localStorage.getItem('macrolens_track_full_nutrition') === '1' } catch { return false }
+}
+
+// Compact full-nutrition-label summary for food / meal cards. Picks the
+// 2-3 most useful non-null values (sodium, fiber, sugar/added sugar,
+// saturated fat). Returns null when nothing is tracked so the caller can
+// hide the strip entirely.
+function fullLabelCompactSummary(row) {
+  if (!row) return null
+  const fmtG  = (v) => v < 10 ? `${(+v.toFixed(1))} g`  : `${Math.round(v)} g`
+  const fmtMg = (v) => v < 10 ? `${(+v.toFixed(1))} mg` : `${Math.round(v)} mg`
+  const chips = []
+  const fiber = row.fiber_g ?? row.fiber
+  const sodium = row.sodium_mg ?? row.sodium
+  const sugarTotal = row.sugar_total_g ?? row.sugar
+  if (sodium != null && Number(sodium) > 0) chips.push(`Sodium ${fmtMg(Number(sodium))}`)
+  if (fiber != null && Number(fiber) > 0) chips.push(`Fiber ${fmtG(Number(fiber))}`)
+  if (row.sugar_added_g != null) chips.push(`Added sugar ${fmtG(Number(row.sugar_added_g))}`)
+  else if (sugarTotal != null && Number(sugarTotal) > 0) chips.push(`Sugar ${fmtG(Number(sugarTotal))}`)
+  if (chips.length < 3 && row.saturated_fat_g != null) chips.push(`Sat fat ${fmtG(Number(row.saturated_fat_g))}`)
+  if (!chips.length) return null
+  return chips.slice(0, 3).join(' · ')
+}
 
 let _toastTimeout = null
 function showToast(msg, type, opts) {
@@ -7873,23 +7936,25 @@ function wireGlobals() {
     if (rows) rows.style.display = next ? 'flex' : 'none'
   }
 
-  // Persist the full-nutrition-label opt-in onto the goals row. The
-  // column travels with goals.* so the rest of the app reads it via
-  // state.goals.track_full_label without a separate fetch.
+  // Persist the full-nutrition-label opt-in onto user_profiles. The
+  // column is canonical so iOS + web read the same value on auth.
+  // localStorage caches it for cold-start render speed; the cache is
+  // reconciled whenever getUsageSummary returns.
   window.toggleTrackFullLabel = async (el) => {
     const next = !!el.checked
-    const prior = state.goals?.track_full_label === true
-    state.goals = { ...(state.goals || {}), track_full_label: next }
+    const prior = isTrackingFullLabel()
+    // Optimistic local update — flip cache + state.usage so the UI
+    // feels instant. Revert both on save failure.
+    try { localStorage.setItem('macrolens_track_full_nutrition', next ? '1' : '0') } catch {}
+    state.usage = { ...(state.usage || {}), trackFullNutrition: next }
     try {
-      await dbSaveGoals(state.user.id, state.goals)
+      await saveTrackFullNutrition(state.user.id, next)
       showToast(next ? 'Tracking full nutrition label' : 'Reverted to 4-macro tracking', 'success')
-      // Re-render whichever page is showing so the expanded sections
-      // appear/disappear immediately. renderPage() routes based on
-      // state.currentPage and is what switchPage uses.
       if (typeof renderPage === 'function') renderPage()
     } catch (err) {
       el.checked = prior
-      state.goals = { ...(state.goals || {}), track_full_label: prior }
+      try { localStorage.setItem('macrolens_track_full_nutrition', prior ? '1' : '0') } catch {}
+      state.usage = { ...(state.usage || {}), trackFullNutrition: prior }
       showToast('Could not save: ' + err.message, 'error')
     }
   }
@@ -7983,7 +8048,30 @@ function wireGlobals() {
       if (!proceed) return
     }
 
-    state.goals = { calories: cal, protein: pro, carbs: carb, fat }
+    // Optional micro targets only persist when the full-label toggle is
+    // on. Empty input → NULL (no target). When toggle is off, preserve
+    // any prior targets so flipping it back on restores user overrides.
+    const parseOpt = (id) => {
+      const raw = document.getElementById(id)?.value
+      if (raw == null) return null
+      const t = String(raw).trim()
+      if (t === '') return null
+      const n = Number(t)
+      return Number.isFinite(n) ? n : null
+    }
+    const next = { calories: cal, protein: pro, carbs: carb, fat }
+    if (isTrackingFullLabel()) {
+      next.sodium_mg_max       = parseOpt('goal-sodium-max')
+      next.fiber_g_min         = parseOpt('goal-fiber-min')
+      next.saturated_fat_g_max = parseOpt('goal-satfat-max')
+      next.sugar_added_g_max   = parseOpt('goal-addedsugar-max')
+    } else {
+      next.sodium_mg_max       = state.goals?.sodium_mg_max       ?? null
+      next.fiber_g_min         = state.goals?.fiber_g_min         ?? null
+      next.saturated_fat_g_max = state.goals?.saturated_fat_g_max ?? null
+      next.sugar_added_g_max   = state.goals?.sugar_added_g_max   ?? null
+    }
+    state.goals = next
     try {
       await dbSaveGoals(state.user.id, state.goals)
       showToast('Targets saved!', 'success')
