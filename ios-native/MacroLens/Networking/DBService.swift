@@ -582,18 +582,50 @@ enum DBService {
         recordedAt: Date,
         healthkitUUID: String
     ) async throws -> Bool {
-        struct Existing: Decodable { let id: String }
+        struct Existing: Decodable { let id: String; let weight_kg: Double? }
         let userId = try await currentUserID()
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .current
+        let dateStr = f.string(from: recordedAt)
 
-        let existing: [Existing] = try await client
+        // Defense layer 1: exact UUID match. If we already saw this HK
+        // sample (different launches, anchor reset, fallback double-pull,
+        // etc.) the unique partial index would block the insert anyway —
+        // the pre-check just keeps the round-trip predictable.
+        let byUUID: [Existing] = try await client
             .from("checkins")
-            .select("id")
+            .select("id, weight_kg")
             .eq("user_id", value: userId)
             .eq("healthkit_uuid", value: healthkitUUID)
             .limit(1)
             .execute()
             .value
-        if !existing.isEmpty { return false }
+        if !byUUID.isEmpty { return false }
+
+        // Defense layer 2: tolerance dedup by (user_id, scan_date, ±0.5kg).
+        // Catches the case where HK presents the SAME underlying weighing
+        // as a NEW sample with a fresh UUID (smart-scale apps occasionally
+        // re-push history after auth refresh / reinstall) and the case
+        // where a user logged manually then push→pull round-tripped the
+        // value with a tiny rounding delta. Half a kilogram (~1.1 lb) is
+        // wider than any plausible same-day intra-meal fluctuation but
+        // narrow enough that two genuine weighings on the same day with
+        // a real >0.5kg swing won't collide.
+        let sameDay: [Existing] = try await client
+            .from("checkins")
+            .select("id, weight_kg")
+            .eq("user_id", value: userId)
+            .eq("scan_date", value: dateStr)
+            .execute()
+            .value
+        let tolerance = 0.5
+        if sameDay.contains(where: { existing in
+            guard let existingKg = existing.weight_kg else { return false }
+            return abs(existingKg - kg) <= tolerance
+        }) {
+            return false
+        }
 
         struct Insert: Encodable {
             let user_id: String
@@ -606,10 +638,6 @@ enum DBService {
             let source: String
             let healthkit_uuid: String
         }
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        let dateStr = f.string(from: recordedAt)
         try await client
             .from("checkins")
             .insert(Insert(
