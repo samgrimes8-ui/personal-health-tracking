@@ -883,6 +883,89 @@ final class AppState {
         return saved.id
     }
 
+    /// Explicit "save this food to my library" action — used by the
+    /// meal-log preview sheet's "Save to my foods" button. Same dedup
+    /// rules as autoSaveFoodItem (cache → DB by name → insert) but
+    /// surfaces whether the row was newly created so the caller can
+    /// show "Saved" vs "Already in your foods" without a second
+    /// roundtrip. Source defaults to "manual" since this is a user
+    /// gesture, not a side-effect of a meal_log write.
+    func saveFoodToLibrary(name: String,
+                           calories: Double,
+                           protein: Double,
+                           carbs: Double,
+                           fat: Double,
+                           fiber: Double,
+                           servingDescription: String? = nil,
+                           servingGrams: Double? = nil,
+                           servingOz: Double? = nil,
+                           fullLabel: FullLabelPayload? = nil) async throws -> SaveFoodResult {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NSError(domain: "AppState.saveFoodToLibrary", code: 0,
+                          userInfo: [NSLocalizedDescriptionKey: "Name is required."])
+        }
+        let userId = try await currentUserID()
+
+        // Cache check.
+        let lower = trimmed.lowercased()
+        if let hit = foods.first(where: { $0.name.lowercased() == lower }) {
+            return SaveFoodResult(id: hit.id, row: hit, wasNew: false)
+        }
+
+        // DB check by name — covers the dashboard-preview case where
+        // the Foods tab hasn't loaded yet and the cache is empty.
+        let existing: [FoodItemRow] = (try? await SupabaseService.client
+            .from("food_items")
+            .select()
+            .eq("user_id", value: userId)
+            .ilike("name", pattern: trimmed)
+            .limit(1)
+            .execute()
+            .value) ?? []
+        if let row = existing.first {
+            if !foods.contains(where: { $0.id == row.id }) {
+                foods.insert(row, at: 0)
+            }
+            return SaveFoodResult(id: row.id, row: row, wasNew: false)
+        }
+
+        let saved = try await DBService.saveFoodItem(FoodItemUpsert(
+            id: nil,
+            name: trimmed,
+            brand: nil,
+            servingSize: servingDescription ?? "1 serving",
+            calories: calories,
+            protein: protein,
+            carbs: carbs,
+            fat: fat,
+            fiber: fiber,
+            sugar: 0,
+            sodium: 0,
+            components: [],
+            notes: nil,
+            source: "manual",
+            servingDescription: servingDescription,
+            servingGrams: servingGrams,
+            servingOz: servingOz,
+            saturatedFatG: fullLabel?.saturatedFatG,
+            transFatG:     fullLabel?.transFatG,
+            cholesterolMg: fullLabel?.cholesterolMg,
+            sodiumMg:      fullLabel?.sodiumMg,
+            fiberG:        fullLabel?.fiberG,
+            sugarTotalG:   fullLabel?.sugarTotalG,
+            sugarAddedG:   fullLabel?.sugarAddedG,
+            vitaminAMcg:   fullLabel?.vitaminAMcg,
+            vitaminCMg:    fullLabel?.vitaminCMg,
+            vitaminDMcg:   fullLabel?.vitaminDMcg,
+            calciumMg:     fullLabel?.calciumMg,
+            ironMg:        fullLabel?.ironMg,
+            potassiumMg:   fullLabel?.potassiumMg
+        ))
+        foods.insert(saved, at: 0)
+        return SaveFoodResult(id: saved.id, row: saved, wasNew: true)
+    }
+
     /// Toggle a planned meal_planner row's "consumed" state by inserting
     /// or deleting the matching meal_log row. Mirrors web's
     /// logPlannedMeal (src/pages/app.js):
@@ -1282,4 +1365,14 @@ struct CheckinInsert {
 struct CheckinScanPayload {
     var filePath: String?
     var extract: BodyScanExtract
+}
+
+/// Result of AppState.saveFoodToLibrary — carries the resolved id + the
+/// row itself (so the caller can splice it into local state) and a
+/// `wasNew` flag so the preview sheet can show "Saved" vs "Already in
+/// your foods" feedback without a second roundtrip.
+struct SaveFoodResult {
+    let id: String
+    let row: FoodItemRow
+    let wasNew: Bool
 }

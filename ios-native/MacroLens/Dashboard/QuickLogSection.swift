@@ -32,6 +32,10 @@ struct QuickLogSection: View {
     /// dialog (same prompt the Foods tab uses, so behavior matches
     /// across both surfaces).
     @State private var comboPromptTarget: FoodItemRow?
+    /// Draft for the preview sheet. Populated when the user taps any
+    /// log row (or finishes the AI-describe flow); the sheet edits
+    /// servings/time/macros and either logs or saves-to-foods.
+    @State private var previewDraft: PreviewItem?
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -87,6 +91,18 @@ struct QuickLogSection: View {
         } message: { item in
             let comps = item.components?.count ?? 0
             Text("This food has \(comps) components. How do you want to log it?")
+        }
+        // Preview sheet — single source of truth for the "review before
+        // commit" UX across Quick Log entry points (food / recipe /
+        // generic / AI describe / combo "as one"). Component-mode
+        // logging skips the preview because the user already chose the
+        // breakdown — re-prompting per-component would be fatiguing.
+        .sheet(item: $previewDraft) { wrapper in
+            MealLogEditor(
+                mode: .new(wrapper.draft),
+                defaultLoggedAt: state.loggedAtForSelectedDate() ?? Date()
+            )
+            .environment(state)
         }
     }
 
@@ -579,100 +595,101 @@ struct QuickLogSection: View {
             .replacingOccurrences(of: "_", with: "\\_")
     }
 
-    /// AI fallback: describe-by-text via /api/analyze, then log the
-    /// result. Mirrors the web's "Describe X with AI" affordance in
-    /// the dashboard search box. logMeal's auto-save promotes the
-    /// resulting food into the user's Foods library so subsequent
-    /// searches find it without the AI roundtrip.
+    /// AI fallback: describe-by-text via /api/analyze, then hand the
+    /// result to the preview sheet so the user can review macros +
+    /// servings + time before commit. Save+log writes meal_log;
+    /// Save-to-foods writes food_items only. Mirrors the web's
+    /// "Describe X with AI" affordance with an extra review step.
     private func aiDescribeAndLog(_ q: String) async {
         aiDescribing = true
         defer { aiDescribing = false }
         do {
             let result = try await AnalyzeService.describeFood(q)
-            try await state.logMeal(
+            previewDraft = PreviewItem(draft: MealLogDraft(
                 name: result.name,
                 calories: result.calories,
                 protein: result.protein,
                 carbs: result.carbs,
                 fat: result.fat,
                 fiber: result.fiber ?? 0,
-                loggedAt: state.loggedAtForSelectedDate(),
                 fullLabel: AppState.FullLabelPayload.from(result)
-            )
-            // Reset the search field so the user sees the toast +
-            // returns to the preload sections (which will now include
-            // the freshly-saved food on next loadDashboard).
+            ))
+            // Clear the search so when the preview dismisses, the
+            // user lands back in the preload state (or finds the
+            // freshly-saved food on next loadDashboard).
             query = ""
             searchResults = []
             lastSearchedQuery = ""
-            withAnimation { toast = "✓ Logged \(result.name)" }
-            try? await Task.sleep(for: .seconds(2))
-            withAnimation { toast = nil }
         } catch {
             withAnimation { toast = "AI describe failed: \(error.localizedDescription)" }
         }
     }
 
+    /// Tap path. Multi-component foods detour through the combo
+    /// prompt; everything else hands a draft to the preview sheet so
+    /// the user reviews servings/time/macros before commit.
     private func log(_ item: QuickLogItem) async {
-        // Multi-component food → present the same combo prompt the
-        // Foods tab uses so the user can pick "as one food" vs "by
-        // component". Single-component foods, recipes, and meal_log
-        // re-logs go straight through (the prior log already chose a
-        // mode for re-logs, so re-prompting would be noise).
         if item.kind == .food,
            let row = item.foodItem,
            (row.components?.count ?? 0) > 1 {
             comboPromptTarget = row
             return
         }
-        loggingId = item.id
-        defer { loggingId = nil }
-        do {
-            try await state.logMeal(
-                name: item.name,
-                calories: item.calories,
-                protein: item.protein,
-                carbs: item.carbs,
-                fat: item.fat,
-                fiber: item.fiber,
-                recipeId: item.recipeId,
-                foodItemId: item.foodItemId,
-                loggedAt: state.loggedAtForSelectedDate()
-            )
-            withAnimation { toast = "✓ Logged \(item.name)" }
-            try? await Task.sleep(for: .seconds(2))
-            withAnimation { toast = nil }
-        } catch {
-            withAnimation { toast = "Couldn't log: \(error.localizedDescription)" }
-        }
+        previewDraft = PreviewItem(draft: MealLogDraft(
+            name: item.name,
+            calories: item.calories,
+            protein: item.protein,
+            carbs: item.carbs,
+            fat: item.fat,
+            fiber: item.fiber,
+            foodItemId: item.foodItemId,
+            recipeId: item.recipeId,
+            servingDescription: item.foodItem?.serving_description,
+            servingGrams: item.foodItem?.serving_grams,
+            servingOz: item.foodItem?.serving_oz
+        ))
     }
 
     // MARK: - Combo log helpers
 
-    /// User picked "Log as one food" from the combo prompt. Routes
-    /// through state.logFoodAsOne so Foods + Quick Log share one
-    /// implementation.
+    /// User picked "Log as one food" from the combo prompt → preview
+    /// sheet (single row), then commit through state.logFoodAsOne.
+    /// Going through the editor lets the user adjust servings/time
+    /// the same way every other Quick Log path does.
     private func logComboAsOne(_ item: FoodItemRow) async {
-        do {
-            try await state.logFoodAsOne(item, at: state.loggedAtForSelectedDate())
-            withAnimation { toast = "✓ Logged \(item.name)" }
-            try? await Task.sleep(for: .seconds(2))
-            withAnimation { toast = nil }
-        } catch {
-            withAnimation { toast = "Couldn't log: \(error.localizedDescription)" }
-        }
+        previewDraft = PreviewItem(draft: MealLogDraft(
+            name: item.name,
+            calories: item.calories ?? 0,
+            protein: item.protein ?? 0,
+            carbs: item.carbs ?? 0,
+            fat: item.fat ?? 0,
+            fiber: item.fiber ?? 0,
+            foodItemId: item.id,
+            servingDescription: item.serving_description,
+            servingGrams: item.serving_grams,
+            servingOz: item.serving_oz
+        ))
     }
 
-    /// User picked "Log individual components" from the combo prompt.
-    /// state.logFoodComponents handles partial failure silently and
-    /// returns the count actually inserted, which we surface in the
-    /// confirmation toast.
+    /// User picked "Log individual components" → no preview (the user
+    /// already accepted the per-component breakdown; previewing N
+    /// rows in sequence would be fatiguing). state.logFoodComponents
+    /// handles partial failure silently and returns the count
+    /// actually inserted, which we surface in the confirmation toast.
     private func logComboAsComponents(_ item: FoodItemRow) async {
         let count = await state.logFoodComponents(item, at: state.loggedAtForSelectedDate())
         withAnimation { toast = "✓ Logged \(count) component\(count == 1 ? "" : "s")" }
         try? await Task.sleep(for: .seconds(2))
         withAnimation { toast = nil }
     }
+}
+
+/// `.sheet(item:)` requires Identifiable. MealLogDraft is a value type
+/// without a stable id, so we wrap it for presentation. UUID per
+/// presentation is fine — there's only ever one preview at a time.
+private struct PreviewItem: Identifiable {
+    let id = UUID()
+    let draft: MealLogDraft
 }
 
 private struct QuickLogItem: Identifiable, Hashable {

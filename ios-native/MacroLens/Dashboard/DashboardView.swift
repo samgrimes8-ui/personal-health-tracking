@@ -43,7 +43,7 @@ struct DashboardView: View {
         .refreshable { await state.loadDashboard() }
         .task { await state.loadDashboard() }
         .sheet(item: $editingEntry) { entry in
-            EditMealSheet(entry: entry)
+            MealLogEditor(mode: .edit(entry))
                 .environment(state)
         }
         .toolbar {
@@ -512,11 +512,30 @@ struct DashboardView: View {
 /// "base" macros aren't stored on iOS yet, so we derive them on
 /// open as `current / servings_consumed` (same fallback the web
 /// uses when base_* columns are missing).
-private struct EditMealSheet: View {
+/// Reusable preview/edit sheet for a meal_log row. Two modes:
+///
+///   .new(MealLogDraft) — the user picked a food (Quick Log result,
+///       AI describe, USDA generic_foods, recipe match, …) and is
+///       previewing before commit. Save options:
+///         • "Save and log" → writes meal_log + auto-saves to
+///           food_items via logMeal's normal pipeline + fires HK push.
+///         • "Save to my foods" → writes food_items only (no log,
+///           no HK push). Hidden when the draft is recipe-linked
+///           since recipes have their own library.
+///
+///   .edit(MealLogEntry) — tap-to-edit on Today's Meals. Save options:
+///         • "Save" updates the existing row.
+///         • "Delete" (confirmation-gated) removes it.
+struct MealLogEditor: View {
+    enum Mode {
+        case new(MealLogDraft)
+        case edit(MealLogEntry)
+    }
+
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
 
-    let entry: MealLogEntry
+    let mode: Mode
 
     @State private var name: String
     @State private var mealType: String
@@ -526,20 +545,24 @@ private struct EditMealSheet: View {
     @State private var carbs: Double
     @State private var fat: Double
     @State private var fiber: Double
-    /// The entry's logged_at, surfaced as a Date for SwiftUI's
-    /// DatePicker so users can retroactively shift an entry to a past
-    /// day or move it earlier/later in the day. The original timestamp
-    /// is captured separately (`originalLoggedAt`) so we only send the
-    /// logged_at column on save when the user actually changed it —
-    /// matches the rest of the patch's "nil means don't touch" rule.
+    /// Logged-at as a Date for the DatePicker. Edit mode captures the
+    /// original separately (`originalLoggedAt`) so we only send a
+    /// logged_at patch when the user actually moved the picker.
     @State private var loggedAtDate: Date
     private let originalLoggedAt: Date
     @State private var saving = false
+    @State private var savingToFoods = false
     @State private var deleting = false
     @State private var errorMessage: String?
+    @State private var savedToFoodsToast: String?
+    @State private var alreadyInLibrary: Bool = false
     @State private var showingDeleteConfirm = false
     @FocusState private var keyboardFocused: Bool
 
+    /// Per-serving "base" macros — divide consumed values by servings to
+    /// recover base, then re-multiply when the user changes servings.
+    /// (meal_log rows pre-base_macros migration don't expose base
+    /// columns to iOS; web does the same fallback.)
     private let baseCalories: Double
     private let baseProtein: Double
     private let baseCarbs: Double
@@ -548,50 +571,101 @@ private struct EditMealSheet: View {
 
     private static let mealTypes = ["breakfast", "lunch", "snack", "dinner"]
 
+    private var isNew: Bool {
+        if case .new = mode { return true }
+        return false
+    }
+
+    private var navTitle: String {
+        switch mode {
+        case .new:  return "Log meal"
+        case .edit: return "Edit meal"
+        }
+    }
+
+    /// Hide the "Save to my foods" CTA when the draft is recipe-linked
+    /// (recipes have their own library) or when we're editing an
+    /// existing meal_log row (the food was already auto-saved when the
+    /// row was first created).
+    private var canSaveToFoods: Bool {
+        guard case .new(let draft) = mode else { return false }
+        if draft.recipeId != nil { return false }
+        return true
+    }
+
     /// Field label for the Servings input. Reads "How many medium
-    /// avocados?" when the entry has a serving_description; falls back
-    /// to "Consumed" for older rows.
+    /// avocados?" when the source has a serving_description; falls back
+    /// to "Consumed" otherwise.
     private var servingsFieldLabel: String {
-        if let unit = ServingFormat.unitNoun(description: entry.serving_description), !unit.isEmpty {
+        let desc: String? = {
+            switch mode {
+            case .new(let draft): return draft.servingDescription
+            case .edit(let entry): return entry.serving_description
+            }
+        }()
+        if let unit = ServingFormat.unitNoun(description: desc), !unit.isEmpty {
             return "How many \(unit)?"
         }
         return "Consumed"
     }
 
-    /// Footer hint under the Servings input. Surfaces the per-serving
-    /// gram weight so users know what one serving represents.
     private var servingDescriptionLabel: String? {
-        guard let desc = entry.serving_description, !desc.isEmpty else { return nil }
-        return "1 serving = \(desc)"
+        let desc: String? = {
+            switch mode {
+            case .new(let draft): return draft.servingDescription
+            case .edit(let entry): return entry.serving_description
+            }
+        }()
+        guard let d = desc, !d.isEmpty else { return nil }
+        return "1 serving = \(d)"
     }
 
-    init(entry: MealLogEntry) {
-        self.entry = entry
-        let consumed = max(0.001, entry.servings_consumed ?? 1)
-        self.baseCalories = (entry.calories ?? 0) / consumed
-        self.baseProtein  = (entry.protein  ?? 0) / consumed
-        self.baseCarbs    = (entry.carbs    ?? 0) / consumed
-        self.baseFat      = (entry.fat      ?? 0) / consumed
-        self.baseFiber    = (entry.fiber    ?? 0) / consumed
-        // Resolve the entry's logged_at into a Date for the DatePicker.
-        // Falls back to "now" if the row somehow has no timestamp — at
-        // worst the user re-saves and the column gets a fresh value
-        // (rare; meal_log rows always have logged_at on insert).
-        let parsed: Date = {
-            if let raw = entry.logged_at,
-               let d = AppState.parseISOTimestamp(raw) { return d }
-            return Date()
-        }()
-        self.originalLoggedAt = parsed
-        _loggedAtDate = State(initialValue: parsed)
-        _name = State(initialValue: entry.name ?? "")
-        _mealType = State(initialValue: entry.meal_type?.lowercased() ?? Self.inferMealType(entry.logged_at))
-        _servings = State(initialValue: consumed)
-        _calories = State(initialValue: entry.calories ?? 0)
-        _protein  = State(initialValue: entry.protein  ?? 0)
-        _carbs    = State(initialValue: entry.carbs    ?? 0)
-        _fat      = State(initialValue: entry.fat      ?? 0)
-        _fiber    = State(initialValue: entry.fiber    ?? 0)
+    init(mode: Mode, defaultLoggedAt: Date? = nil) {
+        self.mode = mode
+        switch mode {
+        case .edit(let entry):
+            let consumed = max(0.001, entry.servings_consumed ?? 1)
+            self.baseCalories = (entry.calories ?? 0) / consumed
+            self.baseProtein  = (entry.protein  ?? 0) / consumed
+            self.baseCarbs    = (entry.carbs    ?? 0) / consumed
+            self.baseFat      = (entry.fat      ?? 0) / consumed
+            self.baseFiber    = (entry.fiber    ?? 0) / consumed
+            let parsed: Date = {
+                if let raw = entry.logged_at,
+                   let d = AppState.parseISOTimestamp(raw) { return d }
+                return Date()
+            }()
+            self.originalLoggedAt = parsed
+            _loggedAtDate = State(initialValue: parsed)
+            _name = State(initialValue: entry.name ?? "")
+            _mealType = State(initialValue: entry.meal_type?.lowercased() ?? Self.inferMealType(entry.logged_at))
+            _servings = State(initialValue: consumed)
+            _calories = State(initialValue: entry.calories ?? 0)
+            _protein  = State(initialValue: entry.protein  ?? 0)
+            _carbs    = State(initialValue: entry.carbs    ?? 0)
+            _fat      = State(initialValue: entry.fat      ?? 0)
+            _fiber    = State(initialValue: entry.fiber    ?? 0)
+        case .new(let draft):
+            // Draft macros are per-serving (caller sends the food's
+            // canonical values; servings stepper re-multiplies for
+            // display + save).
+            self.baseCalories = draft.calories
+            self.baseProtein  = draft.protein
+            self.baseCarbs    = draft.carbs
+            self.baseFat      = draft.fat
+            self.baseFiber    = draft.fiber
+            let initial = defaultLoggedAt ?? Date()
+            self.originalLoggedAt = initial
+            _loggedAtDate = State(initialValue: initial)
+            _name = State(initialValue: draft.name)
+            _mealType = State(initialValue: AppState.inferMealType(at: initial))
+            _servings = State(initialValue: 1.0)
+            _calories = State(initialValue: draft.calories)
+            _protein  = State(initialValue: draft.protein)
+            _carbs    = State(initialValue: draft.carbs)
+            _fat      = State(initialValue: draft.fat)
+            _fiber    = State(initialValue: draft.fiber)
+        }
     }
 
     var body: some View {
@@ -666,32 +740,62 @@ private struct EditMealSheet: View {
                 if let errorMessage {
                     Section { Text(errorMessage).foregroundStyle(.red).font(.system(size: 13)) }
                 }
+                if let savedToFoodsToast {
+                    Section {
+                        Text(savedToFoodsToast)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.green)
+                    }
+                }
 
-                Section {
-                    Button(role: .destructive) {
-                        showingDeleteConfirm = true
-                    } label: {
-                        HStack {
-                            Spacer()
-                            if deleting { ProgressView() }
-                            else { Text("Delete entry") }
-                            Spacer()
+                if isNew {
+                    if canSaveToFoods {
+                        Section {
+                            Button {
+                                Task { await saveToFoodsOnly() }
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    if savingToFoods { ProgressView() }
+                                    else { Text(alreadyInLibrary ? "Already in your foods" : "Save to my foods") }
+                                    Spacer()
+                                }
+                            }
+                            .disabled(saving || savingToFoods || deleting || alreadyInLibrary
+                                      || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                        } footer: {
+                            Text("Adds this food to your library so you can re-log it later. Doesn't affect today's macros.")
+                                .font(.system(size: 11))
                         }
                     }
-                    .disabled(saving || deleting)
+                } else {
+                    Section {
+                        Button(role: .destructive) {
+                            showingDeleteConfirm = true
+                        } label: {
+                            HStack {
+                                Spacer()
+                                if deleting { ProgressView() }
+                                else { Text("Delete entry") }
+                                Spacer()
+                            }
+                        }
+                        .disabled(saving || deleting)
+                    }
                 }
             }
-            .navigationTitle("Edit meal")
+            .navigationTitle(navTitle)
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                        .disabled(saving || deleting)
+                        .disabled(saving || deleting || savingToFoods)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(saving ? "Saving…" : "Save") { Task { await save() } }
-                        .disabled(saving || deleting || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button(primaryButtonLabel) { Task { await save() } }
+                        .disabled(saving || deleting || savingToFoods
+                                  || name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -707,6 +811,11 @@ private struct EditMealSheet: View {
                 Button("Cancel", role: .cancel) { }
             }
         }
+    }
+
+    private var primaryButtonLabel: String {
+        if saving { return "Saving…" }
+        return isNew ? "Save and log" : "Save"
     }
 
     private func macroField(_ label: String, value: Binding<Double>, suffix: String) -> some View {
@@ -726,30 +835,88 @@ private struct EditMealSheet: View {
         saving = true
         errorMessage = nil
         defer { saving = false }
-        // Only ship logged_at when the user actually moved the picker —
-        // a no-op picker should not blank or rewrite the column. Tolerance
-        // is 1s because DatePicker can wobble sub-second on display.
-        let movedTimestamp = abs(loggedAtDate.timeIntervalSince(originalLoggedAt)) > 1
-        let patch = MealEntryPatch(
-            name: name.trimmingCharacters(in: .whitespaces),
-            mealType: mealType,
-            calories: calories,
-            protein: protein,
-            carbs: carbs,
-            fat: fat,
-            fiber: fiber,
-            servingsConsumed: servings,
-            loggedAt: movedTimestamp ? ISO8601DateFormatter().string(from: loggedAtDate) : nil
-        )
+        switch mode {
+        case .edit(let entry):
+            // Only ship logged_at when the user actually moved the picker —
+            // a no-op picker should not blank or rewrite the column. Tolerance
+            // is 1s because DatePicker can wobble sub-second on display.
+            let movedTimestamp = abs(loggedAtDate.timeIntervalSince(originalLoggedAt)) > 1
+            let patch = MealEntryPatch(
+                name: name.trimmingCharacters(in: .whitespaces),
+                mealType: mealType,
+                calories: calories,
+                protein: protein,
+                carbs: carbs,
+                fat: fat,
+                fiber: fiber,
+                servingsConsumed: servings,
+                loggedAt: movedTimestamp ? ISO8601DateFormatter().string(from: loggedAtDate) : nil
+            )
+            do {
+                try await state.updateMealLogEntry(id: entry.id, patch)
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        case .new(let draft):
+            do {
+                try await state.logMeal(
+                    name: name.trimmingCharacters(in: .whitespaces),
+                    mealType: mealType,
+                    calories: calories,
+                    protein: protein,
+                    carbs: carbs,
+                    fat: fat,
+                    fiber: fiber,
+                    recipeId: draft.recipeId,
+                    foodItemId: draft.foodItemId,
+                    servingsConsumed: servings,
+                    loggedAt: loggedAtDate,
+                    fullLabel: draft.fullLabel
+                )
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// "Save to my foods" — write food_items only, no meal_log,
+    /// no HK push. Calls AppState.saveFoodToLibrary which handles
+    /// dedup; surfaces "Already in your foods" in-place when the row
+    /// already exists. Macros sent are PER-SERVING (the editor's
+    /// base values, not the consumed-multiplied display values) so
+    /// the library row stays canonical.
+    private func saveToFoodsOnly() async {
+        guard case .new(let draft) = mode else { return }
+        savingToFoods = true
+        errorMessage = nil
+        savedToFoodsToast = nil
+        defer { savingToFoods = false }
         do {
-            try await state.updateMealLogEntry(id: entry.id, patch)
-            dismiss()
+            let result = try await state.saveFoodToLibrary(
+                name: name.trimmingCharacters(in: .whitespaces),
+                calories: baseCalories,
+                protein: baseProtein,
+                carbs: baseCarbs,
+                fat: baseFat,
+                fiber: baseFiber,
+                servingDescription: draft.servingDescription,
+                servingGrams: draft.servingGrams,
+                servingOz: draft.servingOz,
+                fullLabel: draft.fullLabel
+            )
+            alreadyInLibrary = true
+            savedToFoodsToast = result.wasNew
+                ? "✓ Saved to your foods"
+                : "Already in your foods — no changes made"
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     private func delete() async {
+        guard case .edit(let entry) = mode else { return }
         deleting = true
         errorMessage = nil
         defer { deleting = false }
@@ -789,4 +956,37 @@ private extension Double {
         let mult = pow(10.0, Double(n))
         return (self * mult).rounded() / mult
     }
+}
+
+/// Per-serving snapshot of a food the user is about to log. Carries the
+/// macros + provenance flags MealLogEditor needs to either log a row,
+/// save to the food library, or both. Macros are PER ONE SERVING — the
+/// editor's servings stepper re-multiplies for display + save.
+struct MealLogDraft {
+    var name: String
+    /// Per-serving kcal.
+    var calories: Double
+    /// Per-serving protein (g).
+    var protein: Double
+    /// Per-serving carbs (g).
+    var carbs: Double
+    /// Per-serving fat (g).
+    var fat: Double
+    /// Per-serving fiber (g).
+    var fiber: Double = 0
+    /// Existing food_items.id when re-logging a saved food. logMeal
+    /// short-circuits its auto-save when set.
+    var foodItemId: String? = nil
+    /// Existing recipes.id when logging from a recipe library row.
+    /// Hides the "Save to my foods" CTA on the editor.
+    var recipeId: String? = nil
+    /// Optional structured serving info (e.g. "1 medium banana, 118g")
+    /// — surfaces in the Servings field's footer hint.
+    var servingDescription: String? = nil
+    var servingGrams: Double? = nil
+    var servingOz: Double? = nil
+    /// Optional full-label nutrition (cholesterol, sodium, vitamins, …)
+    /// from worker-full-label. Threaded through to logMeal +
+    /// saveFoodToLibrary so neither Save action loses the data.
+    var fullLabel: AppState.FullLabelPayload? = nil
 }
