@@ -6130,9 +6130,14 @@ function showResult(r) {
       </div>
     </div>` : ''
 
+  // Serving label: prefer the new serving_description (which always
+  // includes a gram weight, e.g. "1 medium banana, ~118g"), fall back
+  // to serving_size for older callers / saved foods. Mirrors iOS
+  // 350f283 — the preview should always show what one serving means.
+  const servingLabel = r.serving_description || r.serving_size || null
   document.getElementById('res-detail').innerHTML = `
     ${r.brand ? `<span style="color:var(--text3)">Brand: </span><span>${esc(r.brand)}</span>&nbsp;&nbsp;` : ''}
-    ${r.serving_size ? `<span style="color:var(--text3)">Serving: </span><span>${esc(r.serving_size)}</span>&nbsp;&nbsp;` : ''}
+    ${servingLabel ? `<span style="color:var(--text3)">Serving: </span><span>${esc(servingLabel)}</span>&nbsp;&nbsp;` : ''}
     <span style="color:var(--text3)">Sugar: </span><span>${Math.round(r.sugar || 0)}g</span>
     ${r.sodium ? `&nbsp;&nbsp;<span style="color:var(--text3)">Sodium: </span><span>${Math.round(r.sodium)}mg</span>` : ''}
     &nbsp;&nbsp;<span style="color:var(--text3)">Confidence: </span><span>${r.confidence}</span>
