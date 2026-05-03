@@ -32,6 +32,11 @@ struct RecipesView: View {
     @State private var sharing: RecipeFull?
     @State private var tagging: RecipeFull?
     @State private var tagOrderEditorOpen: Bool = false
+    /// Opens the "Add a recipe" method picker (Link / Photo / Manual /
+    /// Generate) when the user taps + New. The picker dispatches to a
+    /// pre-fill sub-flow then sets `presented = .newDraft(prefilled)` to
+    /// hand off to RecipeEditView.
+    @State private var newRecipePickerOpen: Bool = false
     /// User-saved tag order. Empty == "use the canonical fallback order"
     /// (presets first, then alphabetical custom tags). Loaded once per
     /// session via .task; mutations write through both this @State and
@@ -192,6 +197,18 @@ struct RecipesView: View {
                 }
             }
         }
+        .sheet(isPresented: $newRecipePickerOpen) {
+            NewRecipeMethodSheet { prefilled in
+                // Picker dismissed itself before this fires. Defer the
+                // .newDraft presentation by one runloop turn so SwiftUI
+                // finishes the dismiss animation cleanly before opening
+                // the next sheet — back-to-back state mutations on .sheet
+                // bindings can otherwise drop the second presentation.
+                DispatchQueue.main.async {
+                    presented = .newDraft(prefilled)
+                }
+            }
+        }
     }
 
     // MARK: - Sections
@@ -235,7 +252,11 @@ struct RecipesView: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
             }
             Button {
-                presented = .newDraft(RecipeFull.newDraft())
+                // Opens the method picker first (mirrors the web's
+                // `openNewRecipeModal` 4-card chooser). The picker hands
+                // back a pre-filled draft for whichever path the user
+                // takes; we then push RecipeEditView with that draft.
+                newRecipePickerOpen = true
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus")

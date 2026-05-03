@@ -264,6 +264,207 @@ enum AnalyzeService {
         )
     }
 
+    /// Web-search-backed recipe import. Mirrors `analyzeDishBySearch` in
+    /// src/lib/ai.js — kicks off Anthropic's web_search tool to pull the
+    /// full recipe off the URL the user pasted (or to find one matching
+    /// the dish name when no URL is given). Used by the "Paste a link"
+    /// path of the new-recipe method picker.
+    static func analyzeDishBySearch(_ dishName: String, link: String?) async throws -> AnalysisResult {
+        let query: String
+        if let link, !link.isEmpty {
+            query = "Search for the recipe \"\(dishName)\" from this URL: \(link). Find the full ingredient list and serving size."
+        } else {
+            query = "Search for the recipe \"\(dishName)\". Find the full ingredient list and serving size."
+        }
+        let promptText = "\(query)\n\nAfter searching, return ONLY a JSON object with the macros per serving and full ingredient list. \(fullAnalysisPrompt)"
+
+        let userMessage: [String: Any] = ["role": "user", "content": promptText]
+        let body: [String: Any] = [
+            "feature": "search",
+            "max_tokens": 4000,
+            "input_type": "text",
+            "action": "analyze_dish_by_search",
+            "messages": [userMessage],
+            "tools": [["type": "web_search_20250305", "name": "web_search"]],
+        ]
+        let text = try await rawTextWithEnvelope(body: body)
+        guard !text.isEmpty else {
+            throw AnalyzeError.server("No response — try being more specific with the dish name")
+        }
+        let cleaned = extractJSON(from: text)
+        guard let data = cleaned.data(using: .utf8),
+              let result = try? JSONDecoder().decode(AnalysisResult.self, from: data)
+        else {
+            throw AnalyzeError.server("Could not extract recipe data — try pasting the ingredients directly")
+        }
+        return result
+    }
+
+    /// Generates a complete recipe (macros + ingredients + step-by-step
+    /// instructions) from a free-text prompt — "high protein chicken
+    /// dinner under 600 calories", "what to do with leftover salmon", etc.
+    /// Mirrors `generateRecipeFromMood` in src/lib/ai.js. Drives the
+    /// "✨ Generate a recipe" path of the new-recipe method picker.
+    static func generateRecipeFromMood(_ prompt: String) async throws -> RecipeFromMood {
+        let promptText = """
+        Generate a complete recipe based on this request: "\(prompt)"
+
+        Create something practical, delicious and realistic for a home cook.
+        Calculate accurate macros per serving.
+
+        Return ONLY this JSON (no markdown):
+        {
+          "name": "Recipe name",
+          "description": "One line description",
+          "servings": number,
+          "serving_label": "serving",
+          "calories": number,
+          "protein": number,
+          "carbs": number,
+          "fat": number,
+          "fiber": number,
+          "sugar": number,
+          "ingredients": [{"amount":"1","unit":"cup","name":"ingredient"}],
+          "instructions": {"steps":["Step 1","Step 2"],"prep_time":"X mins","cook_time":"X mins","tips":["optional tip"]},
+          "notes": "any notes about substitutions or variations"
+        }
+        """
+        let raw = try await rawTextResponse(
+            feature: "recipe",
+            action: "generate_recipe_from_mood",
+            inputType: "text",
+            content: .text(promptText),
+            maxTokens: 2000
+        )
+        let cleaned = extractJSON(from: raw)
+        guard let data = cleaned.data(using: .utf8),
+              let result = try? JSONDecoder().decode(RecipeFromMood.self, from: data),
+              !result.name.isEmpty
+        else {
+            throw AnalyzeError.parse
+        }
+        return result
+    }
+
+    /// Photo extraction that returns BOTH ingredients AND step-by-step
+    /// instructions, so a single shot from a cookbook page populates the
+    /// whole recipe. Mirrors `extractRecipeFromPhoto` in src/lib/ai.js.
+    /// Different from `analyzeRecipePhoto` (which returns only macros +
+    /// ingredients) — that one's for the dashboard's "snap a meal" flow.
+    static func extractRecipeFromPhoto(_ imageBase64: String) async throws -> RecipeFromPhoto {
+        let promptText = """
+        This is a photo of a recipe from a cookbook or recipe card. Extract the complete recipe.
+
+        Return ONLY this JSON (no markdown):
+        {
+          "name": "recipe name",
+          "description": "one line description",
+          "servings": number,
+          "serving_label": "serving",
+          "ingredients": [
+            { "amount": "1", "unit": "cup", "name": "ingredient name" }
+          ],
+          "instructions": ["Step 1 text", "Step 2 text"],
+          "prep_time": "X mins or null",
+          "cook_time": "X mins or null",
+          "notes": "any tips or notes from the recipe or null"
+        }
+
+        If ingredient has no unit (e.g. "2 eggs"), set unit to "".
+        Extract every ingredient and every step exactly as written.
+        """
+        let raw = try await rawTextResponse(
+            feature: "recipe",
+            action: "extract_recipe_from_photo",
+            inputType: "image",
+            content: .imageWithText(base64: imageBase64, text: promptText),
+            maxTokens: 2000
+        )
+        let cleaned = extractJSON(from: raw)
+        guard let data = cleaned.data(using: .utf8),
+              let result = try? JSONDecoder().decode(RecipeFromPhoto.self, from: data),
+              !result.name.isEmpty
+        else {
+            throw AnalyzeError.parse
+        }
+        return result
+    }
+
+    /// AI-parses a free-text ingredient list into structured rows. Used by
+    /// the "Add manually" → paste-ingredients pre-step in the new-recipe
+    /// method picker — the user pastes a blob from a recipe page, AI
+    /// returns clean amount/unit/name triples to seed the form. Mirrors
+    /// `extractIngredients` in src/lib/ai.js.
+    static func extractIngredients(_ text: String) async throws -> [RecipeIngredient] {
+        let promptText = """
+        For this recipe text:
+
+        \(text)
+
+        List every ingredient as a JSON array. Be specific with amounts.
+
+        Respond ONLY with a JSON object, no markdown:
+        {
+          "ingredients": [
+            {"name": "chicken breast", "amount": "3", "unit": "lbs"},
+            {"name": "olive oil", "amount": "2", "unit": "tbsp"}
+          ]
+        }
+        """
+        struct Envelope: Decodable { let ingredients: [RecipeIngredient] }
+        let raw = try await rawTextResponse(
+            feature: "recipe",
+            action: "extract_ingredients",
+            inputType: "text",
+            content: .text(promptText),
+            maxTokens: 1500
+        )
+        let cleaned = extractJSON(from: raw)
+        guard let data = cleaned.data(using: .utf8),
+              let env = try? JSONDecoder().decode(Envelope.self, from: data)
+        else {
+            throw AnalyzeError.parse
+        }
+        return env.ingredients
+    }
+
+    /// Lower-level helper that posts an arbitrary JSON body to /api/analyze
+    /// and returns the concatenated text from the Anthropic content blocks.
+    /// Used by `analyzeDishBySearch` because that path needs a `tools` field
+    /// in the body which the standard `callAnalyze` doesn't expose.
+    private static func rawTextWithEnvelope(body: [String: Any]) async throws -> String {
+        let session = try await SupabaseService.client.auth.session
+        var request = URLRequest(url: Config.apiBaseURL.appendingPathComponent("/api/analyze"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AnalyzeError.server("No response")
+        }
+        if http.statusCode == 401 { throw AnalyzeError.unauthenticated }
+        if http.statusCode == 429,
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           (json["code"] as? String) == "spending_limit_exceeded" {
+            throw AnalyzeError.spendingLimitExceeded(
+                spent: (json["spent_usd"] as? Double) ?? 0,
+                limit: (json["limit_usd"] as? Double) ?? 0
+            )
+        }
+        if !(200..<300).contains(http.statusCode) {
+            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            throw AnalyzeError.server(msg ?? "Request failed (\(http.statusCode))")
+        }
+        guard let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let blocks = envelope["content"] as? [[String: Any]] else {
+            throw AnalyzeError.parse
+        }
+        return blocks.compactMap { ($0["type"] as? String) == "text" ? $0["text"] as? String : nil }.joined()
+    }
+
     // MARK: - Internal
 
     private enum Content {
@@ -525,5 +726,55 @@ enum AnalyzeService {
         - Macro fields (calories/protein/carbs/fat/fiber/sugar) are PER SERVING (one of "servings"), matching serving_description / serving_grams. NOT per-100g, NOT whole-recipe totals.
         \(fullLabelRules)
         """
+    }
+}
+
+/// Decoded shape returned by `generateRecipeFromMood` — the AI emits a
+/// complete recipe with macros, ingredients, AND instructions in one
+/// shot, so the new-recipe Generate path can hand the user a fully
+/// populated form. Mirrors the JSON spec in `generateRecipeFromMood`
+/// (src/lib/ai.js).
+struct RecipeFromMood: Decodable {
+    var name: String
+    var description: String?
+    var servings: Double?
+    var serving_label: String?
+    var calories: Double?
+    var protein: Double?
+    var carbs: Double?
+    var fat: Double?
+    var fiber: Double?
+    var sugar: Double?
+    var ingredients: [RecipeIngredient]?
+    var instructions: RecipeInstructions?
+    var notes: String?
+}
+
+/// Decoded shape returned by `extractRecipeFromPhoto`. Same idea as
+/// RecipeFromMood but the JSON contract differs: instructions arrive as
+/// a flat `[String]` (steps) plus loose prep_time/cook_time fields,
+/// matching the cookbook-extraction prompt. We reshape into the canonical
+/// `RecipeInstructions` struct in the caller.
+struct RecipeFromPhoto: Decodable {
+    var name: String
+    var description: String?
+    var servings: Double?
+    var serving_label: String?
+    var ingredients: [RecipeIngredient]?
+    var instructions: [String]?
+    var prep_time: String?
+    var cook_time: String?
+    var notes: String?
+
+    /// Convert the loose prep/cook/steps fields into the unified
+    /// `RecipeInstructions` shape the rest of the iOS code uses.
+    func toRecipeInstructions() -> RecipeInstructions? {
+        guard let steps = instructions, !steps.isEmpty else { return nil }
+        return RecipeInstructions(
+            steps: steps,
+            prep_time: prep_time,
+            cook_time: cook_time,
+            tips: nil
+        )
     }
 }
