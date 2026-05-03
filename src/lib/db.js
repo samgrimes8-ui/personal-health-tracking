@@ -84,11 +84,13 @@ export async function getMealLog(userId, { limit = 200, fromDate } = {}) {
 export async function addMealEntry(userId, entry) {
   if (!supabase) {
     const all = getLocalFallback('macrolens_log', [])
-    const newEntry = { ...entry, id: Date.now(), logged_at: new Date().toISOString() }
+    const newEntry = { ...entry, id: Date.now(), logged_at: entry.logged_at ?? new Date().toISOString() }
     all.unshift(newEntry)
     setLocalFallback('macrolens_log', all)
     return newEntry
   }
+  // Full-label fields are passed through verbatim — null means "not
+  // tracked" and the UI shows that explicitly. Never coerce to 0.
   const { data, error } = await supabase
     .from('meal_log')
     .insert({
@@ -112,7 +114,23 @@ export async function addMealEntry(userId, entry) {
       food_item_id: entry.food_item_id ?? null,
       recipe_id: entry.recipe_id ?? null,
       meal_type: entry.meal_type ?? null,
-      logged_at: new Date().toISOString()
+      logged_at: entry.logged_at ?? new Date().toISOString(),
+      saturated_fat_g: entry.saturated_fat_g ?? null,
+      trans_fat_g:     entry.trans_fat_g ?? null,
+      cholesterol_mg:  entry.cholesterol_mg ?? null,
+      sodium_mg:       entry.sodium_mg ?? null,
+      // fiber_g defaults to legacy `fiber` so pre-toggle entries still
+      // show fiber in the expanded view. Other columns stay null when
+      // not tracked.
+      fiber_g:         entry.fiber_g ?? (entry.fiber ?? null),
+      sugar_total_g:   entry.sugar_total_g ?? null,
+      sugar_added_g:   entry.sugar_added_g ?? null,
+      vitamin_a_mcg:   entry.vitamin_a_mcg ?? null,
+      vitamin_c_mg:    entry.vitamin_c_mg ?? null,
+      vitamin_d_mcg:   entry.vitamin_d_mcg ?? null,
+      calcium_mg:      entry.calcium_mg ?? null,
+      iron_mg:         entry.iron_mg ?? null,
+      potassium_mg:    entry.potassium_mg ?? null,
     })
     .select()
     .single()
@@ -801,6 +819,21 @@ export async function autoSaveFoodItem(userId, entry, foodItems) {
       sodium:   entry.sodium ?? 0,
       components: [],
       source: entry.source || 'log',
+      // Forward any full-label values the AI returned so the saved
+      // food_item carries them — future re-logs reuse the same values.
+      saturated_fat_g: entry.saturated_fat_g ?? null,
+      trans_fat_g:     entry.trans_fat_g ?? null,
+      cholesterol_mg:  entry.cholesterol_mg ?? null,
+      sodium_mg:       entry.sodium_mg ?? null,
+      fiber_g:         entry.fiber_g ?? null,
+      sugar_total_g:   entry.sugar_total_g ?? null,
+      sugar_added_g:   entry.sugar_added_g ?? null,
+      vitamin_a_mcg:   entry.vitamin_a_mcg ?? null,
+      vitamin_c_mg:    entry.vitamin_c_mg ?? null,
+      vitamin_d_mcg:   entry.vitamin_d_mcg ?? null,
+      calcium_mg:      entry.calcium_mg ?? null,
+      iron_mg:         entry.iron_mg ?? null,
+      potassium_mg:    entry.potassium_mg ?? null,
     })
     return food.id
   } catch (err) {
@@ -848,6 +881,20 @@ export async function upsertFoodItem(userId, item) {
     components: item.components || [],
     notes: item.notes || '',
     source: item.source || 'manual',
+    // Full-label fields — null = not tracked; never coerce to 0.
+    saturated_fat_g: item.saturated_fat_g ?? null,
+    trans_fat_g:     item.trans_fat_g ?? null,
+    cholesterol_mg:  item.cholesterol_mg ?? null,
+    sodium_mg:       item.sodium_mg ?? null,
+    fiber_g:         item.fiber_g ?? null,
+    sugar_total_g:   item.sugar_total_g ?? null,
+    sugar_added_g:   item.sugar_added_g ?? null,
+    vitamin_a_mcg:   item.vitamin_a_mcg ?? null,
+    vitamin_c_mg:    item.vitamin_c_mg ?? null,
+    vitamin_d_mcg:   item.vitamin_d_mcg ?? null,
+    calcium_mg:      item.calcium_mg ?? null,
+    iron_mg:         item.iron_mg ?? null,
+    potassium_mg:    item.potassium_mg ?? null,
   }
   if (item.id) payload.id = item.id
   const { data, error } = await supabase
