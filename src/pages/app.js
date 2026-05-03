@@ -4833,6 +4833,54 @@ function buildFullLabelTargetFields(goals) {
   `
 }
 
+// Inline checkbox shown under the height/weight grid when the user
+// has changed their stored weight. Default ON: tapping Save then
+// also writes a check-in row for today (weight + body-fat % + muscle).
+// data-original-kg lets the input handler decide visibility — same
+// 0.05 kg tolerance iOS uses (so the imperial/metric toggle's lbs↔kg
+// round-trip noise doesn't false-trigger the toggle).
+function logCheckinToggleHTML(originalWeightKg) {
+  const orig = originalWeightKg ?? ''
+  return `
+    <div id="bm-log-checkin-row" data-original-kg="${orig}"
+      style="display:none;background:color-mix(in srgb, var(--accent) 8%, transparent);border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);border-radius:var(--r);padding:12px 14px;margin-bottom:12px">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+        <input type="checkbox" id="bm-also-log-checkin" checked style="margin-top:2px;cursor:pointer">
+        <div>
+          <div style="font-size:13px;color:var(--text);font-weight:500">Also log this as today's weigh-in</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">Adds a check-in row + updates the weight chart</div>
+        </div>
+      </label>
+    </div>
+  `
+}
+
+// 0.05 kg ≈ 0.1 lb tolerance — matches iOS (BodyMetricsDetailView).
+function bmWeightChanged() {
+  const row = document.getElementById('bm-log-checkin-row')
+  if (!row) return false
+  const orig = parseFloat(row.dataset.originalKg)
+  const m = (typeof readBodyMetricsForm === 'function') ? readBodyMetricsForm() : null
+  const cur = m?.weight_kg
+  if (cur == null) return false
+  if (isNaN(orig)) return cur != null
+  return Math.abs(cur - orig) > 0.05
+}
+
+// Show or hide the "also log this as today's weigh-in" row based on
+// whether the weight diverges from the original. Reverting weight
+// re-resets the checkbox to ON so a fresh edit defaults back to ON.
+function refreshLogCheckinToggle() {
+  const row = document.getElementById('bm-log-checkin-row')
+  if (!row) return
+  const changed = bmWeightChanged()
+  row.style.display = changed ? '' : 'none'
+  if (!changed) {
+    const cb = document.getElementById('bm-also-log-checkin')
+    if (cb) cb.checked = true
+  }
+}
+
 function renderGoalsPage(container) {
   const m = state.bodyMetrics || {}
   const bmr = calcBMR(m)
@@ -5063,6 +5111,9 @@ function renderGoalsPage(container) {
           ${inp('bm-muscle','number', muscleDisplay, '')}
         </div>
       </div>
+
+      ${logCheckinToggleHTML(m.weight_kg)}
+
       <div style="margin-bottom:12px">
         <label class="field-label">Activity level</label>
         ${sel('bm-activity', m.activity_level||'moderate', [
@@ -5288,6 +5339,11 @@ function wireGoalsPage() {
     const el = document.getElementById(id)
     if (el) el.addEventListener('change', () => window.previewGoalsCalc())
   })
+  // Weight input — also drives the "log this as today's weigh-in"
+  // toggle visibility on every keystroke (input, not just change) so
+  // it shows up the moment the value diverges from the stored one.
+  const wEl = document.getElementById('bm-weight')
+  if (wEl) wEl.addEventListener('input', refreshLogCheckinToggle)
 }
 
 
@@ -5445,6 +5501,9 @@ function renderAccount(container) {
           ${inp('bm-muscle','number', muscleDisplay, '')}
         </div>
       </div>
+
+      ${logCheckinToggleHTML(m.weight_kg)}
+
       <div style="margin-bottom:12px">
         <label class="field-label">Activity level</label>
         ${sel('bm-activity', m.activity_level||'moderate', [
@@ -5715,6 +5774,12 @@ function renderAccount(container) {
 
   if (u.isAdmin) loadAdminPanel()
   if (!document.body.classList.contains('embed')) loadSigninMethods()
+
+  // Account page also has the body-metrics editor — same toggle wiring
+  // as wireGoalsPage(). Show/hide the "log this as today's weigh-in"
+  // checkbox the moment weight diverges from the stored value.
+  const wEl = document.getElementById('bm-weight')
+  if (wEl) wEl.addEventListener('input', refreshLogCheckinToggle)
 }
 
 /// Fetches the user's identities (email + linked OAuth providers) and
@@ -7731,9 +7796,38 @@ function wireGlobals() {
       const bm = readBodyMetricsForm()
       const bmr = calcBMR(bm)
       const tdee = calcTDEE(bmr, bm.activity_level)
+
+      // Capture pre-save state for the "also log today's weigh-in"
+      // decision — bmWeightChanged() reads the live form value vs the
+      // data-original-kg captured at render time.
+      const alsoLogCheckbox = document.getElementById('bm-also-log-checkin')
+      const shouldLogCheckin = bmWeightChanged() && alsoLogCheckbox?.checked && bm.weight_kg != null
+
       const updated = await saveBodyMetrics(state.user.id, { ...state.bodyMetrics, ...bm, bmr, tdee })
       state.bodyMetrics = updated
-      showToast('Body metrics saved!', 'success')
+
+      // Write a checkin row for today as a second step. Soft-fails so
+      // a checkin write hiccup can't roll back the (already-committed)
+      // body-metrics save. Mirrors iOS 9669f0a.
+      if (shouldLogCheckin) {
+        try {
+          const todayIso = new Date().toISOString()
+          const checkin = await saveCheckin(state.user.id, {
+            checked_in_at: todayIso,
+            scan_date: todayStr(),
+            weight_kg: bm.weight_kg,
+            body_fat_pct: bm.body_fat_pct ?? null,
+            muscle_mass_kg: bm.muscle_mass_kg ?? null,
+          })
+          state.checkins = [checkin, ...(state.checkins || [])]
+          showToast('Saved + logged today\'s weigh-in', 'success')
+        } catch (e) {
+          console.warn('Checkin write failed (body metrics still saved):', e)
+          showToast('Body metrics saved (check-in failed: ' + (e?.message || 'unknown') + ')', 'error')
+        }
+      } else {
+        showToast('Body metrics saved!', 'success')
+      }
       renderPage()
     } catch (err) { showToast('Error: ' + err.message, 'error') }
   }
