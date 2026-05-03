@@ -1309,9 +1309,9 @@ function renderShell(container) {
         <button class="modal-close" onclick="closeLimitReachedModal()">×</button>
         <div style="text-align:center;padding:8px 0 4px">
           <div style="font-size:38px;margin-bottom:12px">⚡</div>
-          <h3 style="margin:0 0 8px;font-family:'DM Serif Display',serif;font-size:22px">Out of AI Bucks</h3>
+          <h3 style="margin:0 0 8px;font-family:'DM Serif Display',serif;font-size:22px">Out of Computer Calories</h3>
           <div id="limit-reached-subtitle" style="font-size:13px;color:var(--text3);margin-bottom:20px;line-height:1.5">
-            You've used all your AI Bucks for this month.
+            You've used all your Computer Calories for this month.
           </div>
         </div>
         <!-- Full-red progress bar visualizes the hit cap -->
@@ -1319,7 +1319,7 @@ function renderShell(container) {
           <div style="background:var(--red);width:100%;height:100%;border-radius:999px"></div>
         </div>
         <div id="limit-reached-usage" style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">
-          All AI Bucks used
+          All Computer Calories used
         </div>
 
         <!-- Loss-framed list of what they can't do right now -->
@@ -1337,7 +1337,7 @@ function renderShell(container) {
           style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:13px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:10px">
           Upgrade to Premium
         </button>
-        <div style="font-size:11px;color:var(--text3);text-align:center">Your free AI Bucks reset on the 1st of each month</div>
+        <div style="font-size:11px;color:var(--text3);text-align:center">Your free Computer Calories reset on the 1st of each month</div>
       </div>
     </div>
 
@@ -1483,7 +1483,7 @@ function userCanAccess(feature) {
   // 1. Free users can visit and browse almost everything. They can save
   //    recipes manually, plan meals by dragging, set goals, etc.
   // 2. The paywall kicks in at the POINT OF AI CONSUMPTION (photo scan,
-  //    URL import, barcode lookup) — when AI Bucks run out, the upgrade
+  //    URL import, barcode lookup) — when Computer Calories run out, the upgrade
   //    modal appears. Storage/DB writes are always free.
   // 3. A couple of features remain fully Premium-gated because they're
   //    categorically AI-heavy: grocery list generation aggregates and
@@ -1500,7 +1500,7 @@ function userCanAccess(feature) {
 // Specific feature-level gates that are premium-only even though their
 // parent page is accessible to free users. These are the AI-heaviest
 // flows where letting free users dip in would blow through the 100
-// AI Bucks allotment almost immediately.
+// Computer Calories allotment almost immediately.
 function isPremiumOnlyFeature(featureId) {
   const PREMIUM_ONLY = new Set([
     'grocery',  // Grocery list generation — full LLM pass over planned meals
@@ -1559,10 +1559,10 @@ function renderUpgradePage(container, feature) {
         <div style="font-size:32px;margin-bottom:12px">⚡</div>
         ${featureLabel ? `
           <div style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:6px;font-family:'DM Serif Display',serif">Unlock ${esc(featureLabel)}</div>
-          <div style="font-size:14px;color:var(--text3);max-width:440px;margin:0 auto;line-height:1.5">Upgrade to Premium to use all AI features and get ${bucksCount(10.00)} AI Bucks every month.</div>
+          <div style="font-size:14px;color:var(--text3);max-width:440px;margin:0 auto;line-height:1.5">Upgrade to Premium to use all AI features and get ${bucksCount(10.00)} Computer Calories every month.</div>
         ` : `
           <div style="font-size:26px;font-weight:700;color:var(--text);margin-bottom:6px;font-family:'DM Serif Display',serif">Choose your plan</div>
-          <div style="font-size:14px;color:var(--text3);max-width:440px;margin:0 auto;line-height:1.5">Get more AI Bucks and unlock every feature.</div>
+          <div style="font-size:14px;color:var(--text3);max-width:440px;margin:0 auto;line-height:1.5">Get more Computer Calories and unlock every feature.</div>
         `}
       </div>
 
@@ -1571,11 +1571,11 @@ function renderUpgradePage(container, feature) {
         ${TIERS.map(tierCard).join('')}
       </div>
 
-      <!-- What are AI Bucks? little explainer below — answers the obvious
+      <!-- What are Computer Calories? little explainer below — answers the obvious
            question without forcing a user to click away. -->
       <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:16px;font-size:12px;color:var(--text3);line-height:1.5">
-        <div style="color:var(--text2);font-weight:600;margin-bottom:6px">What are AI Bucks?</div>
-        AI Bucks power every smart feature in the app — photo analysis, barcode scanning, recipe import, and the meal planner AI. Most actions cost just 1–3 AI Bucks, and your monthly allotment resets on the 1st.
+        <div style="color:var(--text2);font-weight:600;margin-bottom:6px">What are Computer Calories?</div>
+        Computer Calories power every smart feature in the app — photo analysis, barcode scanning, recipe import, and the meal planner AI. Most actions cost just 1–3 Computer Calories, and your monthly allotment resets on the 1st.
       </div>
 
       <div style="text-align:center;margin-top:20px;font-size:12px;color:var(--text3)">
@@ -1717,7 +1717,7 @@ function renderDashboard(container) {
       <div class="upload-card">
         <div class="section-title" style="display:flex;align-items:center;gap:8px">
           <span>Analyze food</span>
-          ${state.usage?.isFree ? '<span style="font-size:10px;padding:2px 8px;background:color-mix(in srgb, var(--accent) 12%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:999px;font-weight:500">⚡ Uses AI Bucks</span>' : ''}
+          ${state.usage?.isFree ? '<span style="font-size:10px;padding:2px 8px;background:color-mix(in srgb, var(--accent) 12%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:999px;font-weight:500">⚡ Uses Computer Calories</span>' : ''}
         </div>
         <!-- Top-level: just Food vs Recipe. Everything else is nested. -->
         <div class="mode-tabs">
@@ -1863,7 +1863,7 @@ function renderDashboard(container) {
     </div>
 
     <!-- Quick log — AI-free path. For free users, the Free badge calls
-         out that this doesn't burn AI Bucks. -->
+         out that this doesn't burn Computer Calories. -->
     <div class="log-card" style="margin-bottom:16px">
       <div class="log-header">
         <span class="log-header-title">Quick log ${state.usage?.isFree ? '<span style="font-size:10px;margin-left:6px;padding:2px 8px;background:color-mix(in srgb, var(--green) 15%, transparent);color:var(--green);border:1px solid color-mix(in srgb, var(--green) 30%, transparent);border-radius:999px;font-weight:500;letter-spacing:0">⚡ Free · No AI</span>' : ''}</span>
@@ -5557,7 +5557,7 @@ function renderAccount(container) {
     </div>
 
     <div class="upload-card" style="max-width:520px;margin-bottom:20px">
-      <div class="section-title">AI Bucks this month</div>
+      <div class="section-title">Computer Calories this month</div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
         ${u.role === 'admin' ? `
           <span style="background:color-mix(in srgb, var(--accent) 15%, transparent);color:var(--accent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600">👑 Admin</span>
@@ -5578,7 +5578,7 @@ function renderAccount(container) {
       <!-- Big numeric readout: remaining bucks front and center -->
       <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
         <span style="font-size:32px;font-weight:700;color:${spentColor};font-family:'DM Serif Display',serif">${bucksCount(u.remaining ?? 0)}</span>
-        <span style="font-size:13px;color:var(--text3)">AI Bucks remaining of ${bucksCount(u.limit ?? 0)}</span>
+        <span style="font-size:13px;color:var(--text3)">Computer Calories remaining of ${bucksCount(u.limit ?? 0)}</span>
       </div>
       <div class="bar-bg" style="height:10px;margin-bottom:8px">
         <div class="bar-fill" style="background:${spentColor};width:${spentPct}%;transition:width 0.3s"></div>
@@ -5589,7 +5589,7 @@ function renderAccount(container) {
       <!-- Upsell inline when they're approaching the cap -->
       <button onclick="switchPage('upgrade')"
         style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:12px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-bottom:8px">
-        ⚡ Upgrade for ${bucksCount(10.00)} AI Bucks/mo
+        ⚡ Upgrade for ${bucksCount(10.00)} Computer Calories/mo
       </button>` : ''}
       ` : `
       <!-- Unlimited users see request count instead -->
@@ -5620,7 +5620,7 @@ function renderAccount(container) {
       <div class="section-title">AI analysis</div>
       <p style="font-size:13px;color:var(--text2);line-height:1.6">
         Food analysis is powered by Claude AI and runs securely on our servers.
-        No API key needed — each action uses a small number of AI Bucks from your monthly allotment above.
+        No API key needed — each action uses a small number of Computer Calories from your monthly allotment above.
       </p>
     </div>
 
@@ -9249,7 +9249,7 @@ function wireGlobals() {
     if (view === 'grocery' && isPremiumOnlyFeature('grocery')) {
       if (typeof window.openLimitReachedModal === 'function') {
         // Reuse the same modal but override the copy for a feature-gate
-        // (no AI Bucks spent — they just don't have access).
+        // (no Computer Calories spent — they just don't have access).
         openFeatureGatedModal('Grocery list')
       } else {
         switchPage('upgrade')
@@ -9271,7 +9271,7 @@ function wireGlobals() {
     const usage = document.getElementById('limit-reached-usage')
     const titleEl = modal.querySelector('h3')
     if (titleEl) titleEl.textContent = `${featureName} is a Premium feature`
-    if (subtitle) subtitle.textContent = `Upgrade to Premium to unlock ${featureName} and ${bucksCount(10.00)} AI Bucks every month.`
+    if (subtitle) subtitle.textContent = `Upgrade to Premium to unlock ${featureName} and ${bucksCount(10.00)} Computer Calories every month.`
     if (usage) usage.textContent = ''
     modal.classList.add('open')
   }
@@ -9937,9 +9937,9 @@ function wireGlobals() {
   // ── AI smart-merge for grocery list (Pass 2 of hybrid dedup) ──────
   // Sends the current post-Pass-1 ingredient names to Claude and asks
   // for a synonym map. Persisted to ingredient_synonyms table so they
-  // apply on future loads without re-paying AI Bucks.
+  // apply on future loads without re-paying Computer Calories.
   //
-  // On-demand only — costs AI Bucks, so it doesn't run silently.
+  // On-demand only — costs Computer Calories, so it doesn't run silently.
   window.smartMergeGrocery = async () => {
     const btn = document.getElementById('grocery-merge-btn')
     if (!btn) return
@@ -10009,7 +10009,7 @@ function wireGlobals() {
       console.error('[smartMergeGrocery] failed:', err)
       // 429 / spend-limit errors will have already shown the upgrade
       // modal via callProxy's interceptor. Other errors get a toast.
-      if (!err?.message?.includes('AI Bucks')) {
+      if (!err?.message?.includes('Computer Calories')) {
         showToast('Merge failed: ' + (err?.message || 'unknown'), 'error')
       }
     } finally {
@@ -11847,7 +11847,7 @@ function wireGlobals() {
       <div class="modal-box" style="max-width:400px;width:100%;max-height:80vh;display:flex;flex-direction:column">
         <button class="modal-close" onclick="document.getElementById('voice-picker-modal')?.remove()">×</button>
         <h3 style="margin:0 0 4px;font-family:'DM Serif Display',serif;font-size:18px">Choose a voice</h3>
-        <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Tap any voice to preview. First read of each step uses AI Bucks; replays are free.</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Tap any voice to preview. First read of each step uses Computer Calories; replays are free.</div>
 
         <div style="overflow-y:auto;flex:1;margin-bottom:12px">
           ${PREMIUM_VOICES.map(v => {
@@ -13556,7 +13556,7 @@ function wireGlobals() {
   // Called from callProxy in ai.js when a 429 with spending_limit_exceeded
   // comes back. Opens a full conversion-focused upgrade modal instead of
   // just flashing a toast. Receives the raw USD numbers from the server;
-  // the modal itself is in AI Bucks units to match the rest of the UX.
+  // the modal itself is in Computer Calories units to match the rest of the UX.
   window.openLimitReachedModal = ({ spentUsd, limitUsd } = {}) => {
     const subtitle = document.getElementById('limit-reached-subtitle')
     const usage = document.getElementById('limit-reached-usage')
@@ -13565,13 +13565,13 @@ function wireGlobals() {
       // upgrade pitch, a premium user (who hit their higher cap) gets a
       // "your month reset is coming" message.
       if (state.usage?.isFree) {
-        subtitle.textContent = `You've used all your AI Bucks for the month. Upgrade to Premium for ${bucksCount(10.00)} AI Bucks every month — or keep logging meals with Quick Log (no AI needed).`
+        subtitle.textContent = `You've used all your Computer Calories for the month. Upgrade to Premium for ${bucksCount(10.00)} Computer Calories every month — or keep logging meals with Quick Log (no AI needed).`
       } else {
-        subtitle.textContent = "You've used all your AI Bucks for this month. Your allotment resets on the 1st."
+        subtitle.textContent = "You've used all your Computer Calories for this month. Your allotment resets on the 1st."
       }
     }
     if (usage && limitUsd) {
-      usage.textContent = `${bucksCount(limitUsd)} / ${bucksCount(limitUsd)} AI Bucks used`
+      usage.textContent = `${bucksCount(limitUsd)} / ${bucksCount(limitUsd)} Computer Calories used`
     }
     document.getElementById('limit-reached-modal')?.classList.add('open')
   }
@@ -13585,7 +13585,7 @@ function wireGlobals() {
   // Asks for confirmation since there's no undo — the override amount
   // and expiration both reset to null together.
   window.clearOverrideHandler = async () => {
-    if (!confirm('Clear your custom AI Bucks allotment and revert to your role default?')) return
+    if (!confirm('Clear your custom Computer Calories allotment and revert to your role default?')) return
     try {
       await clearSpendingOverride(state.user.id)
       state.usage = await getUsageSummary(state.user.id)

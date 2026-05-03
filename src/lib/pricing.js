@@ -1,4 +1,4 @@
-// ─── AI Bucks display layer ───────────────────────────────────────────────
+// ─── Computer Calories display layer ───────────────────────────────────────────────
 //
 // Internally we track everything in USD (cost_usd in DB, spend caps in
 // check_spend_limit, etc — because that's what we actually pay Anthropic).
@@ -7,18 +7,18 @@
 // conditioned to understand "credits/gems/points" pricing from games and
 // SaaS.
 //
-// This module converts internal dollars → user-facing "AI Bucks" with a
+// This module converts internal dollars → user-facing "Computer Calories" with a
 // 1,000× multiplier. So:
-//   Free tier  ($0.30/mo) →    300 AI Bucks
-//   Premium   ($10.00/mo) → 10,000 AI Bucks
-//   Typical action (~$0.002) → ~2 AI Bucks
+//   Free tier  ($0.30/mo) →    300 Computer Calories
+//   Premium   ($10.00/mo) → 10,000 Computer Calories
+//   Typical action (~$0.002) → ~2 Computer Calories
 //
 // Every user-facing display of AI spending/usage should go through these
 // helpers. Internal logic (spend limit checks, cost calculations) continues
 // to work in dollars.
 export const AI_BUCKS_PER_DOLLAR = 1000
 
-// USD → AI Bucks (display units). Rounds to a whole number because fractional
+// USD → Computer Calories (display units). Rounds to a whole number because fractional
 // bucks look silly. Rounded toward zero so we never OVERSTATE someone's
 // remaining balance (off-by-one on "used" is less bad than telling someone
 // they have 5 bucks when they actually have 4).
@@ -27,17 +27,17 @@ export function usdToBucks(usd) {
   return Math.floor(Number(usd) * AI_BUCKS_PER_DOLLAR)
 }
 
-// AI Bucks → USD. Rarely needed (most conversion is the other direction)
+// Computer Calories → USD. Rarely needed (most conversion is the other direction)
 // but handy if we ever accept a credit purchase and need to convert back.
 export function bucksToUsd(bucks) {
   if (bucks == null || isNaN(bucks)) return 0
   return Number(bucks) / AI_BUCKS_PER_DOLLAR
 }
 
-// Pretty-format a USD amount as "1,234 AI Bucks". Handles commas, zero, null.
+// Pretty-format a USD amount as "1,234 Computer Calories". Handles commas, zero, null.
 export function formatBucks(usd) {
   const n = usdToBucks(usd)
-  return n.toLocaleString('en-US') + ' AI Bucks'
+  return n.toLocaleString('en-US') + ' Computer Calories'
 }
 
 // Shorthand for when we just want the number, formatted.
@@ -61,7 +61,7 @@ export const TIERS = [
       { included: true,  text: 'Browse and save recipes' },
       { included: true,  text: 'Build weekly meal plans' },
       { included: true,  text: 'Track macros and goals' },
-      { included: true,  text: `${usdToBucks(0.10).toLocaleString('en-US')} AI Bucks/month (try it out)` },
+      { included: true,  text: `${usdToBucks(0.10).toLocaleString('en-US')} Computer Calories/month (try it out)` },
       { included: false, text: 'Grocery list generator' },
       { included: false, text: 'Unlimited AI photo/barcode/recipe scans' },
     ],
@@ -76,7 +76,7 @@ export const TIERS = [
     featured: true,
     features: [
       { included: true, text: 'Everything in Free' },
-      { included: true, text: `${usdToBucks(10.00).toLocaleString('en-US')} AI Bucks/month` },
+      { included: true, text: `${usdToBucks(10.00).toLocaleString('en-US')} Computer Calories/month` },
       { included: true, text: '📸 Photo meal analysis' },
       { included: true, text: '📷 Barcode scanning' },
       { included: true, text: '🔗 Recipe import from photos/URLs' },

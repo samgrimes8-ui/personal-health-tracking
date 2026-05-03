@@ -160,7 +160,7 @@ export default async function handler(req) {
     const reason = limitCheck?.reason
     if (reason === 'spending_limit_exceeded') {
       return json({
-        error: "You've used all your AI Bucks for this month. Upgrade to keep going.",
+        error: "You've used all your Computer Calories for this month. Upgrade to keep going.",
         code: 'spending_limit_exceeded',
         spent_usd: Number(limitCheck.spent_usd) || 0,
         limit_usd: Number(limitCheck.limit_usd) || 0,

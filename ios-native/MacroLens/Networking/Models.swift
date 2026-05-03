@@ -120,6 +120,13 @@ struct AnalysisResult: Codable, Hashable {
     var serving_description: String?
     var serving_grams: Double?
     var serving_oz: Double?
+    // Quantity hints parsed from freeform queries like "15g butter" or
+    // "two slices toast". Per-serving macros above are unchanged — the
+    // log flow multiplies by (parsed_quantity_g / serving_grams) or by
+    // parsed_quantity_servings to compute servings_consumed at log time.
+    // Both nil → user typed a bare food name; default to 1 serving.
+    var parsed_quantity_g: Double?
+    var parsed_quantity_servings: Double?
     // Full nutrition label (opt-in). Model returns null when it can't
     // confidently read the value — never coerce to 0.
     var saturated_fat_g: Double?

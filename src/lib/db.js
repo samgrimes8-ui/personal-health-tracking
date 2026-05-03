@@ -366,7 +366,7 @@ export async function getUsageSummary(userId) {
   const hasProviderProfile = !!(profile.provider_name && profile.provider_name.trim())
   const isProvider = hasProviderProfile && (role === 'provider' || role === 'admin')
 
-  // Compute user-facing AI Bucks (1000x multiplier). We expose these as
+  // Compute user-facing Computer Calories (1000x multiplier). We expose these as
   // *additional* fields alongside the raw dollar amounts — UI reads Bucks
   // for display, internal logic (spend cap enforcement, pricing) stays in
   // dollars. See src/lib/pricing.js for the conversion rationale.

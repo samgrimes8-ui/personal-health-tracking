@@ -84,7 +84,7 @@ export default async function handler(req) {
       // renders a proper upgrade modal. Message string is a fallback for
       // any older clients that haven't been updated to render the modal.
       return json({
-        error: "You've used all your AI Bucks for this month. Upgrade to keep going.",
+        error: "You've used all your Computer Calories for this month. Upgrade to keep going.",
         code: 'spending_limit_exceeded',
         spent_usd: Number(limitCheck.spent_usd) || 0,
         limit_usd: Number(limitCheck.limit_usd) || 0,

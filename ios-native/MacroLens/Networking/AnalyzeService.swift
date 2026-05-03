@@ -47,6 +47,13 @@ enum AnalyzeService {
     /// covering small/medium/large/etc. The single-result fast path stays
     /// when the model returns exactly one candidate. Each element carries
     /// the same shape as a regular AnalysisResult — same render code reuses.
+    ///
+    /// Envelope-level parsed_quantity_g / parsed_quantity_servings (from
+    /// queries like "15g butter" or "two slices toast") are forwarded onto
+    /// EVERY candidate so the picker UI can apply the same multiplier
+    /// regardless of which candidate the user picks. The model returns
+    /// them once on the envelope; we fan out to each result so downstream
+    /// log-flow code can stay candidate-only.
     static func describeFoodCandidates(_ description: String) async throws -> [AnalysisResult] {
         let prompt = """
         User typed: "\(description)"
@@ -67,7 +74,12 @@ enum AnalyzeService {
         // Try the {candidates:[...]} envelope first.
         if let env = try? JSONDecoder().decode(CandidatesEnvelope.self, from: data),
            !env.candidates.isEmpty {
-            return env.candidates
+            return env.candidates.map { c in
+                var copy = c
+                if copy.parsed_quantity_g == nil { copy.parsed_quantity_g = env.parsed_quantity_g }
+                if copy.parsed_quantity_servings == nil { copy.parsed_quantity_servings = env.parsed_quantity_servings }
+                return copy
+            }
         }
         // Defensive: model occasionally returns a bare AnalysisResult
         // when the query is unambiguous. Wrap as a one-element list so
@@ -79,9 +91,13 @@ enum AnalyzeService {
     }
 
     /// Wrapper for the {candidates:[...]} JSON envelope describeFood-
-    /// Candidates expects. Internal — callers see [AnalysisResult].
+    /// Candidates expects. Internal — callers see [AnalysisResult]. The
+    /// envelope-level parsed_quantity fields apply uniformly to whichever
+    /// candidate the user picks.
     private struct CandidatesEnvelope: Codable {
         let candidates: [AnalysisResult]
+        let parsed_quantity_g: Double?
+        let parsed_quantity_servings: Double?
     }
 
     static func analyzeFoodPhoto(_ imageBase64: String, hint: String? = nil) async throws -> AnalysisResult {
@@ -661,17 +677,65 @@ enum AnalyzeService {
     - These come from packaged-product labels, USDA data for generic foods, or restaurant nutrition info. If none of those apply, return null.
     """
 
+    /// Detect a quantity hint in the freeform query and surface it as a
+    /// structured field so the iOS preview can pre-fill the log input.
+    /// PER-SERVING macros stay unchanged — the client multiplies by
+    /// (parsed_quantity_g / serving_grams) or by parsed_quantity_servings
+    /// at log time. Kept in sync with PARSED_QUANTITY_RULES in src/lib/ai.js.
+    private static let parsedQuantityRules = """
+
+    Parsing quantity hints in the query (CRITICAL):
+    - If the user's query contains a quantity hint, return it as parsed_quantity_g (grams) OR parsed_quantity_servings (multiple of one serving). Pick whichever the hint most naturally maps to. Leave both null when the query is a bare food name.
+    - "15g butter" → parsed_quantity_g: 15
+    - "1 tbsp olive oil" → parsed_quantity_g: 14 (1 tbsp ≈ 14g for oils/butter; ≈ 21g for syrup; ≈ 13g for honey — pick the per-substance value)
+    - "2 tablespoons peanut butter" → parsed_quantity_g: 32 (2 × 16g)
+    - "6 oz steak" → parsed_quantity_g: 170 (6 × 28.3495, rounded)
+    - "100g chicken" → parsed_quantity_g: 100
+    - "half avocado" / "1/2 avocado" / "0.5 avocado" → parsed_quantity_servings: 0.5
+    - "quarter cup rice" / "1/4 cup rice" → parsed_quantity_servings: 0.25 (assuming the chosen serving IS 1 cup)
+    - "two slices toast" / "2 slices of toast" → parsed_quantity_servings: 2
+    - "3 eggs" / "three eggs" → parsed_quantity_servings: 3
+    - "1.5 bananas" → parsed_quantity_servings: 1.5
+    - "a banana" / "one banana" / bare "banana" → parsed_quantity_servings: null (default to 1 serving)
+    - Range like "1-2 slices" → skip (return null for both)
+    - Both fields are NUMBERS or null. Never both set; prefer parsed_quantity_g when grams/oz/lbs/tbsp/tsp/cup are explicit; prefer parsed_quantity_servings for natural-piece counts.
+    - For multi-candidate results: parse the quantity ONCE on the envelope (not per candidate) — the user's quantity applies to whichever candidate they pick.
+    """
+
+    /// Pick the SMALLEST REASONABLE serving someone might consume in a
+    /// single meal/snack. Wholesale package sizes (1 cup of butter, 1 lb
+    /// of pasta) make logging a few grams come out as a tiny fraction of
+    /// a serving, which is unusable. Kept verbatim in sync with
+    /// NATURAL_SERVING_RULES in src/lib/ai.js.
+    private static let naturalServingRules = """
+
+    Picking the natural single serving (CRITICAL — don't skip):
+    - Choose the SMALLEST REASONABLE serving someone might eat at one sitting, NOT the wholesale package size.
+    - Fats / oils / butter / mayonnaise / nut butter / syrup / honey / heavy cream → "1 tablespoon (~14-21g)"
+    - Bread → "1 slice (~30g)" (NOT a loaf)
+    - Cheese → "1 oz (~28g)" or "1 slice" (NOT a block or pound)
+    - Nuts → "1 oz (~28g) (~23 almonds)" or similar count (NOT a cup)
+    - Cooked rice / pasta → "1 cup (~150-195g)"
+    - DRY pasta → "2 oz (~57g)" (NOT a pound or box)
+    - Whole produce → the piece itself: "1 medium banana, ~118g", "1 large egg (~50g)", "1 medium avocado, ~150g"
+    - Meat / fish / poultry → "4 oz (~113g) cooked"
+    - Beverages → "1 cup (~240ml)" or "1 can (~355ml)"
+    - Specific branded products → use the manufacturer's printed serving size
+    Test: if 1 tbsp / 1 slice / 1 piece of the food is something a normal person might consume at once, use THAT. Never pick a unit so large that 15g of the food works out to a tiny fraction of a serving.
+    """
+
     private static var macrosOnlyPrompt: String {
         """
         Respond ONLY with a JSON object, no markdown, no explanation. Format:
-        {"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g' or '1 slice of bread, ~30g' or '1 cup cooked rice, ~195g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,\(fullLabelFields)"confidence":"low|medium|high"}
+        {"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g' or '1 slice of bread, ~30g' or '1 cup cooked rice, ~195g'","serving_grams":number,"serving_oz":number,"parsed_quantity_g":number|null,"parsed_quantity_servings":number|null,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,\(fullLabelFields)"confidence":"low|medium|high"}
 
         Rules for serving fields:
-        - serving_description MUST be a clear, human-readable single-serving unit. Prefer natural units (1 medium avocado, 1 large banana, 1 slice of toast, 1 large egg, 1 cup cooked rice). Always include an approximate gram weight in parentheses or after a comma — e.g. "1 medium avocado, ~150g" or "1 slice of toast (~30g)".
+        - serving_description MUST be a clear, human-readable single-serving unit. Always include an approximate gram weight in parentheses or after a comma — e.g. "1 medium avocado, ~150g" or "1 slice of toast (~30g)".
         - serving_grams must be a NUMBER (the same gram weight referenced in serving_description). serving_oz = serving_grams / 28.3495, rounded to one decimal.
         - All macro fields (calories/protein/carbs/fat/fiber/sugar) MUST be the values FOR ONE serving as defined above — NOT per-100g, NOT total amount the user might eat.
         - If the user describes a fraction or multiple ("half an avocado", "two slices of toast"), still return macros for ONE single natural serving and let the client apply the multiplier.
-        - For foods with no natural unit (rice, pasta, oats, sauces), default to "1 cup cooked, ~Xg" or "100g" with macros for that amount.
+        \(naturalServingRules)
+        \(parsedQuantityRules)
         \(fullLabelRules)
         """
     }
@@ -683,14 +747,18 @@ enum AnalyzeService {
     private static var candidatesPrompt: String {
         """
         Respond ONLY with a JSON object, no markdown, no explanation. Format:
-        {"candidates":[{"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"confidence":"low|medium|high"}]}
+        {"parsed_quantity_g":number|null,"parsed_quantity_servings":number|null,"candidates":[{"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"confidence":"low|medium|high"}]}
 
         Return between 1 and 10 candidates ranked by relevance (best first).
-        - For ambiguous generic queries ("banana", "avocado", "pizza"), return 3-7 distinct serving sizes / variants the user might mean (small / medium / large / cup / slice / etc).
+        - For UNAMBIGUOUS generic queries ("butter", "olive oil", "milk"), return ONE candidate with the natural single-serving unit (see rules below). Multi-result picker is for genuinely ambiguous queries only.
+        - For genuinely ambiguous generic queries ("banana", "avocado", "pizza"), return 3-5 distinct natural serving sizes (small / medium / large piece, etc) — NOT wholesale variants.
         - For specific branded queries ("McDonald's Big Mac", "Quest Cookies & Cream protein bar"), a SINGLE candidate is fine.
         - Each candidate's macros are FOR ONE serving as defined in its own serving_description (NOT per-100g). serving_grams is a NUMBER. serving_oz = serving_grams / 28.3495, one decimal.
         - serving_description MUST always include an approximate gram weight.
         - Sort by descending confidence.
+        - parsed_quantity_g / parsed_quantity_servings live on the ENVELOPE (not per candidate) — the user's quantity hint applies to whichever candidate they pick.
+        \(naturalServingRules)
+        \(parsedQuantityRules)
         """
     }
 
@@ -724,6 +792,7 @@ enum AnalyzeService {
         - List every ingredient needed; empty array only if it's a packaged item with no recipe
         - serving_description MUST include an approximate gram weight; serving_grams is a NUMBER; serving_oz = serving_grams / 28.3495, one decimal
         - Macro fields (calories/protein/carbs/fat/fiber/sugar) are PER SERVING (one of "servings"), matching serving_description / serving_grams. NOT per-100g, NOT whole-recipe totals.
+        \(naturalServingRules)
         \(fullLabelRules)
         """
     }

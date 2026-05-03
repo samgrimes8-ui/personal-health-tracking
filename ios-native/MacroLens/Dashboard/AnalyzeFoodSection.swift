@@ -341,11 +341,22 @@ struct AnalyzeFoodSection: View {
                     .foregroundStyle(Theme.text3)
             }
 
+            // Auto-detected quantity hint from the user's query
+            // ("15g butter" / "two slices toast"). Shows BEFORE the macro
+            // pills so it's clear those will be scaled at log time.
+            // Suppressed when the multiplier is 1.0 — that's the default.
+            if let parsedLine = parsedQuantityLabel(r) {
+                Text(parsedLine)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+            }
+
             HStack(spacing: 6) {
-                pill("\(Int(r.calories)) kcal", color: Theme.cal)
-                pill("\(Int(r.protein))g P", color: Theme.protein)
-                pill("\(Int(r.carbs))g C", color: Theme.carbs)
-                pill("\(Int(r.fat))g F", color: Theme.fat)
+                let m = Self.servingsMultiplier(for: r)
+                pill("\(Int((r.calories * m).rounded())) kcal", color: Theme.cal)
+                pill("\(Int((r.protein * m).rounded()))g P", color: Theme.protein)
+                pill("\(Int((r.carbs * m).rounded()))g C", color: Theme.carbs)
+                pill("\(Int((r.fat * m).rounded()))g F", color: Theme.fat)
             }
 
             if let ings = r.ingredients, !ings.isEmpty {
@@ -580,24 +591,68 @@ struct AnalyzeFoodSection: View {
     private func logResult(_ r: AnalysisResult) async {
         loggingResult = true
         defer { loggingResult = false }
+        // Apply any parsed quantity hint from the user's query — "15g
+        // butter" maps to ~1.07 servings of a 14g/serving baseline.
+        // meal_log stores TOTALS, so scale macros by the multiplier
+        // before sending and pass servingsConsumed alongside.
+        let multiplier = Self.servingsMultiplier(for: r)
         do {
             try await state.logMeal(
                 name: r.name,
-                calories: r.calories,
-                protein: r.protein,
-                carbs: r.carbs,
-                fat: r.fat,
-                fiber: r.fiber ?? 0,
+                calories: r.calories * multiplier,
+                protein: r.protein * multiplier,
+                carbs: r.carbs * multiplier,
+                fat: r.fat * multiplier,
+                fiber: (r.fiber ?? 0) * multiplier,
+                servingsConsumed: multiplier,
                 loggedAt: state.loggedAtForSelectedDate(),
                 servingDescription: r.serving_description,
                 servingGrams: r.serving_grams,
                 servingOz: r.serving_oz,
-                fullLabel: AppState.FullLabelPayload.from(r)
+                fullLabel: AppState.FullLabelPayload.from(r, scaledBy: multiplier)
             )
             logged = true
         } catch {
             self.error = "Saved analysis but couldn't log: \(error.localizedDescription)"
         }
+    }
+
+    /// Display label for an auto-detected quantity hint. Returns nil
+    /// when there's no hint OR when the multiplier rounds to 1.0
+    /// (default — no point telling the user "1 serving").
+    private func parsedQuantityLabel(_ r: AnalysisResult) -> String? {
+        let multiplier = Self.servingsMultiplier(for: r)
+        if abs(multiplier - 1.0) < 0.001 { return nil }
+        let prettyMult: String = abs(multiplier - multiplier.rounded()) < 0.01
+            ? String(Int(multiplier.rounded()))
+            : String(format: "%.2f", multiplier)
+        if let g = r.parsed_quantity_g, g > 0 {
+            return "Auto-detected: \(formatGrams(g)) → \(prettyMult) servings"
+        }
+        if let s = r.parsed_quantity_servings, s > 0 {
+            return "Auto-detected: \(prettyMult) serving\(s == 1 ? "" : "s")"
+        }
+        return nil
+    }
+
+    private func formatGrams(_ g: Double) -> String {
+        if abs(g - g.rounded()) < 0.01 { return "\(Int(g.rounded()))g" }
+        return String(format: "%.1fg", g)
+    }
+
+    /// Translate parsed_quantity_g / parsed_quantity_servings into a
+    /// servings multiplier applied to per-serving macros at log time.
+    /// Defaults to 1.0 when no quantity hint is present (bare query).
+    /// servings takes precedence over grams — the prompt already enforces
+    /// they're never both set, but if a buggy response surfaces both we
+    /// honor the more direct unit.
+    static func servingsMultiplier(for r: AnalysisResult) -> Double {
+        if let s = r.parsed_quantity_servings, s > 0 { return s }
+        if let g = r.parsed_quantity_g, g > 0,
+           let serv = r.serving_grams, serv > 0 {
+            return g / serv
+        }
+        return 1.0
     }
 
     private func saveResult(_ r: AnalysisResult) async {
