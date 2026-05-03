@@ -31,7 +31,7 @@ import {
   extractIngredients, recalculateMacros, analyzeFoodItem, analyzeNutritionLabel,
   generateRecipeInstructions, extractBodyScan, fetchOgMetadata, readBarcodeFromImage,
   extractRecipeFromPhoto, generateRecipeFromMood, dedupGroceryNames,
-  fetchRecipeAudio
+  fetchRecipeAudio, describeFoodCandidates
 } from '../lib/ai.js'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -13785,10 +13785,17 @@ function scheduleGenericLookup(list, q, localFiltered) {
 
 /**
  * "Describe with AI" fallback fired from the Quick Log empty state.
- * Mirrors the iOS aiDescribeAndLog path — runs the meal text through
- * analyzePlannerDescription, then logs it as a meal_log row using the
- * existing handler so all the post-log cleanup (autoSaveFoodItem,
- * Today's Meals refresh) happens for free.
+ * Mirrors the iOS aiDescribeAndLog + candidate-picker path.
+ *
+ * Calls describeFoodCandidates() so an ambiguous query like "banana"
+ * surfaces small/medium/large options instead of forcing the model to
+ * commit to one. Single-candidate responses skip the picker and log
+ * straight away.
+ *
+ * parsed_quantity_g / parsed_quantity_servings on the envelope (e.g.
+ * the user typed "15g butter" or "half avocado") apply at log time —
+ * the candidate's per-serving macros are kept as the food_items
+ * baseline, and we multiply at insert. Mirrors iOS 415dfb3.
  */
 window.describeQuickLogQuery = async function describeQuickLogQuery() {
   const input = document.getElementById('quick-log-search')
@@ -13797,17 +13804,128 @@ window.describeQuickLogQuery = async function describeQuickLogQuery() {
   const list = document.getElementById('quick-log-list')
   if (list) list.innerHTML = `<div style="padding:12px 4px;font-size:13px;color:var(--text3);text-align:center">✨ Describing "${esc(q)}" with AI…</div>`
   try {
-    const result = await analyzePlannerDescription(q)
-    showResult(result)
-    // Drop into the existing "log this meal" path so we share the
-    // post-insert cleanup with the rest of the analyze flow.
-    state.currentEntry = result
-    await logCurrentEntryHandler()
-    if (input) input.value = ''
-    filterQuickLog()
+    const { candidates, parsed_quantity_g, parsed_quantity_servings } = await describeFoodCandidates(q)
+    if (!candidates?.length) {
+      if (list) list.innerHTML = `<div style="padding:8px 4px;font-size:13px;color:var(--text3)">No match found for "${esc(q)}"</div>`
+      return
+    }
+    if (candidates.length === 1) {
+      await logCandidate(candidates[0], { parsed_quantity_g, parsed_quantity_servings })
+      if (input) input.value = ''
+      filterQuickLog()
+      return
+    }
+    showCandidatePicker(q, candidates, { parsed_quantity_g, parsed_quantity_servings })
   } catch (e) {
     if (list) list.innerHTML = `<div style="padding:8px 4px;font-size:13px;color:var(--text3)">AI describe failed: ${esc(e.message || String(e))}</div>`
   }
+}
+
+// Return the per-serving multiplier implied by an envelope's
+// parsed_quantity_g / parsed_quantity_servings, given the candidate's
+// own serving_grams. parsed_quantity_g + serving_grams wins when both
+// are present (more precise). Defaults to 1 when no quantity hint.
+function quantityMultiplier(candidate, env) {
+  const g = env?.parsed_quantity_g
+  const s = env?.parsed_quantity_servings
+  if (g != null && candidate?.serving_grams) return g / candidate.serving_grams
+  if (s != null) return s
+  return 1
+}
+
+// Friendly label for the applied parsed quantity ("15g", "0.5 servings", null).
+function quantityLabel(candidate, env) {
+  if (env?.parsed_quantity_g != null) return `${env.parsed_quantity_g}g`
+  if (env?.parsed_quantity_servings != null) {
+    const n = env.parsed_quantity_servings
+    return `${n} serving${n === 1 ? '' : 's'}`
+  }
+  return null
+}
+
+// Log a single AI-described candidate. Applies the envelope-level
+// parsed_quantity multiplier at insert (matches iOS 415dfb3).
+async function logCandidate(candidate, env) {
+  const mult = quantityMultiplier(candidate, env)
+  const result = {
+    name: candidate.name,
+    calories: (candidate.calories || 0) * mult,
+    protein:  (candidate.protein  || 0) * mult,
+    carbs:    (candidate.carbs    || 0) * mult,
+    fat:      (candidate.fat      || 0) * mult,
+    fiber:    (candidate.fiber    || 0) * mult,
+    sugar:    (candidate.sugar    || 0) * mult,
+    serving_description: candidate.serving_description,
+    serving_grams: candidate.serving_grams,
+    serving_oz: candidate.serving_oz,
+    confidence: candidate.confidence,
+    servings_consumed: mult,
+    base_calories: candidate.calories || 0,
+    base_protein:  candidate.protein  || 0,
+    base_carbs:    candidate.carbs    || 0,
+    base_fat:      candidate.fat      || 0,
+    base_fiber:    candidate.fiber    || 0,
+    base_sugar:    candidate.sugar    || 0,
+  }
+  state.currentEntry = result
+  showResult(result)
+  await logCurrentEntryHandler()
+}
+
+function showCandidatePicker(query, candidates, env) {
+  const qLabel = quantityLabel(candidates[0], env)
+  const sheet = document.createElement('div')
+  sheet.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:flex-end;justify-content:center'
+  const rows = candidates.map((c, i) => {
+    const mult = quantityMultiplier(c, env)
+    const cal = Math.round((c.calories || 0) * mult)
+    const p = Math.round((c.protein || 0) * mult)
+    const carbs = Math.round((c.carbs || 0) * mult)
+    const f = Math.round((c.fat || 0) * mult)
+    return `
+      <button data-candidate-idx="${i}"
+        style="width:100%;padding:12px 14px;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;cursor:pointer;margin-bottom:8px;text-align:left;display:flex;flex-direction:column;gap:4px">
+        <div style="font-size:14px;font-weight:600">${esc(c.name)}</div>
+        <div style="font-size:11px;color:var(--text3)">${esc(c.serving_description || '')}</div>
+        <div style="font-size:11px;color:var(--text2)">
+          <span style="color:var(--accent);font-weight:600">${cal} kcal</span>
+          · <span style="color:var(--protein)">P${p}</span>
+          · <span style="color:var(--carbs)">C${carbs}</span>
+          · <span style="color:var(--fat)">F${f}</span>
+        </div>
+      </button>
+    `
+  }).join('')
+  sheet.innerHTML = `
+    <div style="background:var(--bg2);border-radius:var(--r3) var(--r3) 0 0;width:100%;max-width:480px;padding:20px 20px 32px;max-height:80vh;overflow-y:auto">
+      <div style="width:36px;height:4px;background:var(--border2);border-radius:2px;margin:0 auto 16px"></div>
+      <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:4px">Pick a match for "${esc(query)}"</div>
+      ${qLabel ? `<div style="font-size:12px;color:var(--text3);margin-bottom:14px">Quantity detected: <strong style="color:var(--accent)">${esc(qLabel)}</strong> — applied to whichever you pick</div>` : '<div style="font-size:12px;color:var(--text3);margin-bottom:14px">Macros are per the serving shown on each option.</div>'}
+      ${rows}
+      <button id="cand-cancel"
+        style="width:100%;padding:12px;background:none;border:none;color:var(--text3);font-size:14px;font-family:inherit;cursor:pointer;margin-top:4px">
+        Cancel
+      </button>
+    </div>
+  `
+  document.body.appendChild(sheet)
+  const close = () => { if (sheet.parentNode) document.body.removeChild(sheet) }
+  sheet.querySelectorAll('[data-candidate-idx]').forEach(btn => {
+    btn.onclick = async () => {
+      const idx = parseInt(btn.dataset.candidateIdx)
+      close()
+      const input = document.getElementById('quick-log-search')
+      try {
+        await logCandidate(candidates[idx], env)
+        if (input) input.value = ''
+        filterQuickLog()
+      } catch (e) {
+        showToast('Log failed: ' + (e?.message || e), 'error')
+      }
+    }
+  })
+  document.getElementById('cand-cancel').onclick = close
+  sheet.onclick = e => { if (e.target === sheet) close() }
 }
 
 function filterQuickLog() {
