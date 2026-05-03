@@ -114,7 +114,7 @@ async function callProxy(feature, messages, options = {}) {
             limitUsd: data.limit_usd,
           })
         }
-        throw new Error("You've used all your AI Bucks this month")
+        throw new Error("You've used all your Computer Calories this month")
       }
       throw new Error(data.error ?? `Request failed (${res.status})`)
     }
@@ -166,7 +166,7 @@ export async function fetchRecipeAudio({ recipeId, stepIndex, servings, voiceId,
   const data = await res.json().catch(() => ({ error: `Server returned ${res.status}` }))
   if (!res.ok) {
     // Mirror the analyze.js spend-cap modal hook so paid voices and chat
-    // hit the same upgrade flow when the user runs out of AI Bucks.
+    // hit the same upgrade flow when the user runs out of Computer Calories.
     if (res.status === 429 && data.code === 'spending_limit_exceeded') {
       if (typeof window !== 'undefined' && typeof window.openLimitReachedModal === 'function') {
         window.openLimitReachedModal({
@@ -174,7 +174,7 @@ export async function fetchRecipeAudio({ recipeId, stepIndex, servings, voiceId,
           limitUsd: data.limit_usd,
         })
       }
-      throw new Error("You've used all your AI Bucks this month")
+      throw new Error("You've used all your Computer Calories this month")
     }
     const err = new Error(data.error ?? `Request failed (${res.status})`)
     err.code = data.code
@@ -245,6 +245,63 @@ Rules for full-label fields (saturated_fat_g, trans_fat_g, cholesterol_mg, sodiu
 - vitamin_a_mcg is RAE (retinol activity equivalents), not IU.
 - All values are PER SERVING, matching the same serving_description / serving_grams as the macros.
 - These come from packaged-product labels, USDA data for generic foods, or restaurant nutrition info. If none of those apply, return null.`
+
+// Detect a quantity hint in the user's freeform query and surface it as
+// a structured field so the iOS / web preview can pre-fill the log
+// input. The PER-SERVING baseline (serving_description, serving_grams,
+// macros) is unchanged — clients multiply the per-serving values by
+// (parsed_quantity_g / serving_grams) or by parsed_quantity_servings
+// when logging.
+const PARSED_QUANTITY_RULES = `
+Parsing quantity hints in the query (CRITICAL):
+- If the user's query contains a quantity hint, return it as parsed_quantity_g (grams) OR parsed_quantity_servings (multiple of one serving). Pick whichever the hint most naturally maps to. Leave both null when the query is a bare food name.
+- "15g butter" → parsed_quantity_g: 15
+- "1 tbsp olive oil" → parsed_quantity_g: 14 (1 tbsp ≈ 14g for oils/butter; ≈ 21g for syrup; ≈ 13g for honey — pick the per-substance value)
+- "2 tablespoons peanut butter" → parsed_quantity_g: 32 (2 × 16g)
+- "6 oz steak" → parsed_quantity_g: 170 (6 × 28.3495, rounded)
+- "100g chicken" → parsed_quantity_g: 100
+- "half avocado" / "1/2 avocado" / "0.5 avocado" → parsed_quantity_servings: 0.5
+- "quarter cup rice" / "1/4 cup rice" → parsed_quantity_servings: 0.25 (assuming the chosen serving IS 1 cup)
+- "two slices toast" / "2 slices of toast" → parsed_quantity_servings: 2
+- "3 eggs" / "three eggs" → parsed_quantity_servings: 3
+- "1.5 bananas" → parsed_quantity_servings: 1.5
+- "a banana" / "one banana" / bare "banana" → parsed_quantity_servings: null (default to 1 serving)
+- Range like "1-2 slices" → skip (return null for both)
+- Both fields are NUMBERS or null. Never both set; prefer parsed_quantity_g when grams/oz/lbs/tbsp/tsp/cup are explicit; prefer parsed_quantity_servings for natural-piece counts.
+- For multi-candidate results: parse the quantity ONCE on the envelope (not per candidate) — the user's quantity applies to whichever candidate they pick.`
+
+// Pick the SMALLEST REASONABLE serving someone might consume in a single
+// meal/snack — never the wholesale package size. The user logs once and
+// then enters how many of that natural unit they had; if the unit is
+// huge (e.g. "1 cup of butter = 227g"), 15g of butter rounds to 0.066
+// servings and the input becomes unusable.
+//
+// Rule of thumb by category:
+//   - Fats / oils / butter / spreads → 1 tablespoon (~14g)
+//   - Condiments / sauces / honey / syrup / nut butters → 1 tbsp
+//   - Heavy cream / half-and-half → 1 tbsp
+//   - Sliced bread → 1 slice (~30g)
+//   - Cheese → 1 oz (~28g) or 1 slice
+//   - Nuts → 1 oz (~28g) (note approximate count, e.g. "~23 almonds")
+//   - Cooked rice / cooked pasta → 1 cup
+//   - DRY pasta → 2 oz (~57g)
+//   - Whole produce → the natural piece (1 medium banana, 1 large egg, 1 medium avocado)
+//   - Beverages → 1 cup (~240 ml) or 1 can
+//   - Meat / fish / poultry → 4 oz (~113g) cooked
+const NATURAL_SERVING_RULES = `
+Picking the natural single serving (CRITICAL — don't skip):
+- Choose the SMALLEST REASONABLE serving someone might eat at one sitting, NOT the wholesale package size.
+- Fats / oils / butter / mayonnaise / nut butter / syrup / honey / heavy cream → "1 tablespoon (~14-21g)"
+- Bread → "1 slice (~30g)" (NOT a loaf)
+- Cheese → "1 oz (~28g)" or "1 slice" (NOT a block or pound)
+- Nuts → "1 oz (~28g) (~23 almonds)" or similar count (NOT a cup)
+- Cooked rice / pasta → "1 cup (~150-195g)"
+- DRY pasta → "2 oz (~57g)" (NOT a pound or box)
+- Whole produce → the piece itself: "1 medium banana, ~118g", "1 large egg (~50g)", "1 medium avocado, ~150g"
+- Meat / fish / poultry → "4 oz (~113g) cooked"
+- Beverages → "1 cup (~240ml)" or "1 can (~355ml)"
+- Specific branded products → use the manufacturer's printed serving size
+Test: if 1 tbsp / 1 slice / 1 piece of the food is something a normal person might consume at once, use THAT. Never pick a unit so large that 15g of the food works out to a tiny fraction of a serving.`
 
 // Full analysis prompt — always returns macros + ingredients in one call
 const FULL_ANALYSIS_PROMPT = `Respond ONLY with a JSON object, no markdown, no explanation. Format:
@@ -318,6 +375,7 @@ Rules for serving fields:
 - serving_description MUST be a clear, human-readable single-serving unit (e.g. "1 cup, ~240g", "1 slice (~120g)", "1 medium bowl, ~350g"). Always include an approximate gram weight.
 - serving_grams must be a NUMBER. serving_oz = serving_grams / 28.3495, one decimal.
 - All macro fields above are PER SERVING (one of "servings"), matching the gram weight in serving_description. Do not return per-100g or whole-recipe totals.
+${NATURAL_SERVING_RULES}
 ${FULL_LABEL_RULES}`
 
 // Planner/simple prompt — just macros, no ingredients needed.
@@ -326,14 +384,15 @@ ${FULL_LABEL_RULES}`
 // an avocado"), still return per-1-serving macros — the client applies
 // any servings_consumed multiplier on top.
 const MACROS_ONLY_PROMPT = `Respond ONLY with a JSON object, no markdown, no explanation. Format:
-{"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g' or '1 slice of bread, ~30g' or '1 cup cooked rice, ~195g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,${FULL_LABEL_FIELDS}"confidence":"low|medium|high"}
+{"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g' or '1 slice of bread, ~30g' or '1 cup cooked rice, ~195g'","serving_grams":number,"serving_oz":number,"parsed_quantity_g":number|null,"parsed_quantity_servings":number|null,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,${FULL_LABEL_FIELDS}"confidence":"low|medium|high"}
 
 Rules for serving fields:
-- serving_description MUST be a clear, human-readable single-serving unit. Prefer natural units (1 medium avocado, 1 large banana, 1 slice of toast, 1 large egg, 1 cup cooked rice). Always include an approximate gram weight in parentheses or after a comma — e.g. "1 medium avocado, ~150g" or "1 slice of toast (~30g)".
+- serving_description MUST be a clear, human-readable single-serving unit. Always include an approximate gram weight in parentheses or after a comma — e.g. "1 medium avocado, ~150g" or "1 slice of toast (~30g)".
 - serving_grams must be a NUMBER (the same gram weight referenced in serving_description). serving_oz = serving_grams / 28.3495, rounded to one decimal.
 - All macro fields (calories/protein/carbs/fat/fiber/sugar) MUST be the values FOR ONE serving as defined above — NOT per-100g, NOT total amount the user might eat.
 - If the user describes a fraction or multiple ("half an avocado", "two slices of toast"), still return macros for ONE single natural serving and let the client apply the multiplier.
-- For foods with no natural unit (rice, pasta, oats, sauces), default to "1 cup cooked, ~Xg" or "100g" with macros for that amount.
+${NATURAL_SERVING_RULES}
+${PARSED_QUANTITY_RULES}
 ${FULL_LABEL_RULES}`
 
 // ─── Food analysis (always returns ingredients) ───────────────────────────────
@@ -427,14 +486,18 @@ export async function analyzePlannerDescription(description) {
 // shape MACROS_ONLY_PROMPT defines, so consumers that already know how
 // to render one result can render any one of these unchanged.
 const CANDIDATES_PROMPT = `Respond ONLY with a JSON object, no markdown, no explanation. Format:
-{"candidates":[{"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"confidence":"low|medium|high"}]}
+{"parsed_quantity_g":number|null,"parsed_quantity_servings":number|null,"candidates":[{"name":"food name","serving_description":"plain-language unit, e.g. '1 medium avocado, ~150g'","serving_grams":number,"serving_oz":number,"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"sugar":number,"confidence":"low|medium|high"}]}
 
 Return between 1 and 10 candidates ranked by relevance (best first).
-- For ambiguous generic queries ("banana", "avocado", "pizza"), return 3-7 distinct serving sizes / variants the user might mean (small / medium / large / cup / slice / etc).
+- For UNAMBIGUOUS generic queries ("butter", "olive oil", "milk"), return ONE candidate with the natural single-serving unit (see rules below). Multi-result picker is for genuinely ambiguous queries only.
+- For genuinely ambiguous generic queries ("banana", "avocado", "pizza"), return 3-5 distinct natural serving sizes (small / medium / large piece, etc) — NOT wholesale variants.
 - For specific branded queries ("McDonald's Big Mac", "Quest Cookies & Cream protein bar"), a SINGLE candidate is fine.
 - Each candidate's macros are FOR ONE serving as defined in its own serving_description (NOT per-100g). serving_grams is a NUMBER. serving_oz = serving_grams / 28.3495, one decimal.
 - serving_description MUST always include an approximate gram weight.
-- Sort by descending confidence.`
+- Sort by descending confidence.
+- parsed_quantity_g / parsed_quantity_servings live on the ENVELOPE (not per candidate) — the user's quantity hint applies to whichever candidate they pick.
+${NATURAL_SERVING_RULES}
+${PARSED_QUANTITY_RULES}`
 
 export async function describeFoodCandidates(description) {
   const data = await callProxy('planner', [{
@@ -448,9 +511,25 @@ ${CANDIDATES_PROMPT}`
   const parsed = parseJSON(data)
   // Defensive: model occasionally wraps a single result in {name,...}
   // instead of {candidates:[...]}. Coerce so callers get a uniform shape.
-  if (Array.isArray(parsed?.candidates)) return parsed
-  if (parsed?.name) return { candidates: [parsed] }
-  return { candidates: [] }
+  // Envelope-level parsed_quantity_g / parsed_quantity_servings pass
+  // through unchanged when present; the bare-result fallback also
+  // forwards parsed quantity from the candidate itself if it leaked
+  // there (model sometimes nests instead of putting on envelope).
+  if (Array.isArray(parsed?.candidates)) {
+    return {
+      candidates: parsed.candidates,
+      parsed_quantity_g: parsed.parsed_quantity_g ?? null,
+      parsed_quantity_servings: parsed.parsed_quantity_servings ?? null,
+    }
+  }
+  if (parsed?.name) {
+    return {
+      candidates: [parsed],
+      parsed_quantity_g: parsed.parsed_quantity_g ?? null,
+      parsed_quantity_servings: parsed.parsed_quantity_servings ?? null,
+    }
+  }
+  return { candidates: [], parsed_quantity_g: null, parsed_quantity_servings: null }
 }
 
 // ─── Recipe-specific AI calls ─────────────────────────────────────────────────
@@ -512,6 +591,8 @@ Respond ONLY with a JSON object, no markdown:
   "serving_description": "plain-language single-serving unit with grams, e.g. '1 medium avocado, ~150g' or '1 slice of toast (~30g)' or '1 large egg (~50g)' or '1 cup cooked rice, ~195g'",
   "serving_grams": number,
   "serving_oz": number,
+  "parsed_quantity_g": number|null,
+  "parsed_quantity_servings": number|null,
   "calories": number,
   "protein": number,
   "carbs": number,
@@ -529,6 +610,8 @@ Rules:
 - serving_grams is a NUMBER (not a string). serving_oz = serving_grams / 28.3495, one decimal.
 - Macros are FOR ONE serving as defined above (NOT per-100g, NOT for any fractional amount the user described).
 - If user said "half an avocado", still return per-1-medium-avocado macros — the client applies the 0.5 multiplier.
+${NATURAL_SERVING_RULES}
+${PARSED_QUANTITY_RULES}
 ${FULL_LABEL_RULES}`
   }], { max_tokens: 800, action: 'analyze_food_item' })
   return parseJSON(data)
@@ -739,6 +822,9 @@ Respond ONLY with a JSON object, no markdown:
   "name": "product name if visible, else 'Food Item'",
   "brand": "brand name if visible or empty string",
   "serving_size": "serving size as printed",
+  "serving_description": "same as serving_size — the manufacturer's printed serving (e.g. '2 tbsp (28g)' or '1 bar (40g)'). Do NOT override the label.",
+  "serving_grams": number,
+  "serving_oz": number,
   "calories": number,
   "protein": number,
   "carbs": number,
@@ -751,9 +837,11 @@ Respond ONLY with a JSON object, no markdown:
   "notes": "any values that were unclear"
 }
 ${FULL_LABEL_RULES}
+- serving_description and serving_grams come straight from the printed label — do NOT pick a "natural" serving here, the label IS the source of truth.
 - If the label shows "Trans Fat 0g", record 0 (not null) — that IS visible information.
 - "Includes Xg Added Sugars" → sugar_added_g. "Total Sugars" → sugar_total_g.
-- Cholesterol on US labels is in mg. Vitamin D is usually mcg (sometimes IU — convert IU→mcg by dividing by 40).` }
+- Cholesterol on US labels is in mg. Vitamin D is usually mcg (sometimes IU — convert IU→mcg by dividing by 40).
+- serving_oz = serving_grams / 28.3495, one decimal.` }
     ]
   }], { max_tokens: 900, action: 'analyze_nutrition_label' })
   return parseJSON(data)
@@ -893,7 +981,7 @@ Return ONLY this JSON (no markdown):
 // pass, then re-sums.
 //
 // Cost optimization: we only send names + units, not full recipe text
-// or amounts. Token-light. ~3-5 AI Bucks per call typical.
+// or amounts. Token-light. ~3-5 Computer Calories per call typical.
 //
 // Returns: { synonyms: [{from: "...", to: "..."}, ...] }
 // 'from' is the variant name to replace; 'to' is the canonical name to
