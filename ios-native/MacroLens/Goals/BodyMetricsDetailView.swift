@@ -42,6 +42,7 @@ struct BodyMetricsDetailView: View {
 
     @State private var saving = false
     @State private var errorMsg: String?
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -72,6 +73,14 @@ struct BodyMetricsDetailView: View {
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Body metrics")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if keyboardFocused {
+                    Button("Done") { keyboardFocused = false }
+                }
+            }
+        }
         .onAppear { hydrate() }
     }
 
@@ -107,6 +116,7 @@ struct BodyMetricsDetailView: View {
                 fieldLabeled("Age") {
                     TextField("30", text: $ageStr)
                         .keyboardType(.numberPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
             }
@@ -124,17 +134,20 @@ struct BodyMetricsDetailView: View {
                     fieldLabeled("Height (ft)") {
                         TextField("5", text: $heightFtStr)
                             .keyboardType(.numberPad)
+                            .focused($keyboardFocused)
                             .textInputField()
                     }
                     fieldLabeled("Height (in)") {
                         TextField("10", text: $heightInStr)
                             .keyboardType(.decimalPad)
+                            .focused($keyboardFocused)
                             .textInputField()
                     }
                 }
                 fieldLabeled("Current weight (lbs)") {
                     TextField("175", text: $weightStr)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
             } else {
@@ -142,11 +155,13 @@ struct BodyMetricsDetailView: View {
                     fieldLabeled("Height (cm)") {
                         TextField("175", text: $heightCmStr)
                             .keyboardType(.decimalPad)
+                            .focused($keyboardFocused)
                             .textInputField()
                     }
                     fieldLabeled("Weight (kg)") {
                         TextField("80", text: $weightStr)
                             .keyboardType(.decimalPad)
+                            .focused($keyboardFocused)
                             .textInputField()
                     }
                 }
@@ -164,11 +179,13 @@ struct BodyMetricsDetailView: View {
                 fieldLabeled("Body fat %") {
                     TextField("17", text: $bodyFatStr)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
                 fieldLabeled(isImperial ? "Muscle (lbs)" : "Muscle (kg)") {
                     TextField(isImperial ? "100" : "45", text: $muscleStr)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
             }

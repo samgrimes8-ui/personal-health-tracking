@@ -52,6 +52,7 @@ struct DailyTargetsDetailView: View {
     @State private var showMethodology: Bool = false
     @State private var saving = false
     @State private var errorMsg: String?
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -81,6 +82,14 @@ struct DailyTargetsDetailView: View {
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Daily targets")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if keyboardFocused {
+                    Button("Done") { keyboardFocused = false }
+                }
+            }
+        }
         .onAppear { hydrate() }
         .sheet(isPresented: $showMethodology) {
             MethodologySheet()
@@ -149,11 +158,13 @@ struct DailyTargetsDetailView: View {
                 fieldLabeled("Goal weight (lbs)") {
                     TextField(direction == "gain" ? "180" : "165", text: $goalWeightLbs)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
                 fieldLabeled("Goal body fat %") {
                     TextField("15", text: $goalBodyFat)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
             }
@@ -297,6 +308,7 @@ struct DailyTargetsDetailView: View {
                 .foregroundStyle(Theme.text3)
             TextField(placeholder, text: text)
                 .keyboardType(.decimalPad)
+                .focused($keyboardFocused)
                 .textInputField()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -363,6 +375,7 @@ struct DailyTargetsDetailView: View {
             }
             TextField("0", text: text)
                 .keyboardType(.numberPad)
+                .focused($keyboardFocused)
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(Theme.bg3, in: .rect(cornerRadius: 8))
                 .overlay(

@@ -20,6 +20,7 @@ struct FoodsView: View {
     @State private var creatingNew: Bool = false
     @State private var quickLogTarget: FoodItemRow?
     @State private var toast: String?
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -43,6 +44,14 @@ struct FoodsView: View {
         .task { await state.loadFoods() }
         .navigationTitle("My Foods")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if searchFocused {
+                    Button("Done") { searchFocused = false }
+                }
+            }
+        }
         .sheet(isPresented: $creatingNew) {
             FoodEditorView(item: nil)
                 .environment(state)
@@ -110,6 +119,9 @@ struct FoodsView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text3)
                 TextField("Search foods by name, brand, or component…", text: $search)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .onSubmit { searchFocused = false }
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.text)
                     .autocorrectionDisabled()

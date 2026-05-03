@@ -47,6 +47,7 @@ struct RecipesView: View {
     /// session via .task; mutations write through both this @State and
     /// the user_profiles row.
     @State private var savedTagOrder: [String] = []
+    @FocusState private var searchFocused: Bool
 
     enum PresentedRecipe: Identifiable {
         case viewExisting(RecipeFull)
@@ -76,8 +77,17 @@ struct RecipesView: View {
             .padding(.bottom, 40)
         }
         .background(Theme.bg)
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Recipes")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if searchFocused {
+                    Button("Done") { searchFocused = false }
+                }
+            }
+        }
         .refreshable { await refresh() }
         .task {
             if library.isEmpty { await refresh() }
@@ -248,9 +258,11 @@ struct RecipesView: View {
                         .foregroundStyle(Theme.text3)
                     TextField("Search recipes by name or ingredient",
                               text: $searchText)
+                        .focused($searchFocused)
                         .font(.system(size: 14))
                         .foregroundStyle(Theme.text)
                         .submitLabel(.search)
+                        .onSubmit { searchFocused = false }
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                     if !searchText.isEmpty {

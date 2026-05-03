@@ -43,6 +43,7 @@ struct AddPlannerMealSheet: View {
 
     @State private var saving = false
     @State private var errorMsg: String?
+    @FocusState private var keyboardFocused: Bool
 
     private var dateString: String { PlannerDateMath.addDays(weekStart, dayIndex) }
 
@@ -76,6 +77,7 @@ struct AddPlannerMealSheet: View {
             }
             .navigationTitle("Add to \(slot.label)")
             .navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
@@ -84,6 +86,12 @@ struct AddPlannerMealSheet: View {
                     Button(saving ? "Saving…" : "Save") { Task { await save() } }
                         .disabled(saving || !canSave)
                         .fontWeight(.semibold)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
             .alert("Couldn't save", isPresented: Binding(
@@ -104,6 +112,9 @@ struct AddPlannerMealSheet: View {
         Section("Recipe") {
             TextField("Search recipes", text: $search)
                 .textInputAutocapitalization(.never)
+                .focused($keyboardFocused)
+                .submitLabel(.search)
+                .onSubmit { keyboardFocused = false }
             if filteredRecipes.isEmpty {
                 Text(state.recipesFull.isEmpty ? "No recipes saved yet." : "No matches for \"\(search)\".")
                     .font(.system(size: 13))
@@ -138,6 +149,7 @@ struct AddPlannerMealSheet: View {
                     TextField("1", text: $plannedServings)
                         .multilineTextAlignment(.trailing)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .frame(width: 80)
                 }
             }
@@ -147,21 +159,22 @@ struct AddPlannerMealSheet: View {
     private var adHocSection: some View {
         Section("Meal") {
             TextField("Name (e.g. Greek salad)", text: $name)
+                .focused($keyboardFocused)
             HStack {
                 Text("Calories"); Spacer()
-                TextField("0", text: $calories).multilineTextAlignment(.trailing).keyboardType(.numberPad).frame(width: 80)
+                TextField("0", text: $calories).multilineTextAlignment(.trailing).keyboardType(.numberPad).focused($keyboardFocused).frame(width: 80)
             }
             HStack {
                 Text("Protein (g)"); Spacer()
-                TextField("0", text: $protein).multilineTextAlignment(.trailing).keyboardType(.numberPad).frame(width: 80)
+                TextField("0", text: $protein).multilineTextAlignment(.trailing).keyboardType(.numberPad).focused($keyboardFocused).frame(width: 80)
             }
             HStack {
                 Text("Carbs (g)"); Spacer()
-                TextField("0", text: $carbs).multilineTextAlignment(.trailing).keyboardType(.numberPad).frame(width: 80)
+                TextField("0", text: $carbs).multilineTextAlignment(.trailing).keyboardType(.numberPad).focused($keyboardFocused).frame(width: 80)
             }
             HStack {
                 Text("Fat (g)"); Spacer()
-                TextField("0", text: $fat).multilineTextAlignment(.trailing).keyboardType(.numberPad).frame(width: 80)
+                TextField("0", text: $fat).multilineTextAlignment(.trailing).keyboardType(.numberPad).focused($keyboardFocused).frame(width: 80)
             }
         }
     }
@@ -263,12 +276,14 @@ struct EditPlannerMealSheet: View {
     @State private var plannedServings: String = ""
     @State private var saving = false
     @State private var errorMsg: String?
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Meal") {
                     TextField("Name", text: $name)
+                        .focused($keyboardFocused)
                     Picker("Slot", selection: $slot) {
                         ForEach(PlannerMealSlot.allCases) { Text($0.label).tag($0) }
                     }
@@ -276,19 +291,19 @@ struct EditPlannerMealSheet: View {
                 Section("Macros") {
                     HStack {
                         Text("Calories"); Spacer()
-                        TextField("0", text: $calories).multilineTextAlignment(.trailing).keyboardType(.numberPad).frame(width: 80)
+                        TextField("0", text: $calories).multilineTextAlignment(.trailing).keyboardType(.numberPad).focused($keyboardFocused).frame(width: 80)
                     }
                     HStack {
                         Text("Protein (g)"); Spacer()
-                        TextField("0", text: $protein).multilineTextAlignment(.trailing).keyboardType(.numberPad).frame(width: 80)
+                        TextField("0", text: $protein).multilineTextAlignment(.trailing).keyboardType(.numberPad).focused($keyboardFocused).frame(width: 80)
                     }
                     HStack {
                         Text("Carbs (g)"); Spacer()
-                        TextField("0", text: $carbs).multilineTextAlignment(.trailing).keyboardType(.numberPad).frame(width: 80)
+                        TextField("0", text: $carbs).multilineTextAlignment(.trailing).keyboardType(.numberPad).focused($keyboardFocused).frame(width: 80)
                     }
                     HStack {
                         Text("Fat (g)"); Spacer()
-                        TextField("0", text: $fat).multilineTextAlignment(.trailing).keyboardType(.numberPad).frame(width: 80)
+                        TextField("0", text: $fat).multilineTextAlignment(.trailing).keyboardType(.numberPad).focused($keyboardFocused).frame(width: 80)
                     }
                 }
                 Section {
@@ -299,6 +314,7 @@ struct EditPlannerMealSheet: View {
                             TextField("1", text: $plannedServings)
                                 .multilineTextAlignment(.trailing)
                                 .keyboardType(.decimalPad)
+                                .focused($keyboardFocused)
                                 .frame(width: 80)
                         }
                     }
@@ -306,6 +322,7 @@ struct EditPlannerMealSheet: View {
             }
             .navigationTitle("Edit meal")
             .navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
@@ -314,6 +331,12 @@ struct EditPlannerMealSheet: View {
                     Button(saving ? "Saving…" : "Save") { Task { await save() } }
                         .disabled(saving)
                         .fontWeight(.semibold)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
             .alert("Couldn't save", isPresented: Binding(

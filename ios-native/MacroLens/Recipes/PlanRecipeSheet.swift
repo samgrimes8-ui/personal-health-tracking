@@ -26,6 +26,7 @@ struct PlanRecipeSheet: View {
     @State private var cookOnceOpen: Bool = false
     @State private var saving = false
     @State private var saveError: String?
+    @FocusState private var keyboardFocused: Bool
 
     init(recipe: RecipeFull, onPlanned: @escaping () -> Void) {
         self.recipe = recipe
@@ -57,11 +58,18 @@ struct PlanRecipeSheet: View {
                 .padding(.top, 12)
             }
             .background(Theme.bg)
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Add to meal plan")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
         }
@@ -213,6 +221,7 @@ struct PlanRecipeSheet: View {
                 .foregroundStyle(Theme.text2)
             TextField("4", value: $plannedServings, format: .number)
                 .keyboardType(.decimalPad)
+                .focused($keyboardFocused)
                 .frame(width: 70)
                 .padding(.horizontal, 8).padding(.vertical, 6)
                 .background(Theme.bg3, in: .rect(cornerRadius: 6))

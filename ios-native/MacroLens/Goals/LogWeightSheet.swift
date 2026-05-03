@@ -37,6 +37,7 @@ struct LogWeightSheet: View {
     @State private var scanExtract: BodyScanExtract?
     @State private var extracting: Bool = false
     @State private var scanStatus: String?
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -105,6 +106,12 @@ struct LogWeightSheet: View {
                     Button("×") { dismiss() }
                         .font(.system(size: 22))
                         .foregroundStyle(Theme.text3)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
             .onAppear { hydrateFromEditing() }
@@ -242,6 +249,7 @@ struct LogWeightSheet: View {
                 fieldLabeled("Weight (lbs)") {
                     TextField("210", text: $weightLbs)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
                 fieldLabeled("Date") {
@@ -277,11 +285,13 @@ struct LogWeightSheet: View {
                 fieldLabeled("Body fat %") {
                     TextField("17", text: $bodyFatPct)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
                 fieldLabeled("Muscle (lbs)") {
                     TextField("101", text: $muscleLbs)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
             }
@@ -299,6 +309,7 @@ struct LogWeightSheet: View {
                 .foregroundStyle(Theme.text3)
             TextField("How are you feeling? Energy, sleep, stress…", text: $notes, axis: .vertical)
                 .lineLimit(2...4)
+                .focused($keyboardFocused)
                 .textInputField()
         }
     }

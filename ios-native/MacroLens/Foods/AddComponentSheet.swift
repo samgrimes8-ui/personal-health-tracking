@@ -60,6 +60,7 @@ struct AddComponentSheet: View {
 
     @State private var working: Bool = false
     @State private var errorMsg: String?
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -99,6 +100,12 @@ struct AddComponentSheet: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
                         .foregroundStyle(Theme.text3)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
             .fullScreenCover(isPresented: $showLiveScanner) {
@@ -154,6 +161,7 @@ struct AddComponentSheet: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text3)
             TextField("e.g. 2 cups whole milk, 1 scoop vanilla whey…", text: $describeText, axis: .vertical)
+                .focused($keyboardFocused)
                 .lineLimit(2...4)
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(Theme.bg3, in: .rect(cornerRadius: 10))
@@ -212,6 +220,7 @@ struct AddComponentSheet: View {
             HStack(spacing: 8) {
                 TextField("e.g. 0123456789012", text: $manualUPC)
                     .keyboardType(.numberPad)
+                    .focused($keyboardFocused)
                     .textInputField()
                 Button {
                     Task { await lookupBarcode(manualUPC) }
@@ -245,6 +254,7 @@ struct AddComponentSheet: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.text3)
             TextField("Component name", text: $manualName)
+                .focused($keyboardFocused)
                 .textInputField()
             HStack(spacing: 8) {
                 manualMacro("Calories", text: $manualCal)
@@ -281,6 +291,7 @@ struct AddComponentSheet: View {
                 .foregroundStyle(Theme.text3)
             TextField("0", text: text)
                 .keyboardType(.decimalPad)
+                .focused($keyboardFocused)
                 .textInputField()
         }
         .frame(maxWidth: .infinity)
@@ -330,6 +341,7 @@ struct AddComponentSheet: View {
                         .foregroundStyle(Theme.text3)
                     TextField("1", text: $pendingQty)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
                 .frame(width: 100)
@@ -340,6 +352,7 @@ struct AddComponentSheet: View {
                         .textCase(.uppercase)
                         .foregroundStyle(Theme.text3)
                     TextField("serving", text: $pendingUnit)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
             }

@@ -25,6 +25,7 @@ struct ProvidersView: View {
     @State private var search: String = ""
     @State private var selected: ProviderRow?
     @State private var showChannelSheet = false
+    @FocusState private var searchFocused: Bool
 
     private var currentUserId: String? {
         state.profile?.user_id
@@ -126,6 +127,14 @@ struct ProvidersView: View {
         .task { await state.providersLoadImpl() }
         .navigationTitle("Providers")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if searchFocused {
+                    Button("Done") { searchFocused = false }
+                }
+            }
+        }
         .sheet(item: $selected) { provider in
             NavigationStack {
                 ProviderDetailView(provider: provider)
@@ -160,6 +169,9 @@ struct ProvidersView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.text3)
             TextField("Search providers by name or specialty…", text: $search)
+                .focused($searchFocused)
+                .submitLabel(.search)
+                .onSubmit { searchFocused = false }
                 .font(.system(size: 14))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

@@ -538,6 +538,7 @@ private struct EditMealSheet: View {
     @State private var deleting = false
     @State private var errorMessage: String?
     @State private var showingDeleteConfirm = false
+    @FocusState private var keyboardFocused: Bool
 
     private let baseCalories: Double
     private let baseProtein: Double
@@ -598,6 +599,7 @@ private struct EditMealSheet: View {
             Form {
                 Section("Name") {
                     TextField("Meal name", text: $name)
+                        .focused($keyboardFocused)
                         .autocorrectionDisabled()
                 }
 
@@ -633,6 +635,7 @@ private struct EditMealSheet: View {
                         Spacer()
                         TextField("1.0", value: $servings, format: .number.precision(.fractionLength(0...2)))
                             .keyboardType(.decimalPad)
+                            .focused($keyboardFocused)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 90)
                             .onChange(of: servings) { _, new in
@@ -680,6 +683,7 @@ private struct EditMealSheet: View {
             }
             .navigationTitle("Edit meal")
             .navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -688,6 +692,12 @@ private struct EditMealSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(saving ? "Saving…" : "Save") { Task { await save() } }
                         .disabled(saving || deleting || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
             .confirmationDialog("Delete this entry?",
@@ -705,6 +715,7 @@ private struct EditMealSheet: View {
             Spacer()
             TextField("0", value: value, format: .number.precision(.fractionLength(0...1)))
                 .keyboardType(.decimalPad)
+                .focused($keyboardFocused)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)
             Text(suffix).foregroundStyle(Theme.text3).font(.system(size: 13))

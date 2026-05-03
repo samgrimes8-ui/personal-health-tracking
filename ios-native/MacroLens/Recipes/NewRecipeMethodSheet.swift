@@ -137,6 +137,7 @@ struct NewRecipeLinkPath: View {
     @State private var dishName: String = ""
     @State private var importing: Bool = false
     @State private var error: String?
+    @FocusState private var keyboardFocused: Bool
 
     private var blockedPlatform: String? {
         let lower = url.lowercased()
@@ -154,6 +155,7 @@ struct NewRecipeLinkPath: View {
 
                 fieldLabel("URL")
                 TextField("https://...", text: $url)
+                    .focused($keyboardFocused)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -167,6 +169,7 @@ struct NewRecipeLinkPath: View {
 
                 fieldLabel("Or describe the dish")
                 TextField("e.g. Chicken tikka masala…", text: $dishName)
+                    .focused($keyboardFocused)
                     .textInputAutocapitalization(.sentences)
                     .padding(12)
                     .background(Theme.bg3, in: .rect(cornerRadius: 10))
@@ -197,8 +200,17 @@ struct NewRecipeLinkPath: View {
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Paste a link")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if keyboardFocused {
+                    Button("Done") { keyboardFocused = false }
+                }
+            }
+        }
     }
 
     private var canSubmit: Bool {
@@ -411,6 +423,7 @@ struct NewRecipeManualPath: View {
     @State private var pasted: String = ""
     @State private var parsing: Bool = false
     @State private var error: String?
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -421,6 +434,7 @@ struct NewRecipeManualPath: View {
 
                 fieldLabel("Paste ingredients (optional)")
                 TextEditor(text: $pasted)
+                    .focused($keyboardFocused)
                     .font(.system(size: 13))
                     .frame(minHeight: 200)
                     .padding(8)
@@ -476,8 +490,17 @@ struct NewRecipeManualPath: View {
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Add manually")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if keyboardFocused {
+                    Button("Done") { keyboardFocused = false }
+                }
+            }
+        }
     }
 
     private func fieldLabel(_ s: String) -> some View {
@@ -520,6 +543,7 @@ struct NewRecipeGeneratePath: View {
     @State private var prompt: String = ""
     @State private var generating: Bool = false
     @State private var error: String?
+    @FocusState private var keyboardFocused: Bool
 
     private let chips: [String] = [
         "🍗 High protein",
@@ -539,6 +563,7 @@ struct NewRecipeGeneratePath: View {
 
                 fieldLabel("What are you working with?")
                 TextEditor(text: $prompt)
+                    .focused($keyboardFocused)
                     .font(.system(size: 13))
                     .frame(minHeight: 140)
                     .padding(8)
@@ -597,8 +622,17 @@ struct NewRecipeGeneratePath: View {
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Generate a recipe")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if keyboardFocused {
+                    Button("Done") { keyboardFocused = false }
+                }
+            }
+        }
     }
 
     private var canSubmit: Bool {

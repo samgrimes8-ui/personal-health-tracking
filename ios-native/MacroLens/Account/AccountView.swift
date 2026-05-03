@@ -24,6 +24,7 @@ struct AccountView: View {
     @State private var trackingFullLabel: Bool = false
     @State private var fullLabelSaving: Bool = false
     @State private var fullLabelError: String?
+    @FocusState private var deleteFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -56,6 +57,14 @@ struct AccountView: View {
         }
         .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if deleteFocused {
+                    Button("Done") { deleteFocused = false }
+                }
+            }
+        }
     }
 
     // MARK: - Profile
@@ -598,6 +607,9 @@ struct AccountView: View {
                     .foregroundStyle(Theme.text2)
             }
             TextField("DELETE", text: $deleteText)
+                .focused($deleteFocused)
+                .submitLabel(.done)
+                .onSubmit { deleteFocused = false }
                 .textInputAutocapitalization(.characters)
                 .autocorrectionDisabled()
                 .font(.system(size: 14, weight: .medium))

@@ -18,6 +18,7 @@ struct EditChannelSheet: View {
     @State private var bio: String = ""
     @State private var saving: Bool = false
     @State private var saveError: String?
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -62,12 +63,19 @@ struct EditChannelSheet: View {
                 .padding(.bottom, 40)
             }
             .background(Theme.bg)
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("My channel")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
                         .foregroundStyle(Theme.text3)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
             .onAppear { hydrate() }
@@ -96,6 +104,7 @@ struct EditChannelSheet: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.text2)
             TextField(placeholder, text: text)
+                .focused($keyboardFocused)
                 .font(.system(size: 14))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
@@ -113,6 +122,7 @@ struct EditChannelSheet: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.text2)
             TextEditor(text: $bio)
+                .focused($keyboardFocused)
                 .font(.system(size: 14))
                 .frame(minHeight: 100)
                 .padding(8)

@@ -23,6 +23,7 @@ struct EditComponentSheet: View {
     @State private var baseF: Double = 0
     @State private var baseFiber: Double = 0
     @State private var baseSugar: Double = 0
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -44,6 +45,12 @@ struct EditComponentSheet: View {
                     Button("Cancel") { dismiss() }
                         .foregroundStyle(Theme.text3)
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
+                }
             }
             .onAppear { hydrate() }
         }
@@ -60,6 +67,7 @@ struct EditComponentSheet: View {
                 .textCase(.uppercase)
                 .foregroundStyle(Theme.text3)
             TextField("Component name", text: $name)
+                .focused($keyboardFocused)
                 .textInputField()
         }
         .padding(14)
@@ -81,6 +89,7 @@ struct EditComponentSheet: View {
                         .foregroundStyle(Theme.text3)
                     TextField("1", text: $qty)
                         .keyboardType(.decimalPad)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
                 .frame(width: 100)
@@ -91,6 +100,7 @@ struct EditComponentSheet: View {
                         .textCase(.uppercase)
                         .foregroundStyle(Theme.text3)
                     TextField("serving", text: $unit)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
             }

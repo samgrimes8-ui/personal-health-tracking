@@ -21,6 +21,7 @@ struct ShareWeekModal: View {
     @State private var token: String?
     @State private var label: String = ""
     @State private var errorMsg: String?
+    @FocusState private var keyboardFocused: Bool
 
     enum Phase { case ready, minting, done }
 
@@ -43,11 +44,18 @@ struct ShareWeekModal: View {
                 .padding(20)
             }
             .background(Theme.bg)
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Share week")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
             .alert("Couldn't create share", isPresented: Binding(
@@ -85,6 +93,9 @@ struct ShareWeekModal: View {
                     .foregroundStyle(Theme.text2)
                 TextField("e.g. \"High-protein week\"", text: $label)
                     .textFieldStyle(.roundedBorder)
+                    .focused($keyboardFocused)
+                    .submitLabel(.done)
+                    .onSubmit { keyboardFocused = false }
                 Button {
                     Task { await mint() }
                 } label: {

@@ -29,6 +29,7 @@ struct RecipeEditView: View {
 
     @State private var aiBusy: AIBusy?
     @State private var aiError: String?
+    @FocusState private var keyboardFocused: Bool
 
     enum AIBusy: Equatable {
         case estimate, extractIngredients, recalculate
@@ -59,6 +60,7 @@ struct RecipeEditView: View {
             .padding(.bottom, 28)
         }
         .background(Theme.bg)
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle(isNew ? "New recipe" : "Edit recipe")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -74,6 +76,12 @@ struct RecipeEditView: View {
                 }
                 .disabled(saving || trimmed(recipe.name).isEmpty)
                 .foregroundStyle(Theme.accent)
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if keyboardFocused {
+                    Button("Done") { keyboardFocused = false }
+                }
             }
         }
         .sheet(isPresented: $showExtractSheet) {
@@ -126,18 +134,21 @@ struct RecipeEditView: View {
             VStack(alignment: .leading, spacing: 14) {
                 fieldLabel("Name")
                 TextField("e.g. Chicken tacos", text: $recipe.name, axis: .vertical)
+                    .focused($keyboardFocused)
                     .font(.system(size: 17, weight: .semibold, design: .serif))
                     .foregroundStyle(Theme.text)
                     .textInputAutocapitalization(.sentences)
 
                 fieldLabel("Description (optional)")
                 TextField("Brief description...", text: bindingString(\.description), axis: .vertical)
+                    .focused($keyboardFocused)
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.text)
                     .lineLimit(1...4)
 
                 fieldLabel("Source URL (optional)")
                 TextField("https://...", text: bindingString(\.source_url))
+                    .focused($keyboardFocused)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text)
                     .keyboardType(.URL)
@@ -149,6 +160,7 @@ struct RecipeEditView: View {
                         fieldLabel("Servings")
                         TextField("4", value: bindingDouble(\.servings, fallback: 4), format: .number)
                             .keyboardType(.decimalPad)
+                            .focused($keyboardFocused)
                             .padding(.horizontal, 10).padding(.vertical, 8)
                             .background(Theme.bg3, in: .rect(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border2, lineWidth: 1))
@@ -157,6 +169,7 @@ struct RecipeEditView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         fieldLabel("Serving label")
                         TextField("serving / slice / cup", text: bindingString(\.serving_label, fallback: "serving"))
+                            .focused($keyboardFocused)
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.text)
                             .padding(.horizontal, 10).padding(.vertical, 8)
@@ -254,12 +267,14 @@ struct RecipeEditView: View {
     private func ingredientEditRow(idx: Int) -> some View {
         HStack(spacing: 6) {
             TextField("Amt", text: ingredientAmountBinding(idx))
+                .focused($keyboardFocused)
                 .frame(width: 56)
                 .padding(.horizontal, 8).padding(.vertical, 6)
                 .background(Theme.bg3, in: .rect(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border2, lineWidth: 1))
                 .keyboardType(.numbersAndPunctuation)
             TextField("unit", text: ingredientUnitBinding(idx))
+                .focused($keyboardFocused)
                 .frame(width: 56)
                 .padding(.horizontal, 8).padding(.vertical, 6)
                 .background(Theme.bg3, in: .rect(cornerRadius: 6))
@@ -267,6 +282,7 @@ struct RecipeEditView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
             TextField("Ingredient", text: ingredientNameBinding(idx))
+                .focused($keyboardFocused)
                 .padding(.horizontal, 8).padding(.vertical, 6)
                 .background(Theme.bg3, in: .rect(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border2, lineWidth: 1))
@@ -516,6 +532,7 @@ struct RecipeEditView: View {
                 .tracking(0.6).textCase(.uppercase)
                 .foregroundStyle(Theme.text3)
             TextField("0", value: value, format: .number)
+                .focused($keyboardFocused)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(color)
                 .keyboardType(.decimalPad)
@@ -649,10 +666,12 @@ struct RecipeEditView: View {
 private struct CustomTagInput: View {
     let onAdd: (String) -> Void
     @State private var text: String = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: 6) {
             TextField("Create a new tag...", text: $text)
+                .focused($focused)
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.text)
                 .padding(.horizontal, 10).padding(.vertical, 7)
@@ -661,7 +680,7 @@ private struct CustomTagInput: View {
                 .submitLabel(.done)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
-                .onSubmit(commit)
+                .onSubmit { commit(); focused = false }
             Button("+ Add", action: commit)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.text2)

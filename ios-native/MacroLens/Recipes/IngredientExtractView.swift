@@ -24,6 +24,7 @@ struct IngredientExtractView: View {
 
     @State private var working = false
     @State private var error: String?
+    @FocusState private var keyboardFocused: Bool
 
     enum Mode: String, CaseIterable, Identifiable {
         case text = "Text"
@@ -70,11 +71,18 @@ struct IngredientExtractView: View {
             .padding(.top, 12)
         }
         .background(Theme.bg)
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Import recipe")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button("Cancel") { onCancel() }
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if keyboardFocused {
+                    Button("Done") { keyboardFocused = false }
+                }
             }
         }
         .sheet(isPresented: $showCamera) {
@@ -110,6 +118,7 @@ struct IngredientExtractView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.text3)
                 TextEditor(text: $pastedText)
+                    .focused($keyboardFocused)
                     .font(.system(size: 14))
                     .frame(minHeight: 220)
                     .padding(8)

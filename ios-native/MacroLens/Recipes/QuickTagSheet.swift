@@ -22,6 +22,7 @@ struct QuickTagSheet: View {
     @State private var error: String?
     /// Per-tag-key lock so rapid double-taps don't fire overlapping upserts.
     @State private var inFlight: Set<String> = []
+    @FocusState private var keyboardFocused: Bool
 
     init(recipe: RecipeFull,
          knownLibrary: [RecipeFull],
@@ -48,12 +49,19 @@ struct QuickTagSheet: View {
                 .padding(.bottom, 28)
             }
             .background(Theme.bg)
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Tag recipe")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                         .foregroundStyle(Theme.accent)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
         }
@@ -197,10 +205,12 @@ struct QuickTagSheet: View {
 private struct CustomTagInputInline: View {
     let onAdd: (String) -> Void
     @State private var text: String = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: 6) {
             TextField("Create a new tag...", text: $text)
+                .focused($focused)
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.text)
                 .padding(.horizontal, 10).padding(.vertical, 7)
@@ -209,7 +219,7 @@ private struct CustomTagInputInline: View {
                 .submitLabel(.done)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
-                .onSubmit(commit)
+                .onSubmit { commit(); focused = false }
             Button("+ Add", action: commit)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.text2)

@@ -41,6 +41,7 @@ struct FoodEditorView: View {
     @State private var addingComponent = false
     @State private var componentEditingIdx: Int?
     @State private var confirmDelete = false
+    @FocusState private var keyboardFocused: Bool
 
     private var isNew: Bool { item?.id == nil }
     private var hasComponents: Bool { !components.isEmpty }
@@ -73,6 +74,12 @@ struct FoodEditorView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
                         .foregroundStyle(Theme.text3)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    if keyboardFocused {
+                        Button("Done") { keyboardFocused = false }
+                    }
                 }
             }
             .onAppear { hydrate() }
@@ -121,15 +128,18 @@ struct FoodEditorView: View {
         VStack(alignment: .leading, spacing: 12) {
             fieldLabeled("Food name") {
                 TextField("Morning Protein Shake, Greek Yogurt Bowl…", text: $name)
+                    .focused($keyboardFocused)
                     .textInputField()
             }
             HStack(spacing: 10) {
                 fieldLabeled("Brand (optional)") {
                     TextField("Brand name…", text: $brand)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
                 fieldLabeled("Serving size") {
                     TextField("1 shake, 1 cup…", text: $servingSize)
+                        .focused($keyboardFocused)
                         .textInputField()
                 }
             }
@@ -364,6 +374,7 @@ struct FoodEditorView: View {
         } else {
             TextField("0", text: binding)
                 .keyboardType(.decimalPad)
+                .focused($keyboardFocused)
                 .textInputField()
         }
     }

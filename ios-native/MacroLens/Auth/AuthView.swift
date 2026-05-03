@@ -15,6 +15,7 @@ struct AuthView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var success: String?
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -63,6 +64,14 @@ struct AuthView: View {
         }
         .background(Theme.bg)
         .scrollDismissesKeyboard(.interactively)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                if keyboardFocused {
+                    Button("Done") { keyboardFocused = false }
+                }
+            }
+        }
     }
 
     // MARK: - Tab bar
@@ -231,6 +240,7 @@ struct AuthView: View {
                     TextField(placeholder, text: text)
                 }
             }
+            .focused($keyboardFocused)
             .font(.system(size: 14))
             .foregroundStyle(Theme.text)
             .padding(.horizontal, 13).padding(.vertical, 11)
