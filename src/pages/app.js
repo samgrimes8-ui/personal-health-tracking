@@ -1792,14 +1792,17 @@ function renderDashboard(container) {
                 <div style="font-size:13px;color:var(--text2);line-height:1.4;max-width:280px;margin:0 auto">Cookbook page, recipe card, or blog screenshot — AI reads and analyzes it</div>
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+            <!-- Camera-first per the app-wide standard: most users snap
+                 a photo on-device. Camera button is the primary; library
+                 is a small icon-only secondary for screenshots / saved. -->
+            <div style="display:flex;gap:8px;margin-top:8px">
               <button type="button" id="recipe-snap-btn-camera"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
-                📷 Camera
+                style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
+                📷 Take photo
               </button>
-              <button type="button" id="recipe-snap-btn-library"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
-                🖼️ Choose photo
+              <button type="button" id="recipe-snap-btn-library" aria-label="Choose recipe photo from library"
+                style="width:48px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text2);font-size:16px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center">
+                🖼️
               </button>
             </div>
           </div>
@@ -1844,14 +1847,17 @@ function renderDashboard(container) {
                 <div style="font-size:13px;color:var(--text2);line-height:1.4;max-width:280px;margin:0 auto">Barcode, nutrition label, or a meal — we'll figure out what it is</div>
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+            <!-- Camera-first per the app-wide standard: snap-on-device
+                 is the dominant action; library is a small icon-only
+                 secondary for screenshots / saved. -->
+            <div style="display:flex;gap:8px;margin-top:8px">
               <button type="button" id="foodphoto-btn-camera"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
-                📷 Camera
+                style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
+                📷 Take photo
               </button>
-              <button type="button" id="foodphoto-btn-library"
-                style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text);font-size:13px;font-family:inherit;cursor:pointer">
-                🖼️ Choose photo
+              <button type="button" id="foodphoto-btn-library" aria-label="Choose food photo from library"
+                style="width:48px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text2);font-size:16px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center">
+                🖼️
               </button>
             </div>
             <div id="foodphoto-status" style="font-size:12px;color:var(--text3);margin-top:6px;text-align:center;min-height:18px"></div>
@@ -11089,22 +11095,32 @@ function wireGlobals() {
             <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
           </button>
 
-          <!-- Option 2: Photo (camera OR library)
-               Omitting capture= lets iOS/Android show the full picker:
-               Take Photo, Photo Library, Choose File. Previous version
-               forced the camera, which was hostile to users who already
-               had a screenshot/saved image they wanted to use. -->
-          <button onclick="document.getElementById('new-recipe-photo-input').click()"
-            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:10px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
-            onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
-            <div style="width:44px;height:44px;background:color-mix(in srgb, var(--green) 12%, transparent);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">📸</div>
-            <div>
-              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Upload a photo</div>
-              <div style="font-size:12px;color:var(--text3)">Take a new photo or pick a screenshot — cookbook, recipe card, anything</div>
-            </div>
-            <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
-          </button>
-          <input type="file" id="new-recipe-photo-input" accept="image/*" style="display:none"
+          <!-- Option 2: Photo — camera-first per the app-wide standard.
+               Card tap fires the camera input (capture=environment); the
+               small icon next to it opens a library picker for
+               screenshots / saved photos. -->
+          <div style="display:flex;gap:8px;margin-bottom:4px">
+            <button onclick="document.getElementById('new-recipe-photo-camera').click()"
+              style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:16px;display:flex;align-items:center;gap:14px;cursor:pointer;text-align:left;font-family:inherit"
+              onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+              <div style="width:44px;height:44px;background:color-mix(in srgb, var(--green) 12%, transparent);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:22px">📷</div>
+              <div>
+                <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px">Take a photo</div>
+                <div style="font-size:12px;color:var(--text3)">Cookbook page, recipe card — most accurate when shot live</div>
+              </div>
+              <span style="margin-left:auto;color:var(--text3);font-size:18px">›</span>
+            </button>
+            <button onclick="document.getElementById('new-recipe-photo-library').click()"
+              aria-label="Choose recipe photo from library"
+              style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:10px;color:var(--text2);font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit"
+              onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border2)'">
+              🖼️
+            </button>
+          </div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:10px;padding-left:4px">Tap 🖼️ to pick an existing screenshot or saved photo.</div>
+          <input type="file" id="new-recipe-photo-camera" accept="image/*" capture="environment" style="display:none"
+            onchange="openNewRecipeFromPhoto(this.files[0])" />
+          <input type="file" id="new-recipe-photo-library" accept="image/*" style="display:none"
             onchange="openNewRecipeFromPhoto(this.files[0])" />
 
           <!-- Option 3: Manual -->
