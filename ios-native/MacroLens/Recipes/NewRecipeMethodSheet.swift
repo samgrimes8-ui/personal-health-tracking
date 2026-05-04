@@ -303,11 +303,13 @@ struct NewRecipePhotoPath: View {
                         .foregroundStyle(Theme.text3)
                 }
 
+                // Camera-first per the app-wide standard: take a photo
+                // primary, library a small icon-only secondary.
                 HStack(spacing: 8) {
                     Button {
                         showCamera = true
                     } label: {
-                        Label("Camera", systemImage: "camera")
+                        Label("Take photo", systemImage: "camera.fill")
                             .font(.system(size: 13, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
@@ -318,13 +320,14 @@ struct NewRecipePhotoPath: View {
                     PhotosPicker(selection: $photoSelection,
                                  matching: .images,
                                  photoLibrary: .shared()) {
-                        Label("Library", systemImage: "photo.on.rectangle")
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.text2)
+                            .frame(width: 44, height: 38)
                             .background(Theme.bg3, in: .rect(cornerRadius: 10))
                             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
                     }
+                    .accessibilityLabel("Choose from library")
                 }
                 if pickedImage != nil {
                     Button {

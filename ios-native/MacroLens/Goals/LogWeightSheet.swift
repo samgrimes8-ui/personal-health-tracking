@@ -185,9 +185,11 @@ struct LogWeightSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            // Camera-first per the app-wide standard: take a photo
+            // primary, library a small icon-only secondary.
             HStack(spacing: 8) {
                 Button { showScanCamera = true } label: {
-                    Label("Camera", systemImage: "camera")
+                    Label("Take photo", systemImage: "camera.fill")
                         .font(.system(size: 13, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
@@ -196,13 +198,14 @@ struct LogWeightSheet: View {
                 }
                 .buttonStyle(.plain)
                 PhotosPicker(selection: $scanPhotoSelection, matching: .images, photoLibrary: .shared()) {
-                    Label("Library", systemImage: "photo.on.rectangle")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.text2)
+                        .frame(width: 44, height: 38)
                         .background(Theme.bg2, in: .rect(cornerRadius: 8))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border2, lineWidth: 1))
                 }
+                .accessibilityLabel("Choose scan from library")
             }
             .disabled(extracting)
 

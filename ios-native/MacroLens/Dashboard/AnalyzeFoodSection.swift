@@ -236,11 +236,14 @@ struct AnalyzeFoodSection: View {
                 }
             }
 
+            // Camera-first per the app-wide standard. The Camera button
+            // takes the primary slot; Library is an icon-only secondary
+            // for users picking a screenshot or pre-saved photo.
             HStack(spacing: 8) {
                 Button {
                     showCamera = true
                 } label: {
-                    HStack { Image(systemName: "camera.fill"); Text("Camera") }
+                    HStack { Image(systemName: "camera.fill"); Text("Take photo") }
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Theme.text)
                         .frame(maxWidth: .infinity)
@@ -250,14 +253,14 @@ struct AnalyzeFoodSection: View {
                 }
 
                 PhotosPicker(selection: $photoSelection, matching: .images, photoLibrary: .shared()) {
-                    HStack { Image(systemName: "photo.on.rectangle"); Text("Library") }
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.text)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.text2)
+                        .frame(width: 44, height: 38)
                         .background(Theme.bg3, in: .rect(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
                 }
+                .accessibilityLabel("Choose from library")
 
                 if image != nil {
                     Button {

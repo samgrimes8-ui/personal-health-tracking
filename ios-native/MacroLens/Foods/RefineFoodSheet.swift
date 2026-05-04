@@ -35,6 +35,7 @@ struct RefineFoodSheet: View {
     @State private var stage: Stage = .sourcePick
     @State private var aiQuery: String = ""
     @State private var showScanner: Bool = false
+    @State private var showLabelCamera: Bool = false
     @State private var labelPhoto: UIImage?
     @State private var photoSelection: PhotosPickerItem?
     @State private var candidates: [AnalysisResult] = []
@@ -84,12 +85,19 @@ struct RefineFoodSheet: View {
                     onCancel: { showScanner = false }
                 )
             }
+            .sheet(isPresented: $showLabelCamera) {
+                CameraSheet(image: $labelPhoto)
+                    .ignoresSafeArea()
+            }
+            .onChange(of: labelPhoto) { _, newImg in
+                guard let img = newImg else { return }
+                Task { await runLabelPhoto(img) }
+            }
             .onChange(of: photoSelection) { _, newItem in
                 Task {
                     guard let data = try? await newItem?.loadTransferable(type: Data.self),
                           let img = UIImage(data: data) else { return }
                     labelPhoto = img
-                    await runLabelPhoto(img)
                 }
             }
         }
@@ -129,19 +137,32 @@ struct RefineFoodSheet: View {
                 showScanner = true
             }
 
-            // PhotosPicker as its own card — its label IS the
-            // tappable target, so we get the same visual + behavior as
-            // the other source rows without the overlay-hack.
-            PhotosPicker(selection: $photoSelection,
-                         matching: .images,
-                         photoLibrary: .shared()) {
-                sourceCardContent(
-                    icon: "photo.on.rectangle.angled",
+            // Camera-first per the app-wide standard: most users snap a
+            // photo on-device. The card opens the camera; a small library
+            // icon at the right offers a secondary route for screenshots
+            // or pre-saved photos.
+            HStack(spacing: 8) {
+                sourceButton(
+                    icon: "camera.fill",
                     title: "Photo of nutrition label",
-                    subtitle: "Read the panel directly — most accurate for packaged foods."
-                )
+                    subtitle: "Take a picture — most accurate for packaged foods."
+                ) {
+                    error = nil
+                    showLabelCamera = true
+                }
+                PhotosPicker(selection: $photoSelection,
+                             matching: .images,
+                             photoLibrary: .shared()) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Theme.text2)
+                        .frame(width: 44, height: 56)
+                        .background(Theme.bg2, in: .rect(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Choose label photo from library")
             }
-            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 8) {
                 sourceButton(
