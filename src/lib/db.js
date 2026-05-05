@@ -91,6 +91,17 @@ export async function addMealEntry(userId, entry) {
   }
   // Full-label fields are passed through verbatim — null means "not
   // tracked" and the UI shows that explicitly. Never coerce to 0.
+  // Defensive default for the meal_log_serving_present CHECK constraint.
+  // If the upstream path didn't supply either serving field AND the row
+  // isn't recipe/food-item-linked, fall back to "1 serving" so the
+  // INSERT is never rejected. Real serving info from the analyze
+  // response (or a later edit) replaces this when available.
+  const hasServingDesc = typeof entry.serving_description === 'string' && entry.serving_description.trim().length > 0
+  const hasServingGrams = Number.isFinite(entry.serving_grams) && entry.serving_grams > 0
+  const linked = entry.food_item_id || entry.recipe_id
+  const safeServingDescription = hasServingDesc
+    ? entry.serving_description.trim()
+    : (hasServingGrams || linked ? null : '1 serving')
   const { data, error } = await supabase
     .from('meal_log')
     .insert({
@@ -115,6 +126,9 @@ export async function addMealEntry(userId, entry) {
       recipe_id: entry.recipe_id ?? null,
       meal_type: entry.meal_type ?? null,
       logged_at: entry.logged_at ?? new Date().toISOString(),
+      serving_description: safeServingDescription,
+      serving_grams:       entry.serving_grams ?? null,
+      serving_oz:          entry.serving_oz ?? null,
       saturated_fat_g: entry.saturated_fat_g ?? null,
       trans_fat_g:     entry.trans_fat_g ?? null,
       cholesterol_mg:  entry.cholesterol_mg ?? null,
@@ -831,7 +845,12 @@ export async function autoSaveFoodItem(userId, entry, foodItems) {
     const food = await upsertFoodItem(userId, {
       name: entry.name,
       brand: entry.brand || '',
-      serving_size: entry.serving_size || '1 serving',
+      serving_size: entry.serving_size || entry.serving_description || '1 serving',
+      // Forward structured serving fields so the saved food_item carries
+      // them — re-logs and Quick Log search render the correct unit.
+      serving_description: entry.serving_description ?? null,
+      serving_grams:       entry.serving_grams ?? null,
+      serving_oz:          entry.serving_oz ?? null,
       calories: entry.base_calories ?? entry.calories ?? 0,
       protein:  entry.base_protein  ?? entry.protein  ?? 0,
       carbs:    entry.base_carbs    ?? entry.carbs    ?? 0,
@@ -887,12 +906,24 @@ export async function upsertFoodItem(userId, item) {
     setLocalFallback('macrolens_food_items', all)
     return updated
   }
+  // Defensive default for the food_items_serving_present CHECK
+  // constraint — same rule as addMealEntry. At least one of
+  // serving_description / serving_grams must be non-null; fall back to
+  // "1 serving" if neither is supplied.
+  const hasServingDesc = typeof item.serving_description === 'string' && item.serving_description.trim().length > 0
+  const hasServingGrams = Number.isFinite(item.serving_grams) && item.serving_grams > 0
+  const safeServingDescription = hasServingDesc
+    ? item.serving_description.trim()
+    : (hasServingGrams ? null : (item.serving_size || '1 serving'))
   const payload = {
     user_id: userId,
     updated_at: new Date().toISOString(),
     name: item.name,
     brand: item.brand || '',
     serving_size: item.serving_size || '1 serving',
+    serving_description: safeServingDescription,
+    serving_grams:       item.serving_grams ?? null,
+    serving_oz:          item.serving_oz ?? null,
     calories: item.calories || 0,
     protein: item.protein || 0,
     carbs: item.carbs || 0,

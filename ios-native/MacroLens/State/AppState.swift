@@ -716,6 +716,21 @@ final class AppState {
             let potassium_mg: Double?
         }
         let userId = try await currentUserID()
+        // Defensive default for the meal_log_serving_present /
+        // food_items_serving_present CHECK constraints. If the upstream
+        // path didn't populate either serving field (e.g. AI photo
+        // response returned without serving_description; older clients;
+        // the prompt was rolled back), fall back to a literal "1 serving"
+        // so the INSERT is never rejected. Mirrors the same default in
+        // src/lib/db.js. Real serving info from later edits replaces it
+        // — this is bedrock insurance, not the primary code path.
+        let safeServingDescription: String? = {
+            if let s = servingDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                return s
+            }
+            if (servingGrams ?? 0) > 0 { return nil }  // grams alone satisfies the constraint
+            return "1 serving"
+        }()
         // Auto-save to food_items if not already linked. Mirrors the web's
         // autoSaveFoodItem (src/lib/db.js): skip when recipe-linked or
         // food-linked, dedup by case-insensitive name, otherwise insert.
@@ -733,7 +748,7 @@ final class AppState {
                 carbs: carbs,
                 fat: fat,
                 fiber: fiber,
-                servingDescription: servingDescription,
+                servingDescription: safeServingDescription,
                 servingGrams: servingGrams,
                 servingOz: servingOz,
                 fullLabel: fullLabel
@@ -764,7 +779,7 @@ final class AppState {
             food_item_id: resolvedFoodItemId,
             logged_at: ISO8601DateFormatter().string(from: when),
             servings_consumed: servingsConsumed,
-            serving_description: servingDescription,
+            serving_description: safeServingDescription,
             serving_grams: servingGrams,
             serving_oz: servingOz,
             saturated_fat_g: fullLabel?.saturatedFatG,
