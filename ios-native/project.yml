@@ -67,6 +67,11 @@ targets:
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         ENABLE_USER_SCRIPT_SANDBOXING: YES
         TARGETED_DEVICE_FAMILY: "1,2"
+        # Tells Xcode which AppIcon set in Assets.xcassets to use as the
+        # app's home-screen icon. Required for App Store + TestFlight
+        # submission — Apple rejects builds without a 1024x1024 marketing
+        # icon (the universal-size entry covers all device variants).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Apple Developer team ID — baked in here so xcodegen regenerate
         # doesn't wipe the team selection every time. If you fork this
         # project, change to your own team ID (Xcode → Settings → Accounts
