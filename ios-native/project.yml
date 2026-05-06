@@ -9,7 +9,13 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     DEVELOPMENT_LANGUAGE: en
-    MARKETING_VERSION: "0.2.0"
+    # 0.3.0 = first TestFlight release. Bump this for user-facing
+    # releases (semver-ish — patch for bug fixes, minor for new
+    # features, major for breaking UX changes).
+    MARKETING_VERSION: "0.3.0"
+    # Build number — testflight.sh auto-bumps this to git rev-list count
+    # at archive time so each upload monotonically increases without
+    # manual editing. The value here is just the floor.
     CURRENT_PROJECT_VERSION: "1"
 
 packages:
