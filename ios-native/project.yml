@@ -73,6 +73,15 @@ targets:
         # → click your team → "Team ID").
         DEVELOPMENT_TEAM: 86T54TVCFN
         CODE_SIGN_STYLE: Automatic
+        # ───── Code-signing identity (per-config override) ─────
+        # xcodegen's default is `CODE_SIGN_IDENTITY = "iPhone Developer"`
+        # for BOTH configs, which forces development signing even when
+        # archiving. We override per-config below so Release archives
+        # pick the Apple Distribution cert (App Store + TestFlight)
+        # while Debug keeps Apple Development for sim/device builds.
+        # CODE_SIGN_STYLE stays Automatic so Xcode + the paid Dev
+        # account fetch the matching profile via -allowProvisioningUpdates
+        # — no manual profile management.
         # HealthKit entitlement is active for the two-way Apple Health
         # sync (push macros + weight, pull weight history). The
         # entitlement key is plain `com.apple.developer.healthkit`
@@ -93,6 +102,11 @@ targets:
         # bring it back: re-add the `com.apple.developer.applesignin`
         # key to MacroLens.entitlements + flip the Config flag.
         CODE_SIGN_ENTITLEMENTS: MacroLens/MacroLens.entitlements
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: "Apple Development"
+        Release:
+          CODE_SIGN_IDENTITY: "Apple Distribution"
     entitlements:
       path: MacroLens/MacroLens.entitlements
       properties:
