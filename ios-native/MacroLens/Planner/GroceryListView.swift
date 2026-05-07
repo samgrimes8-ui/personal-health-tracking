@@ -52,6 +52,22 @@ struct GroceryListView: View {
     /// matches the web's session-scoped state.userMealOverrides.
     @State private var userMealOverrides: [String: String] = [:]
 
+    /// Full categorized list (default) vs. by-meal grouping. By-meal
+    /// renders one card per planned meal so the user can see exactly
+    /// which recipe contributes which ingredients, and toggle a meal
+    /// in/out of the aggregation.
+    enum GroceryViewMode: String, CaseIterable, Identifiable {
+        case full, byMeal
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .full: return "Full list"
+            case .byMeal: return "By meal"
+            }
+        }
+    }
+    @State private var viewMode: GroceryViewMode = .full
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -59,14 +75,20 @@ struct GroceryListView: View {
             if !orphanLeftovers.isEmpty {
                 orphanLeftoverBanner
             }
+            viewModeTabs
             if fetching && recipesById.isEmpty {
                 Card { ProgressView().frame(maxWidth: .infinity, alignment: .center) }
             } else if effectiveMeals.isEmpty && customItems.isEmpty {
                 Card { EmptyState(icon: "cart", title: "No grocery list yet", message: "Add planned meals in this date range, or tap + Add item to add things by hand.") }
-            } else if itemRows.isEmpty && customItems.isEmpty {
+            } else if viewMode == .full && itemRows.isEmpty && customItems.isEmpty {
                 Card { EmptyState(icon: "leaf", title: "No ingredients yet", message: "Save recipes with ingredients on them, then re-open this list.") }
             } else {
-                listBody
+                Group {
+                    switch viewMode {
+                    case .full: listBody
+                    case .byMeal: byMealBody
+                    }
+                }
             }
         }
         .task(id: weekStart) { await fetchRecipeIngredients() }
@@ -226,6 +248,49 @@ struct GroceryListView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
     }
 
+    // MARK: - View tabs
+
+    private var viewModeTabs: some View {
+        HStack(spacing: 6) {
+            ForEach(GroceryViewMode.allCases) { mode in
+                Button {
+                    viewMode = mode
+                } label: {
+                    Text(mode.label)
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.vertical, 6).padding(.horizontal, 14)
+                        .foregroundStyle(viewMode == mode ? Theme.accentFG : Theme.text2)
+                        .background(
+                            viewMode == mode ? Theme.accent : Theme.bg3,
+                            in: .rect(cornerRadius: 999)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+            Text("\(includedMealCount) in list")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.text3)
+        }
+    }
+
+    private var includedMealCount: Int {
+        effectiveMeals.filter { isMealIncluded($0) }.count
+    }
+
+    private func isMealIncluded(_ meal: PlannerRow) -> Bool {
+        if let v = userMealOverrides[meal.id] {
+            if v == "include" { return true }
+            if v == "exclude" { return false }
+        }
+        return !Self.isLeftover(meal)
+    }
+
+    private func toggleMealInclusion(_ meal: PlannerRow) {
+        let included = isMealIncluded(meal)
+        userMealOverrides[meal.id] = included ? "exclude" : "include"
+    }
+
     // MARK: - Body
 
     private var listBody: some View {
@@ -260,6 +325,175 @@ struct GroceryListView: View {
                 customItemsCard
             }
         }
+    }
+
+    // MARK: - By-meal view
+
+    /// One card per planned meal, grouped by day. Lets the user see
+    /// each recipe's ingredient set and flip individual meals in/out
+    /// of the aggregation. Mirrors renderGroceryByMeal (app.js:2984).
+    private var byMealBody: some View {
+        let groups: [(day: String, meals: [PlannerRow])] = {
+            var byDay: [String: [PlannerRow]] = [:]
+            var dayOrder: [String] = []
+            for meal in effectiveMeals.sorted(by: { ($0.actual_date ?? "") < ($1.actual_date ?? "") }) {
+                let key = meal.actual_date ?? ""
+                if byDay[key] == nil {
+                    byDay[key] = []
+                    dayOrder.append(key)
+                }
+                byDay[key]?.append(meal)
+            }
+            return dayOrder.map { ($0, byDay[$0] ?? []) }
+        }()
+
+        return VStack(alignment: .leading, spacing: 14) {
+            if groups.isEmpty {
+                Card { EmptyState(icon: "calendar", title: "Nothing planned in this range", message: "Add planned meals or widen the date range.") }
+            }
+            ForEach(groups, id: \.day) { group in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(dayLabel(for: group.day))
+                        .font(.system(size: 11, weight: .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(Theme.text2)
+                    ForEach(group.meals) { meal in
+                        mealCard(meal)
+                    }
+                }
+            }
+            if !customItems.isEmpty {
+                customItemsCard
+            }
+        }
+    }
+
+    private func dayLabel(for day: String) -> String {
+        guard let date = PlannerDateMath.parse(day) else { return day.uppercased() }
+        let f = DateFormatter()
+        f.calendar = PlannerDateMath.calendar
+        f.timeZone = .current
+        f.setLocalizedDateFormatFromTemplate("EEEE MMM d")
+        return f.string(from: date).uppercased()
+    }
+
+    private func mealCard(_ meal: PlannerRow) -> some View {
+        let mealName = meal.meal_name ?? ""
+        let isLeft = Self.isLeftover(meal)
+        let orphan = orphanLeftovers.contains(where: { $0.id == meal.id })
+        let coveredLeftover = isLeft && !orphan
+        let included = isMealIncluded(meal)
+        let recipe = meal.recipe_id.flatMap { recipesById[$0] }
+        let ingredients = recipe?.ingredients ?? []
+        let baseServings = recipe?.servings ?? 1
+        let plannedServings = meal.planned_servings ?? baseServings
+        let multiplier = baseServings > 0 ? plannedServings / baseServings : 1
+
+        return Card(padding: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(mealName)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(included ? Theme.text : Theme.text2)
+                            .lineLimit(2)
+                        if coveredLeftover {
+                            Text("↩ Leftovers from \(Self.originalMealName(meal)) — ingredients already on your list")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.text3)
+                        } else if !ingredients.isEmpty {
+                            Text("\(ingredients.count) ingredient\(ingredients.count == 1 ? "" : "s")")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.text3)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    if orphan {
+                        Text("orphan leftover")
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(.vertical, 3).padding(.horizontal, 8)
+                            .foregroundStyle(Theme.fat)
+                            .background(Theme.fat.opacity(0.10), in: .rect(cornerRadius: 999))
+                            .overlay(RoundedRectangle(cornerRadius: 999).stroke(Theme.fat.opacity(0.30), lineWidth: 1))
+                    }
+                    inclusionToggleButton(meal: meal, included: included)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+
+                if orphan && !included {
+                    Text("Source cook is outside your shopping window. Add to list if you'll cook this fresh.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                        .padding(.horizontal, 14).padding(.bottom, 8)
+                }
+
+                if !coveredLeftover, included, !ingredients.isEmpty {
+                    Divider().background(Theme.border)
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(ingredients.enumerated()), id: \.offset) { idx, ing in
+                            ingredientRow(ing, multiplier: multiplier)
+                            if idx < ingredients.count - 1 {
+                                Divider().background(Theme.border)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                }
+            }
+        }
+        .opacity(included || orphan ? 1.0 : 0.6)
+    }
+
+    private func inclusionToggleButton(meal: PlannerRow, included: Bool) -> some View {
+        Button {
+            toggleMealInclusion(meal)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: included ? "checkmark" : "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(included ? "In list" : "Add to list")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .padding(.vertical, 5).padding(.horizontal, 10)
+            .foregroundStyle(included ? Theme.green : Theme.text3)
+            .background(included ? Theme.green.opacity(0.12) : Theme.bg3, in: .rect(cornerRadius: 999))
+            .overlay(
+                RoundedRectangle(cornerRadius: 999)
+                    .stroke(included ? Theme.green.opacity(0.30) : Theme.border2, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func ingredientRow(_ ing: RecipeIngredient, multiplier: Double) -> some View {
+        let amount = ing.amountValue * multiplier
+        let amountStr: String = amount > 0
+            ? (amount == amount.rounded() ? String(Int(amount)) : String(format: "%.2f", amount))
+            : "—"
+        let unit = ing.unit ?? ""
+        let cat = GroceryCategory.resolve(rawCategory: ing.category, name: ing.name)
+        return HStack(alignment: .top, spacing: 8) {
+            HStack(spacing: 3) {
+                Text(cat.emoji)
+                Text(cat.label)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(cat.color)
+            .padding(.vertical, 2).padding(.horizontal, 6)
+            .background(cat.color.opacity(0.10), in: .rect(cornerRadius: 4))
+            .frame(minWidth: 70, alignment: .leading)
+
+            Text(unit.isEmpty ? amountStr : "\(amountStr) \(unit)")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.text2)
+                .frame(minWidth: 70, alignment: .leading)
+
+            Text(ing.name)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.text)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
     }
 
     private var customItemsCard: some View {
