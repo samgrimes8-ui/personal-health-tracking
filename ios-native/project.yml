@@ -62,6 +62,17 @@ targets:
         # if you don't also register BGTask identifiers — which we don't.
         UIBackgroundModes:
           - fetch
+        # Export-compliance declaration. We only use Apple's standard
+        # HTTPS (URLSession → Supabase + Anthropic) which is exempt from
+        # US export controls under the standard exemption. Setting this
+        # to false here means App Store Connect skips the "Missing
+        # Compliance" prompt on every upload — without it, each build
+        # sits in Yellow until a human answers the same question in the
+        # ASC web UI. If we ever add custom crypto (proprietary cipher,
+        # non-Apple TLS stack, end-to-end-encrypted user data, etc.),
+        # flip this to true and file the annual self-classification
+        # report at https://www.bis.doc.gov.
+        ITSAppUsesNonExemptEncryption: false
         # Custom URL scheme for OAuth callbacks (Google sign-in via
         # ASWebAuthenticationSession). Supabase redirects to
         # `app.macrolens.native://login-callback#access_token=...&refresh_token=...`,
