@@ -30,13 +30,27 @@ struct GroceryListView: View {
     @State private var customItems: [GroceryCustomItem] = []
     @FocusState private var focusedCustomItemId: String?
 
+    /// Shopping date range. Both nil = auto: fromDate snaps to today
+    /// (which gives the "Past days excluded" effect when the visible
+    /// week has past days), toDate snaps to the end of the visible
+    /// week. Once the user picks either date manually it stays sticky
+    /// until they hit "Reset to today". Mirrors state.groceryFromDate /
+    /// state.groceryToDate on web.
+    @State private var fromDate: String? = nil
+    @State private var toDate: String? = nil
+    /// Meals fetched across the picked range when the range steps
+    /// outside the visible week. nil = use plannerByDay (in-week range).
+    @State private var rangeMealsRemote: [PlannerRow]? = nil
+    @State private var fetchingRange: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            dateRangeBar
             if fetching && recipesById.isEmpty {
                 Card { ProgressView().frame(maxWidth: .infinity, alignment: .center) }
-            } else if mealsThisWeek.isEmpty && customItems.isEmpty {
-                Card { EmptyState(icon: "cart", title: "No grocery list yet", message: "Add planned meals to this week, or tap + Add item to add things by hand.") }
+            } else if effectiveMeals.isEmpty && customItems.isEmpty {
+                Card { EmptyState(icon: "cart", title: "No grocery list yet", message: "Add planned meals in this date range, or tap + Add item to add things by hand.") }
             } else if itemRows.isEmpty && customItems.isEmpty {
                 Card { EmptyState(icon: "leaf", title: "No ingredients yet", message: "Save recipes with ingredients on them, then re-open this list.") }
             } else {
@@ -44,6 +58,7 @@ struct GroceryListView: View {
             }
         }
         .task(id: weekStart) { await fetchRecipeIngredients() }
+        .task(id: rangeKey) { await fetchRangeIfNeeded() }
         .onAppear { loadCustomItems() }
         .alert("Couldn't load grocery list", isPresented: Binding(
             get: { loadErr != nil },
@@ -51,6 +66,12 @@ struct GroceryListView: View {
         )) {
             Button("OK", role: .cancel) {}
         } message: { Text(loadErr ?? "") }
+    }
+
+    /// Distinct key that triggers a range fetch when it changes —
+    /// either bound dates or the visible week shifted under us.
+    private var rangeKey: String {
+        "\(weekStart)|\(fromDate ?? "auto")|\(toDate ?? "auto")"
     }
 
     // MARK: - Header / actions
@@ -62,7 +83,7 @@ struct GroceryListView: View {
                     Text("Grocery list")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.text)
-                    Text("\(mealsThisWeek.count) meals · \(PlannerDateMath.weekLabel(weekStart))")
+                    Text(rangeSummaryLabel)
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.text3)
                 }
@@ -121,6 +142,76 @@ struct GroceryListView: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Date range bar
+
+    /// Two date pickers + an optional "✓ Past days excluded" badge and a
+    /// "Reset to today" link when the user has overridden either picker.
+    /// Mirrors the date-range bar in renderGroceryList (app.js:2526).
+    private var dateRangeBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Shopping for:")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text3)
+
+                DatePicker(
+                    "",
+                    selection: Binding(
+                        get: { PlannerDateMath.parse(effectiveFromDate) ?? Date() },
+                        set: { fromDate = PlannerDateMath.format($0) }
+                    ),
+                    displayedComponents: .date
+                )
+                .labelsHidden()
+                .scaleEffect(0.9, anchor: .leading)
+                .frame(maxWidth: 130)
+
+                Text("→")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text3)
+
+                DatePicker(
+                    "",
+                    selection: Binding(
+                        get: { PlannerDateMath.parse(effectiveToDate) ?? Date() },
+                        set: { toDate = PlannerDateMath.format($0) }
+                    ),
+                    displayedComponents: .date
+                )
+                .labelsHidden()
+                .scaleEffect(0.9, anchor: .leading)
+                .frame(maxWidth: 130)
+
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 10) {
+                if pastDaysExcluded {
+                    Text("✓ Past days excluded")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.green)
+                }
+                if fromDate != nil || toDate != nil {
+                    Button {
+                        fromDate = nil
+                        toDate = nil
+                    } label: {
+                        Text("Reset to today")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 0)
+                if fetchingRange {
+                    ProgressView().controlSize(.mini)
+                }
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(Theme.bg3, in: .rect(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
     }
 
     // MARK: - Body
@@ -225,16 +316,60 @@ struct GroceryListView: View {
 
     // MARK: - Aggregation pipeline
 
-    /// All meals in the visible week.
-    private var mealsThisWeek: [PlannerRow] {
-        state.plannerByDay.flatMap { $0 }
+    /// Effective `from` for the picked range — user override OR today
+    /// (auto). Today is used so that on first open, past days that
+    /// have already been cooked drop off the shopping list.
+    private var effectiveFromDate: String {
+        fromDate ?? PlannerDateMath.todayString()
+    }
+
+    /// Effective `to` for the picked range — user override OR end of
+    /// the visible week (auto). Web defaults to "end of furthest
+    /// planned week" but iOS only loads the visible week into
+    /// plannerByDay; this keeps the auto behavior matched to what's
+    /// actually loaded without an extra fetch on first open.
+    private var effectiveToDate: String {
+        toDate ?? PlannerDateMath.addDays(weekStart, 6)
+    }
+
+    private var isAutoFrom: Bool { fromDate == nil }
+    private var isAutoTo: Bool { toDate == nil }
+
+    /// "3 meals · May 7 – May 13" style summary shown under the title.
+    private var rangeSummaryLabel: String {
+        let count = effectiveMeals.count
+        let mealsLabel = count == 1 ? "1 meal" : "\(count) meals"
+        return "\(mealsLabel) · \(PlannerDateMath.shortMonthDay(effectiveFromDate)) – \(PlannerDateMath.shortMonthDay(effectiveToDate))"
+    }
+
+    /// "Past days excluded" applies when the user hasn't overridden
+    /// fromDate AND today actually falls past the visible week's start
+    /// — i.e. there are days in the visible week that already happened.
+    private var pastDaysExcluded: Bool {
+        isAutoFrom && PlannerDateMath.todayString() > weekStart
+    }
+
+    /// Meals in the current shopping window. When the range is fully
+    /// inside the visible week we filter plannerByDay (no extra
+    /// fetch); otherwise we use the cross-week fetched list.
+    private var effectiveMeals: [PlannerRow] {
+        let from = effectiveFromDate
+        let to = effectiveToDate
+        let weekEnd = PlannerDateMath.addDays(weekStart, 6)
+        if from >= weekStart && to <= weekEnd {
+            return state.plannerByDay.flatMap { $0 }.filter {
+                guard let d = $0.actual_date else { return false }
+                return d >= from && d <= to
+            }
+        }
+        return rangeMealsRemote ?? []
     }
 
     /// Aggregated rows. Skips leftovers by default (mirrors the
     /// `isMealIncludedInGroceries` default in app.js — leftovers reuse
     /// a previous cook and don't add to the grocery list).
     private var itemRows: [GroceryItem] {
-        let inputs = mealsThisWeek.map { row -> GroceryAggregator.PlannedMealInput in
+        let inputs = effectiveMeals.map { row -> GroceryAggregator.PlannedMealInput in
             GroceryAggregator.PlannedMealInput(
                 mealId: row.id,
                 mealLabel: row.meal_name ?? recipesById[row.recipe_id ?? ""]?.name ?? "",
@@ -274,7 +409,9 @@ struct GroceryListView: View {
     // MARK: - Recipe fetch
 
     private func fetchRecipeIngredients() async {
-        let ids = Set(state.plannerByDay.flatMap { $0 }.compactMap { $0.recipe_id })
+        let inWeek = state.plannerByDay.flatMap { $0 }.compactMap { $0.recipe_id }
+        let inRange = (rangeMealsRemote ?? []).compactMap { $0.recipe_id }
+        let ids = Set(inWeek + inRange)
         guard !ids.isEmpty else {
             recipesById = [:]
             return
@@ -299,6 +436,83 @@ struct GroceryListView: View {
         } catch {
             loadErr = error.localizedDescription
         }
+    }
+
+    /// Cross-week meal fetch. Mirrors getPlannerRange in src/lib/db.js:
+    /// 1) compute every Sunday-week_start that overlaps [from, to];
+    /// 2) pull rows where week_start_date IN those weeks;
+    /// 3) filter to actual_date within [from, to] (the actual_date
+    ///    column is authoritative; older rows compute from
+    ///    week_start_date + day_of_week).
+    /// No-op when the range fits inside the visible week — that case
+    /// uses plannerByDay directly.
+    private func fetchRangeIfNeeded() async {
+        let from = effectiveFromDate
+        let to = effectiveToDate
+        let weekEnd = PlannerDateMath.addDays(weekStart, 6)
+        if from >= weekStart && to <= weekEnd {
+            // In-week — let plannerByDay drive the list. Drop any
+            // stale remote fetch so memory doesn't grow unbounded
+            // when the user toggles between ranges.
+            rangeMealsRemote = nil
+            return
+        }
+        guard from <= to else { rangeMealsRemote = []; return }
+
+        fetchingRange = true
+        defer { fetchingRange = false }
+        do {
+            let userId = try await SupabaseService.client.auth.session.user.id.uuidString
+            let weekStarts = enumerateWeekStarts(from: from, to: to)
+            let rows: [PlannerRow] = try await SupabaseService.client
+                .from("meal_planner")
+                .select()
+                .eq("user_id", value: userId)
+                .in("week_start_date", values: weekStarts)
+                .order("day_of_week", ascending: true)
+                .execute()
+                .value
+            // Filter to days within the picked range. Prefer actual_date
+            // when present; otherwise compute it from week_start +
+            // day_of_week so older rows still flow through.
+            let inRange = rows.filter { row in
+                let d = row.actual_date ?? computedDate(for: row)
+                guard let day = d else { return false }
+                return day >= from && day <= to
+            }
+            rangeMealsRemote = inRange
+            // The recipes fetch is keyed off the visible-week ids, so
+            // when range exits the week we may need extra recipes —
+            // re-run the fetch.
+            await fetchRecipeIngredients()
+        } catch {
+            loadErr = error.localizedDescription
+        }
+    }
+
+    private func enumerateWeekStarts(from: String, to: String) -> [String] {
+        guard let fromDate = PlannerDateMath.parse(from),
+              let toDate = PlannerDateMath.parse(to) else { return [] }
+        // Snap fromDate to its Sunday — meal_planner.week_start_date is
+        // always a Sunday, so we walk Sundays from that anchor forward.
+        let cal = PlannerDateMath.calendar
+        let weekday = cal.component(.weekday, from: fromDate)
+        let offset = -(weekday - 1)
+        guard let firstSunday = cal.date(byAdding: .day, value: offset, to: fromDate) else { return [] }
+        var weeks: [String] = []
+        var cursor = firstSunday
+        while cursor <= toDate {
+            weeks.append(PlannerDateMath.format(cursor))
+            guard let next = cal.date(byAdding: .day, value: 7, to: cursor) else { break }
+            cursor = next
+        }
+        return weeks
+    }
+
+    private func computedDate(for row: PlannerRow) -> String? {
+        guard let weekStart = row.week_start_date,
+              let dow = row.day_of_week else { return nil }
+        return PlannerDateMath.addDays(weekStart, dow)
     }
 
     // MARK: - Custom items
