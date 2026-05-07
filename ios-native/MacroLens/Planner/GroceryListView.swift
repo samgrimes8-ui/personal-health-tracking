@@ -43,10 +43,22 @@ struct GroceryListView: View {
     @State private var rangeMealsRemote: [PlannerRow]? = nil
     @State private var fetchingRange: Bool = false
 
+    /// Per-meal include/exclude overrides keyed by meal id. When the
+    /// default rule (skip leftovers, include everything else) doesn't
+    /// match the user's intent — e.g. they DO want to shop for an
+    /// orphan leftover, or they DON'T want to shop for a particular
+    /// meal because they already have the ingredients — flipping the
+    /// per-meal toggle in the By-meal view writes here. Non-persisted;
+    /// matches the web's session-scoped state.userMealOverrides.
+    @State private var userMealOverrides: [String: String] = [:]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             dateRangeBar
+            if !orphanLeftovers.isEmpty {
+                orphanLeftoverBanner
+            }
             if fetching && recipesById.isEmpty {
                 Card { ProgressView().frame(maxWidth: .infinity, alignment: .center) }
             } else if effectiveMeals.isEmpty && customItems.isEmpty {
@@ -393,12 +405,154 @@ struct GroceryListView: View {
                 }
             )
         }
+        // Capture overrides so the closure stays a pure function of
+        // its inputs (the closure can't read `self` after the call).
+        let overrides = userMealOverrides
         return GroceryAggregator.aggregate(
             meals: inputs,
             recipesById: recipes,
-            includeMeal: { !$0.isLeftover },
+            includeMeal: { meal in
+                if let v = overrides[meal.mealId] {
+                    if v == "include" { return true }
+                    if v == "exclude" { return false }
+                }
+                return !meal.isLeftover
+            },
             applyCanonicalization: smartMergeApplied
         )
+    }
+
+    // MARK: - Leftover detection
+
+    /// Detect "orphaned" leftovers: leftover meals in the shopping
+    /// window whose source cook (the non-leftover instance of the same
+    /// recipe) lands OUTSIDE the window. If the source cook is in the
+    /// window, the user is already shopping for the ingredients —
+    /// nothing to warn about. If it isn't, the leftover effectively
+    /// becomes a fresh cook the user has to shop for, and we surface a
+    /// banner pointing at it. Mirrors findLeftoverSource (app.js:2603).
+    private struct OrphanLeftover: Identifiable {
+        let leftover: PlannerRow
+        let source: PlannerRow?
+        var id: String { leftover.id }
+    }
+
+    private var orphanLeftovers: [OrphanLeftover] {
+        let inRange = effectiveMeals
+        let broader = state.plannerByDay.flatMap { $0 }
+        return inRange
+            .filter { Self.isLeftover($0) }
+            .map { lo -> OrphanLeftover in
+                let recipeId = lo.recipe_id
+                let nameKey = Self.originalMealName(lo).lowercased()
+                let loDate = lo.actual_date
+
+                // Prefer an in-range source — the user is already
+                // buying ingredients for it.
+                let inRangeSource = inRange.first { m in
+                    if m.id == lo.id { return false }
+                    if Self.isLeftover(m) { return false }
+                    if let rid = recipeId, m.recipe_id == rid {
+                        // empty body — id match is enough
+                    } else if recipeId == nil,
+                              (m.meal_name ?? "").lowercased() == nameKey {
+                        // empty body — name match is enough
+                    } else {
+                        return false
+                    }
+                    // Source must be on or before the leftover.
+                    if let lod = loDate, let md = m.actual_date {
+                        return md <= lod
+                    }
+                    return true
+                }
+                if let s = inRangeSource {
+                    return OrphanLeftover(leftover: lo, source: s)
+                }
+                // Fallback: peek at the broader visible-week pool so
+                // the warning text can say where the source lives.
+                let broadSource = broader.first { m in
+                    if m.id == lo.id { return false }
+                    if Self.isLeftover(m) { return false }
+                    if let rid = recipeId, m.recipe_id == rid { return true }
+                    if recipeId == nil,
+                       (m.meal_name ?? "").lowercased() == nameKey { return true }
+                    return false
+                }
+                return OrphanLeftover(leftover: lo, source: broadSource)
+            }
+            .filter { item in
+                // An OrphanLeftover with an in-range source isn't an
+                // orphan — only items whose source missed the window
+                // (or doesn't exist at all) get surfaced.
+                guard let s = item.source else { return true }
+                return !inRange.contains(where: { $0.id == s.id })
+            }
+    }
+
+    private static func isLeftover(_ meal: PlannerRow) -> Bool {
+        if meal.is_leftover == true { return true }
+        let name = (meal.meal_name ?? "").lowercased()
+        return name.hasSuffix("(leftovers)")
+    }
+
+    private static func originalMealName(_ meal: PlannerRow) -> String {
+        let name = meal.meal_name ?? ""
+        return name.replacingOccurrences(
+            of: "\\s*\\(leftovers\\)\\s*$",
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        ).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Yellow warning banner listing up to 5 orphan leftovers. Tells
+    /// the user their leftover meal's source cook is outside the
+    /// shopping window and they need to flip "Add to list" if they
+    /// want to actually shop for it.
+    private var orphanLeftoverBanner: some View {
+        let count = orphanLeftovers.count
+        let pluralL = count == 1 ? "" : "s"
+        let allHaveSource = orphanLeftovers.allSatisfy { $0.source != nil }
+        let detail = allHaveSource
+            ? "These meals are planned as leftovers, but their source cook happens before this window."
+            : "These meals are planned as leftovers, but their source cook isn't in your planner."
+        return HStack(alignment: .top, spacing: 10) {
+            Text("⚠️")
+                .font(.system(size: 18))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("\(count) leftover\(pluralL) without a cook in your shopping window")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                Text("\(detail) They're not in your shopping list — toggle \"Add to list\" on the meal in the By-meal tab if you need to shop for them.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text2)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(orphanLeftovers.prefix(5)) { item in
+                    HStack(spacing: 4) {
+                        Text(Self.originalMealName(item.leftover))
+                            .foregroundStyle(Theme.text2)
+                        if let d = item.leftover.actual_date {
+                            Text("on \(PlannerDateMath.shortMonthDay(d))")
+                                .foregroundStyle(Theme.text3)
+                        }
+                        if let src = item.source, let sd = src.actual_date {
+                            Text("· source was \(PlannerDateMath.shortMonthDay(sd))")
+                                .foregroundStyle(Theme.text3)
+                        }
+                    }
+                    .font(.system(size: 11))
+                }
+                if count > 5 {
+                    Text("+ \(count - 5) more")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Theme.fat.opacity(0.10), in: .rect(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.fat.opacity(0.30), lineWidth: 1))
     }
 
     /// `itemRows` grouped by category for rendering.
