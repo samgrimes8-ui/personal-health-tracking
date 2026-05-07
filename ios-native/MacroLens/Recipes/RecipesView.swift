@@ -34,7 +34,13 @@ struct RecipesView: View {
     /// detail. No stacking issue here because the context menu fires when
     /// no detail sheet is showing.
     @State private var planningFromCard: RecipeFull?
-    @State private var sharing: RecipeFull?
+    /// Share sheet bound on the parent ONLY for the context-menu shortcut
+    /// (long-press a recipe card → Share). The in-detail path now opens
+    /// its own local sheet on RecipeDetailView so the system share sheet
+    /// stacks correctly above the detail — same fix pattern as plan and
+    /// cooking mode. No stacking issue here because the context menu
+    /// fires when no detail sheet is showing.
+    @State private var sharingFromCard: RecipeFull?
     @State private var tagging: RecipeFull?
     @State private var tagOrderEditorOpen: Bool = false
     /// Opens the "Add a recipe" method picker (Link / Photo / Manual /
@@ -113,9 +119,6 @@ struct RecipesView: View {
                         presented = nil
                         Task { await refresh() }
                     },
-                    onShare: { recipe in
-                        sharing = recipe
-                    },
                     onPlanned: {
                         // Plan sheet now presents from inside the detail
                         // (no parent state involved). This callback only
@@ -123,6 +126,17 @@ struct RecipesView: View {
                         // save so the user sees their meal in Planner
                         // tab without a manual reload.
                         Task { await state.loadPlanner(weekStart: PlannerDateMath.currentWeekStart()) }
+                    },
+                    onShareChanged: { recipeId, isShared, newToken in
+                        // Share sheet now presents from inside the detail
+                        // (same in-place fix). This hook just mirrors
+                        // is_shared / share_token back into the library
+                        // card so re-opening the recipe shows the latest
+                        // state without a refetch.
+                        if let idx = library.firstIndex(where: { $0.id == recipeId }) {
+                            library[idx].is_shared = isShared
+                            if let newToken { library[idx].share_token = newToken }
+                        }
                     },
                     onChanged: { updated in
                         // Mid-swipe in-pager mutations (e.g. instructions
@@ -172,17 +186,19 @@ struct RecipesView: View {
             }
             .presentationDetents([.medium, .large])
         }
-        .sheet(item: $sharing) { recipe in
+        // Share sheet for the in-detail tap is no longer presented from
+        // this parent — moved onto RecipeDetailView so the system share
+        // sheet stacks above the detail immediately. Same fix pattern as
+        // the cooking-mode and plan-sheet commits. This binding here only
+        // handles the context-menu shortcut (long-press a card → Share),
+        // which never collides with a detail sheet.
+        .sheet(item: $sharingFromCard) { recipe in
             RecipeShareSheet(
                 recipeId: recipe.id,
                 recipeName: recipe.name,
                 initialToken: recipe.share_token,
                 initialIsShared: recipe.is_shared ?? false
             ) { isShared, newToken in
-                // Splice the new sharing state into the local library so
-                // re-opening the recipe immediately reflects the change
-                // (the detail view's Share button label flips Shared ↔
-                // Share without needing a fetch round-trip).
                 if let idx = library.firstIndex(where: { $0.id == recipe.id }) {
                     library[idx].is_shared = isShared
                     library[idx].share_token = newToken ?? library[idx].share_token
@@ -441,7 +457,7 @@ struct RecipesView: View {
                 Label("Plan", systemImage: "calendar.badge.plus")
             }
             Button {
-                sharing = r
+                sharingFromCard = r
             } label: {
                 Label("Share", systemImage: "square.and.arrow.up")
             }

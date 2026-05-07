@@ -21,7 +21,13 @@ struct RecipeDetailView: View {
     /// presented locally (planSheetOpen) — only the post-save side effect
     /// goes back up to RecipesView.
     var onPlanned: (() -> Void)? = nil
-    var onShare: ((RecipeFull) -> Void)? = nil
+    /// Optional callback the parent provides so it can splice updated
+    /// sharing state (is_shared / share_token) back into the local
+    /// library array — same hook the parent-bound share sheet used
+    /// before this fix. The share sheet itself is presented locally
+    /// (shareSheetOpen) so the system share sheet stacks above the
+    /// detail immediately.
+    var onShareChanged: ((_ isShared: Bool, _ token: String?) -> Void)? = nil
     var onCook: ((RecipeFull) -> Void)? = nil
     /// Notified when in-page state mutates (e.g. instructions get
     /// generated and saved). Lets a parent pager keep its array snapshot
@@ -53,6 +59,11 @@ struct RecipeDetailView: View {
     /// detail sheet and opens immediately, instead of queueing behind the
     /// detail's own dismiss.
     @State private var planSheetOpen: Bool = false
+    /// Public-share sheet — same fix as plan/cooking. Bound on the detail
+    /// view so the system share sheet stacks above this detail view
+    /// directly; lifting it to RecipesView used to defer presentation
+    /// until the detail dismissed (sheet-stacking bug).
+    @State private var shareSheetOpen: Bool = false
 
     enum DetailTab { case ingredients, instructions }
 
@@ -60,7 +71,7 @@ struct RecipeDetailView: View {
          onEdit: @escaping (RecipeFull) -> Void,
          onDeleted: @escaping () -> Void,
          onPlanned: (() -> Void)? = nil,
-         onShare: ((RecipeFull) -> Void)? = nil,
+         onShareChanged: ((_ isShared: Bool, _ token: String?) -> Void)? = nil,
          onCook: ((RecipeFull) -> Void)? = nil,
          onChanged: ((RecipeFull) -> Void)? = nil,
          embedded: Bool = false) {
@@ -68,7 +79,7 @@ struct RecipeDetailView: View {
         self.onEdit = onEdit
         self.onDeleted = onDeleted
         self.onPlanned = onPlanned
-        self.onShare = onShare
+        self.onShareChanged = onShareChanged
         self.onCook = onCook
         self.onChanged = onChanged
         self.embedded = embedded
@@ -136,6 +147,28 @@ struct RecipeDetailView: View {
             }
             .presentationDetents([.medium, .large])
         }
+        // Same in-place fix for the public-share flow — system share
+        // sheet stacks above the detail view directly rather than
+        // queueing behind a parent-bound presentation. The onChanged
+        // callback in RecipeShareSheet feeds is_shared / share_token
+        // changes back through onShareChanged so the parent's library
+        // list stays in sync without a refetch.
+        .sheet(isPresented: $shareSheetOpen) {
+            RecipeShareSheet(
+                recipeId: working.id,
+                recipeName: working.name,
+                initialToken: working.share_token,
+                initialIsShared: working.is_shared ?? false
+            ) { isShared, newToken in
+                // Update the local working copy so the Share/Shared label
+                // flips immediately on this page.
+                working.is_shared = isShared
+                if let newToken { working.share_token = newToken }
+                // Forward to the parent so the library card mirrors the
+                // change too.
+                onShareChanged?(isShared, newToken)
+            }
+        }
     }
 
     // MARK: - Header
@@ -155,7 +188,6 @@ struct RecipeDetailView: View {
     /// pill row in the web sticky header.
     @ViewBuilder
     private var quickActionsRow: some View {
-        let hasShare = onShare != nil
         HStack(spacing: 8) {
             Button {
                 // Local state — sheet stacks above this detail view
@@ -170,22 +202,23 @@ struct RecipeDetailView: View {
                     .background(Theme.accent, in: .rect(cornerRadius: 10))
             }
             .buttonStyle(.plain)
-            if hasShare {
-                Button {
-                    onShare?(working)
-                } label: {
-                    let isShared = working.is_shared == true
-                    Label(isShared ? "Shared" : "Share",
-                          systemImage: isShared ? "checkmark.circle.fill" : "square.and.arrow.up")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(isShared ? Theme.protein : Theme.text2)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(Theme.bg3, in: .rect(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(isShared ? Theme.protein : Theme.border2, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
+            Button {
+                // Same in-place fix as plan/cooking — toggle local state
+                // so the system share sheet stacks above this detail
+                // view immediately rather than queueing behind it.
+                shareSheetOpen = true
+            } label: {
+                let isShared = working.is_shared == true
+                Label(isShared ? "Shared" : "Share",
+                      systemImage: isShared ? "checkmark.circle.fill" : "square.and.arrow.up")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isShared ? Theme.protein : Theme.text2)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Theme.bg3, in: .rect(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(isShared ? Theme.protein : Theme.border2, lineWidth: 1))
             }
+            .buttonStyle(.plain)
         }
     }
 

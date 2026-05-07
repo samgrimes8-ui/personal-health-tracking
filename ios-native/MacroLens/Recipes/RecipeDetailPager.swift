@@ -24,13 +24,17 @@ struct RecipeDetailPager: View {
 
     let onEdit: (RecipeFull) -> Void
     let onDeleted: () -> Void
-    let onShare: (RecipeFull) -> Void
     /// Refresh hook fired by the per-page detail view after a successful
     /// plan-from-recipe save. The plan sheet itself lives on the inner
     /// detail view (so it stacks immediately above the pager); only the
     /// post-save side effect comes back up here so the parent can refresh
     /// the planner.
     let onPlanned: () -> Void
+    /// Sharing-state diff hook — fired when the per-page detail view
+    /// completes the share-sheet flow. The system share sheet itself
+    /// stacks on the inner detail; only is_shared / share_token
+    /// changes propagate up so the library card mirrors the new state.
+    let onShareChanged: (_ recipeId: String, _ isShared: Bool, _ token: String?) -> Void
     /// Lets the pager hand the latest in-pager mutations (e.g. instructions
     /// generated mid-swipe) back to RecipesView so the library list stays
     /// in sync without forcing a refetch.
@@ -42,15 +46,15 @@ struct RecipeDetailPager: View {
          initialIndex: Int,
          onEdit: @escaping (RecipeFull) -> Void,
          onDeleted: @escaping () -> Void,
-         onShare: @escaping (RecipeFull) -> Void,
          onPlanned: @escaping () -> Void,
+         onShareChanged: @escaping (String, Bool, String?) -> Void,
          onChanged: @escaping (RecipeFull) -> Void) {
         _recipes = State(initialValue: recipes)
         _index = State(initialValue: max(0, min(initialIndex, recipes.count - 1)))
         self.onEdit = onEdit
         self.onDeleted = onDeleted
-        self.onShare = onShare
         self.onPlanned = onPlanned
+        self.onShareChanged = onShareChanged
         self.onChanged = onChanged
     }
 
@@ -63,7 +67,16 @@ struct RecipeDetailPager: View {
                         onEdit: onEdit,
                         onDeleted: onDeleted,
                         onPlanned: onPlanned,
-                        onShare: onShare,
+                        onShareChanged: { isShared, token in
+                            // Splice into the pager's snapshot so the active
+                            // page's toolbar / Share label reflects the
+                            // change, and forward to the parent library.
+                            if i < recipes.count {
+                                recipes[i].is_shared = isShared
+                                if let token { recipes[i].share_token = token }
+                            }
+                            onShareChanged(r.id, isShared, token)
+                        },
                         onChanged: { updated in
                             // Update both the local pager snapshot (so the
                             // toolbar's Edit button sees the latest data
