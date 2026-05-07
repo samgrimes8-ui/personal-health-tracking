@@ -113,6 +113,9 @@ struct GroceryListView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
+                Image(systemName: "cart.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Grocery list")
                         .font(.system(size: 17, weight: .semibold))
@@ -147,6 +150,16 @@ struct GroceryListView: View {
                     color: Theme.accent
                 ) {
                     addCustomItem()
+                }
+
+                if !userMealOverrides.isEmpty {
+                    actionButton(
+                        label: "Reset",
+                        systemImage: "arrow.uturn.backward",
+                        color: Theme.text3
+                    ) {
+                        userMealOverrides = [:]
+                    }
                 }
 
                 Spacer(minLength: 0)
