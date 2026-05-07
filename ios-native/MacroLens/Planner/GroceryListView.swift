@@ -22,20 +22,29 @@ struct GroceryListView: View {
     /// the user wants to see the raw per-recipe rows without combining).
     @State private var smartMergeApplied: Bool = true
 
+    /// Custom items the user typed in (toilet paper, milk, etc) — not
+    /// derived from any recipe. Persisted across app launches via
+    /// @AppStorage, JSON-encoded so the array survives untouched.
+    /// Mirrors state.groceryCustomItems on web.
+    @AppStorage("grocery.customItemsJSON") private var customItemsJSON: String = "[]"
+    @State private var customItems: [GroceryCustomItem] = []
+    @FocusState private var focusedCustomItemId: String?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             if fetching && recipesById.isEmpty {
                 Card { ProgressView().frame(maxWidth: .infinity, alignment: .center) }
-            } else if mealsThisWeek.isEmpty {
-                Card { EmptyState(icon: "cart", title: "No grocery list yet", message: "Add planned meals to this week to generate one.") }
-            } else if itemRows.isEmpty {
+            } else if mealsThisWeek.isEmpty && customItems.isEmpty {
+                Card { EmptyState(icon: "cart", title: "No grocery list yet", message: "Add planned meals to this week, or tap + Add item to add things by hand.") }
+            } else if itemRows.isEmpty && customItems.isEmpty {
                 Card { EmptyState(icon: "leaf", title: "No ingredients yet", message: "Save recipes with ingredients on them, then re-open this list.") }
             } else {
                 listBody
             }
         }
         .task(id: weekStart) { await fetchRecipeIngredients() }
+        .onAppear { loadCustomItems() }
         .alert("Couldn't load grocery list", isPresented: Binding(
             get: { loadErr != nil },
             set: { if !$0 { loadErr = nil } }
@@ -65,7 +74,7 @@ struct GroceryListView: View {
                 actionButton(label: "Copy", systemImage: "doc.on.doc", color: Theme.protein) {
                     copyToClipboard()
                 }
-                .disabled(itemRows.isEmpty)
+                .disabled(itemRows.isEmpty && customItems.allSatisfy { $0.text.trimmingCharacters(in: .whitespaces).isEmpty })
 
                 actionButton(
                     label: smartMergeApplied ? "Merged" : "Smart merge",
@@ -76,6 +85,14 @@ struct GroceryListView: View {
                     smartMergeApplied.toggle()
                 }
                 .disabled(itemRows.isEmpty)
+
+                actionButton(
+                    label: "Add item",
+                    systemImage: "plus",
+                    color: Theme.accent
+                ) {
+                    addCustomItem()
+                }
 
                 Spacer(minLength: 0)
             }
@@ -134,6 +151,51 @@ struct GroceryListView: View {
                             }
                         }
                     }
+                }
+            }
+            if !customItems.isEmpty {
+                customItemsCard
+            }
+        }
+    }
+
+    private var customItemsCard: some View {
+        Card(padding: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 6) {
+                    Text("📝")
+                    Text("CUSTOM ITEMS")
+                        .font(.system(size: 11, weight: .semibold))
+                        .tracking(1.0)
+                    Text("(\(customItems.count))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                    Spacer()
+                }
+                .foregroundStyle(Theme.text2)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Theme.bg3)
+
+                ForEach($customItems) { $item in
+                    HStack(spacing: 10) {
+                        TextField("Type an item…", text: $item.text)
+                            .textFieldStyle(.plain)
+                            .focused($focusedCustomItemId, equals: item.id)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.text)
+                            .onSubmit { saveCustomItems() }
+                            .onChange(of: item.text) { _, _ in saveCustomItems() }
+                        Button {
+                            removeCustomItem(id: item.id)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundStyle(Theme.text3)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    Divider().background(Theme.border)
                 }
             }
         }
@@ -239,6 +301,41 @@ struct GroceryListView: View {
         }
     }
 
+    // MARK: - Custom items
+
+    /// Decode persisted custom items on first appearance. Failures fall
+    /// back to an empty list — a corrupted JSON blob shouldn't keep the
+    /// user out of the grocery list. (The next saveCustomItems will
+    /// overwrite the bad value with a clean encoding.)
+    private func loadCustomItems() {
+        guard let data = customItemsJSON.data(using: .utf8) else { return }
+        if let decoded = try? JSONDecoder().decode([GroceryCustomItem].self, from: data) {
+            customItems = decoded
+        }
+    }
+
+    private func saveCustomItems() {
+        if let data = try? JSONEncoder().encode(customItems),
+           let str = String(data: data, encoding: .utf8) {
+            customItemsJSON = str
+        }
+    }
+
+    private func addCustomItem() {
+        let item = GroceryCustomItem(id: UUID().uuidString, text: "")
+        customItems.append(item)
+        saveCustomItems()
+        // Pop focus into the new field so the user can type immediately.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            focusedCustomItemId = item.id
+        }
+    }
+
+    private func removeCustomItem(id: String) {
+        customItems.removeAll { $0.id == id }
+        saveCustomItems()
+    }
+
     // MARK: - Clipboard
 
     private func copyToClipboard() {
@@ -252,10 +349,26 @@ struct GroceryListView: View {
                 lines.append("  • \(r.amountLabel) \(r.name)")
             }
         }
+        let nonEmptyCustom = customItems.filter { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }
+        if !nonEmptyCustom.isEmpty {
+            lines.append("")
+            lines.append("📝 Custom items")
+            for c in nonEmptyCustom {
+                lines.append("  • \(c.text)")
+            }
+        }
 #if canImport(UIKit)
         UIPasteboard.general.string = lines.joined(separator: "\n")
 #endif
     }
+}
+
+/// Persisted custom-item row. `id` lets SwiftUI's ForEach track rows
+/// across re-renders so editing one field doesn't dismiss focus on
+/// another. Codable so we can JSON-encode for @AppStorage.
+struct GroceryCustomItem: Identifiable, Codable, Hashable {
+    var id: String
+    var text: String
 }
 
 // MARK: - Local fetch shapes
