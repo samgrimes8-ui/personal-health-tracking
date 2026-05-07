@@ -50,13 +50,18 @@ targets:
         NSPhotoLibraryAddUsageDescription: MacroLens may save processed images back to your photo library.
         NSHealthShareUsageDescription: MacroLens reads your weight from Apple Health to keep your weigh-in history in sync across devices.
         NSHealthUpdateUsageDescription: MacroLens writes the meals you log and the weights you record to Apple Health so other apps can use them.
-        # Background modes required for HKObserverQuery + enableBackgroundDelivery.
-        # `fetch` covers the standard background-app-refresh path; `processing`
-        # covers the longer HK observer callbacks. iOS won't deliver HK
-        # background updates without these declared in Info.plist.
+        # Background mode required for HKObserverQuery +
+        # enableBackgroundDelivery to fire while the app is suspended.
+        # `fetch` is the only mode HealthKit background delivery actually
+        # uses — it routes the observer callback through the standard
+        # background-app-refresh path. `processing` was previously listed
+        # here under the mistaken belief that it "covers longer HK
+        # observer callbacks", but that mode is exclusively for
+        # BGProcessingTaskRequest and triggers App Store Connect
+        # validator 90771 ("Missing BGTaskSchedulerPermittedIdentifiers")
+        # if you don't also register BGTask identifiers — which we don't.
         UIBackgroundModes:
           - fetch
-          - processing
         # Custom URL scheme for OAuth callbacks (Google sign-in via
         # ASWebAuthenticationSession). Supabase redirects to
         # `app.macrolens.native://login-callback#access_token=...&refresh_token=...`,
