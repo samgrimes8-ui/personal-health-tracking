@@ -5,9 +5,11 @@ import SwiftUI
 /// is name + macros only — the wider shape is local to this view to avoid
 /// touching shared Models.swift.
 ///
-/// Categorization mirrors the web app: AI-supplied category if it matches
-/// our taxonomy, else a keyword fallback so the list never collapses to
-/// "Other" en masse.
+/// Aggregation lives in GroceryAggregation.swift. This view owns the
+/// recipe fetch, the smart-merge toggle, and the rendering. The smart-
+/// merge toggle flips canonicalization on/off; without it, "red onion"
+/// and "yellow onion" stay as separate rows. With it, they collapse to
+/// a single "onion" row with summed amount.
 struct GroceryListView: View {
     @Environment(AppState.self) private var state
     let weekStart: String
@@ -15,6 +17,10 @@ struct GroceryListView: View {
     @State private var recipesById: [String: GroceryRecipe] = [:]
     @State private var fetching = false
     @State private var loadErr: String?
+    /// On by default — Smart merge button toggles canonicalization +
+    /// the cross-dimension unit-merge pass off (rare, but useful when
+    /// the user wants to see the raw per-recipe rows without combining).
+    @State private var smartMergeApplied: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -41,32 +47,63 @@ struct GroceryListView: View {
     // MARK: - Header / actions
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Grocery list")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Theme.text)
-                Text("\(mealsThisWeek.count) meals · \(PlannerDateMath.weekLabel(weekStart))")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.text3)
-            }
-            Spacer()
-            Button {
-                copyToClipboard()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "doc.on.doc")
-                    Text("Copy")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Grocery list")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.text)
+                    Text("\(mealsThisWeek.count) meals · \(PlannerDateMath.weekLabel(weekStart))")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text3)
                 }
-                .font(.system(size: 12, weight: .semibold))
-                .padding(.vertical, 7).padding(.horizontal, 12)
-                .background(Theme.bg2, in: .rect(cornerRadius: 999))
-                .overlay(RoundedRectangle(cornerRadius: 999).stroke(Theme.border2, lineWidth: 1))
-                .foregroundStyle(Theme.text)
+                Spacer()
             }
-            .buttonStyle(.plain)
-            .disabled(itemRows.isEmpty)
+
+            // Action buttons. Wrap so they reflow nicely on narrow widths.
+            HStack(spacing: 8) {
+                actionButton(label: "Copy", systemImage: "doc.on.doc", color: Theme.protein) {
+                    copyToClipboard()
+                }
+                .disabled(itemRows.isEmpty)
+
+                actionButton(
+                    label: smartMergeApplied ? "Merged" : "Smart merge",
+                    systemImage: "sparkles",
+                    color: Theme.carbs,
+                    filled: smartMergeApplied
+                ) {
+                    smartMergeApplied.toggle()
+                }
+                .disabled(itemRows.isEmpty)
+
+                Spacer(minLength: 0)
+            }
         }
+    }
+
+    private func actionButton(
+        label: String,
+        systemImage: String,
+        color: Color,
+        filled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                Text(label)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.vertical, 7).padding(.horizontal, 12)
+            .foregroundStyle(filled ? Color.white : color)
+            .background(filled ? color : color.opacity(0.10), in: .rect(cornerRadius: 999))
+            .overlay(
+                RoundedRectangle(cornerRadius: 999)
+                    .stroke(color.opacity(filled ? 0.0 : 0.30), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Body
@@ -126,50 +163,45 @@ struct GroceryListView: View {
 
     // MARK: - Aggregation pipeline
 
-    /// All meals in the visible week. Skips leftovers — those reuse a
-    /// previous cook and don't add to the grocery list (mirrors the
-    /// `isMealIncludedInGroceries` default in app.js).
+    /// All meals in the visible week.
     private var mealsThisWeek: [PlannerRow] {
         state.plannerByDay.flatMap { $0 }
     }
 
-    private var contributingMeals: [PlannerRow] {
-        mealsThisWeek.filter { ($0.is_leftover ?? false) == false }
-    }
-
-    /// Aggregated rows, post-grouping but pre-categorization.
+    /// Aggregated rows. Skips leftovers by default (mirrors the
+    /// `isMealIncludedInGroceries` default in app.js — leftovers reuse
+    /// a previous cook and don't add to the grocery list).
     private var itemRows: [GroceryItem] {
-        var bucket: [String: GroceryItem] = [:]
-        for meal in contributingMeals {
-            guard let recipeId = meal.recipe_id, let recipe = recipesById[recipeId] else { continue }
-            let baseServings = recipe.servings ?? 1
-            let plannedServings = meal.planned_servings ?? baseServings
-            let multiplier = baseServings > 0 ? plannedServings / baseServings : 1
-            let mealLabel = meal.meal_name ?? recipe.name
-            for ing in recipe.ingredients ?? [] {
-                let lowered = ing.name.lowercased().trimmingCharacters(in: .whitespaces)
-                guard !lowered.isEmpty else { continue }
-                let unit = ing.unit?.lowercased() ?? ""
-                let key = "\(lowered)|\(unit)"
-                let amount = ing.amountValue * multiplier
-                let cat = GroceryCategory.resolve(rawCategory: ing.category, name: ing.name)
-                if var existing = bucket[key] {
-                    existing.totalAmount += amount
-                    if !existing.meals.contains(mealLabel) { existing.meals.append(mealLabel) }
-                    bucket[key] = existing
-                } else {
-                    bucket[key] = GroceryItem(
-                        id: key,
-                        name: lowered,
+        let inputs = mealsThisWeek.map { row -> GroceryAggregator.PlannedMealInput in
+            GroceryAggregator.PlannedMealInput(
+                mealId: row.id,
+                mealLabel: row.meal_name ?? recipesById[row.recipe_id ?? ""]?.name ?? "",
+                recipeId: row.recipe_id,
+                plannedServings: row.planned_servings,
+                isLeftover: row.is_leftover ?? false
+            )
+        }
+        let recipes = recipesById.mapValues { r -> GroceryAggregator.RecipeInput in
+            GroceryAggregator.RecipeInput(
+                id: r.id,
+                name: r.name,
+                servings: r.servings,
+                ingredients: (r.ingredients ?? []).map { ing in
+                    GroceryAggregator.IngredientInput(
+                        name: ing.name,
+                        amount: ing.amountValue,
                         unit: ing.unit ?? "",
-                        totalAmount: amount,
-                        category: cat,
-                        meals: [mealLabel]
+                        category: GroceryCategory.resolve(rawCategory: ing.category, name: ing.name)
                     )
                 }
-            }
+            )
         }
-        return Array(bucket.values).sorted { $0.name < $1.name }
+        return GroceryAggregator.aggregate(
+            meals: inputs,
+            recipesById: recipes,
+            includeMeal: { !$0.isLeftover },
+            applyCanonicalization: smartMergeApplied
+        )
     }
 
     /// `itemRows` grouped by category for rendering.
@@ -240,25 +272,7 @@ private struct GroceryRecipe: Codable, Identifiable, Hashable {
     var ingredients: [RecipeIngredient]?
 }
 
-// MARK: - Items / categories
-
-struct GroceryItem: Identifiable, Hashable {
-    let id: String
-    let name: String
-    var unit: String
-    var totalAmount: Double
-    var category: GroceryCategory
-    var meals: [String]
-
-    var amountLabel: String {
-        let amt = totalAmount
-        if amt <= 0 { return "—" }
-        let display: String = (amt == amt.rounded())
-            ? String(Int(amt))
-            : String(format: "%.2f", amt)
-        return unit.isEmpty ? display : "\(display) \(unit)"
-    }
-}
+// MARK: - Categories
 
 enum GroceryCategory: String, Hashable, CaseIterable {
     case produce, protein, dairy, grains, pantry, spices, frozen, bakery, beverages, other
