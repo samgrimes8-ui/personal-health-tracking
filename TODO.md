@@ -2,318 +2,418 @@
 
 Living backlog. Items move out as they ship.
 
-## iOS native migration roadmap
+Last updated: 2026-05-07. The session since 2026-04-30 shipped 106 commits
+across iOS native, web, DB, and the TestFlight pipeline. See **Recently
+Shipped** for what landed and **Backlog** for what's still ahead.
+
+---
+
+## Recently Shipped (since 2026-04-30)
+
+### iOS Native — Phase 0/1/2 ported (TestFlight live, v0.3.0)
+
+**Foundation + tab shell** — all 8 tabs are native; the webview fallback
+era is over.
+  - 8-tab TabView + AppShell forwarders (`bb9d870`, `07649ec`)
+  - Pre-declared worker DB shapes + load methods + state slices
+    (`83097af`, `0b346af`)
+  - Shared `DBService.swift` write surface + UI primitives (`180635f`,
+    `9aac253`, bumped to v0.2.0)
+  - Slide-out nav replaces "More" overflow, matches desktop tab order
+    (`7df9564`)
+  - Scrollable bottom bar + swipe-to-page content (`2e05492`)
+
+**Recipes tab** (`6fdf156` and follow-ups)
+  - Library list, detail view with swipe-through pager (`7d9a662`)
+  - Add-recipe parity: 4 paths with method picker (`07b197e`)
+  - AI-generated instructions + save (`65d0f6e`)
+  - Public sharing via token + native share sheet (`53279a6`,
+    in-place from detail `54b6138`)
+  - Cooking mode + premium TTS, eager-prefetch (`2bf83a8`, `d4e329b`),
+    silent by default with opt-in voice (`151fc7e`)
+  - Plan-from-recipe sheet, plan-this-recipe in-place (`993b641`,
+    `5984df6`)
+  - OG preview card for source URL (`053ff5e`)
+  - Quick-tag context menu + user-editable tag order (`cf60633`,
+    `2945988`)
+  - Fix: Recipes tab not loading (`345c120`)
+
+**Goals tab** (`b045917`, `e6880e4`)
+  - Body Metrics detail view (push from summary card) (`834949c`)
+  - Daily Targets detail view + lock-to-balance + methodology
+    (`bf4c8af`)
+  - Body Metrics save can also log weight via checkbox (`9669f0a`)
+  - Detailed scan history → ScanDetailView (`2f63953`)
+  - Scan extract pipeline: Service + Models + storage (`af90e2b`)
+  - Scan upload UI in LogWeightSheet (`82d5119`)
+  - Delete-checkin confirmation dialog (`dcdef95`)
+  - Equal-width stat tiles + tight weight-chart y-axis (`cd89012`)
+  - Clip weight chart fill to card bounds (`72cfb21`)
+  - Fix: daily targets weren't persisting / returning null (`3735edc`)
+
+**Dashboard**
+  - Editable meal entries + Quick Log full history (`976b2e5`)
+  - Quick Log live search across food_items + meal_log + AI describe
+    fallback (`c69a5b7`, `e602c93` ilike fix)
+  - Quick Log scope: 2 meals + 2 foods (`b9c339e`)
+  - Quick Log composite ranking (match + personal + global + USDA)
+    (`0e7a7a9`); personal-item rank boost + tap=preview/+=instant
+    (`22e9c9b`)
+  - Search generic_foods before AI fallback (`5672d63`)
+  - Combo prompt for multi-component foods (`ed9e8c8`)
+  - Past-day meal logging via date nav (`6a8bed4`); meal edit sheet
+    supports retroactive date (`92fc497`)
+  - Show planned meals with check-off-to-consume (`d000d00`)
+  - Group today's meals by meal type, fix TZ filter (`2dc7a08`)
+  - Analyze: full barcode→label→classify fallback chain + JSON-vs-HTML
+    guard (`c32e919`)
+  - Uniform font sizing across macro count cards (`9669f0a`,
+    `2a5b3db` wrap fix)
+  - Keyboard dismiss (`b9c339e`)
+
+**Planner tab** (`69b37da`)
+  - Smart paired-meal drag (auto-move + prompt for ambiguous case)
+    (`c673cf0`)
+  - Clearer copy on leftovers move prompt (`47cf64b`)
+
+**Foods tab** (`2f926f3`)
+  - Auto-save logged foods to food_items library (`3a3fbcb`)
+  - Apply per-component qty when logging combo by component (`8731742`)
+  - Refine existing food via barcode / label / AI with per-field diff
+    acceptance (`19fe0c7`)
+
+**Account tab** (`9df3326`)
+  - Full nutrition label opt-in (toggle + expanded UI) (`bf2b327`)
+  - Rename "AI Bucks" → "Computer Calories" (`b47823c`)
+
+**Providers tab** (`71f2f56`) — directory, follow, channel editor
+
+**HealthKit two-way sync**
+  - Push macros + weight, pull weight with 12mo backfill, source-based
+    dedup (`1dec465`)
+  - Switch macro push to daily-total samples + 90-day backfill
+    migration (`9722934`)
+  - Fix daily-total drift (root cause: UTC-prefix grouping + non-self-
+    healing push) (`cfc7470`)
+  - Foreground weight pull + background delivery (root cause: `.task`
+    fires once per view lifetime) (`dff07cb`)
+  - Request READ permission for bodyMass (root cause: typesToRead was
+    empty) (`5082c34`)
+  - Tolerance dedup guard in insertHealthKitWeight (`6a0f841`)
+
+**Auth + Nav**
+  - Native Apple Sign-In (already in place pre-session)
+  - Slide-out nav replaces overflow menu (`7df9564`)
+
+**Photo + meal-input UX**
+  - Standardized photo input across all surfaces — camera default +
+    library icon (`3cd611d`, web parity `6962261`)
+  - Meal preview sheet before save, reusable for new + edit
+    (`b382aaf`, `350f283`)
+  - Tap-to-select-all numeric inputs + dropdown unit picker
+    (`e880f24`)
+  - Detect parsed quantity in Analyze Describe + scale entry
+    (`415dfb3`)
+  - Fix amount field focus stealing on existing-entry edit
+    (`29ab4cd`)
+  - Keyboard dismissal — scroll-to-dismiss + Done toolbar across all
+    text inputs (`0226057`)
+
+### Web App
+  - Quick Log composite ranking parity (`db74e34`)
+  - Quick Log searches generic_foods before AI fallback (`67123e6`)
+  - Full nutrition label opt-in mirror (`94146ed`); reads
+    `user_profiles.track_full_nutrition` (`4440bfa`)
+  - Pass full-label fields through addMealEntry + upsertFoodItem
+    (`0306719`)
+  - Quick Log AI fallback uses describeFoodCandidates picker
+    (`133e27c`)
+  - Body Metrics save can also log today's weigh-in (`401d00c`)
+  - showResult prefers serving_description (`f920e11`)
+  - Meal preview modal before save (`09f22eb`)
+
+### Database / Infrastructure
+  - `track_full_nutrition` column on `user_profiles` (`095c7b8`)
+  - 13 nullable full-label columns on `meal_log`, `food_items`,
+    `generic_foods` (saturated_fat, trans_fat, cholesterol, sodium,
+    fiber, sugar_total, sugar_added, vitamin_a/c/d, calcium, iron,
+    potassium); goals.sodium_mg_max / fiber_g_min /
+    saturated_fat_g_max / sugar_added_g_max
+  - `generic_foods` table for USDA-sourced common foods (`badb22c`);
+    USDA FDC import script (`892a8b7`)
+  - `global_log_count` + `distinct_users` columns + trigger + backfill
+    on food_items (`5f4921f`)
+  - Serving-units backfill SQL + AI-fallback script + soft constraint
+    (`f5da201`); enforce describe-style fields server-side + require
+    in form (`7836a62`); surface tap-to-set affordance for legacy NULL
+    (`77d240e`)
+  - Multi-provider pricing migration (Apr 26, pre-session, but TTS
+    rows now in use): token_usage + provider/units_used/unit_type/
+    rate snapshots; model_pricing + unit_type/effective_from/until;
+    record_usage / calculate_request_cost_v2 RPCs
+
+### TestFlight Pipeline (end-to-end automation)
+  - `ios-native/testflight.sh` orchestrates archive + upload (worker-
+    testflight session)
+  - Release config uses Apple Distribution cert (`d3e72be`, then
+    reverted `ad791e4` after a workflow tweak — current path differs)
+  - 1024×1024 app icon set + wired
+    `ASSETCATALOG_COMPILER_APPICON_NAME` (`95e0bdf`)
+  - `PrivacyInfo.xcprivacy` for App Store submission (`dd35132`)
+  - `MARKETING_VERSION` bumped 0.2.0 → 0.3.0 for first TestFlight
+    release (`bf00fad`)
+  - Dropped `processing` from UIBackgroundModes — fixes ASC validator
+    error 90771 (`a442030`)
+  - `ITSAppUsesNonExemptEncryption=false` to skip ASC compliance
+    prompt (`15f85c6`)
+
+### AI / Backend
+  - `meal_log` analyze→log path always satisfies `serving_present`
+    constraint (default + AI prompt) (`80514f9`)
+  - `describeFood` includes serving description + grams + oz;
+    candidates endpoint added (`3f5cfc0`)
+  - Pick natural single servings + detect parsed quantity in describe
+    queries (`313d4e1`)
+
+---
+
+## In Flight (workers active)
+
+  - **worker-grocery-parity** — porting grocery-list view to iOS
+    native Planner (started 2026-05-07). Uncommitted Xcode project
+    changes (`ios/App/App.xcodeproj/project.pbxproj` modified +
+    `project.xcworkspace/` untracked) are likely from this work or a
+    stale Xcode open — investigate before committing or discarding.
+  - 30+ stale tmux worker sessions from prior days are still alive
+    but their commits have all landed; safe to `tmux kill-session`
+    when convenient (do not auto-kill — confirm with user).
+
+---
+
+## Backlog / Next Up
+
+### Monetization foundation
+  - **Apple Small Business Program enrollment** — drops Apple's IAP
+    fee from 30% → 15% for orgs under $1M/yr. Apply before first
+    paid transaction.
+  - **StoreKit 2 + Stripe + Supabase subscription wiring** — paywall
+    foundation. Same Premium-flag-on-user logic on both billing
+    sources. `handleUpgradeClick` is still a placeholder.
+  - **Soft warning banner at 80% AI Bucks / Computer Calories** —
+    friendly heads-up before paywall hits.
+
+### App Store submission prep
+  - Screenshots (all device sizes), description, age rating
+  - Privacy policy URL
+  - Custom domain `macrolens.app`
+  - Google OAuth still in "Testing" mode — needs production
+    verification before public launch
+  - **Bundled web assets + configurable API base URL** — only
+    relevant if we keep the legacy Capacitor `ios/` build alive for
+    Android. Phase 9 plan is to delete `ios/` once iOS native is
+    feature-complete; if Android lags, we still need to bundle
+    `dist/` into the Capacitor build before any Play Store
+    submission.
+
+### iOS native — remaining work
+  - **PDF scan upload route** — deferred during goals parity;
+    currently only image scans extract. PDF flow needs MIME +
+    pdf→image conversion (or PDF text extraction) before Claude
+    upload.
+  - **Background HealthKit delivery hardening** — some edge cases
+    deferred (worker-healthkit replies). Daily-total drift fix
+    landed but needs validation across timezone changes + app
+    suspension scenarios.
+  - **Account linking + merge across providers** — Apple-on-iPhone
+    + Google-on-desktop is the typical case. See Reference doc
+    below for the full plan.
+
+### Email + integrations
+  - **Email integration (Gmail send via API)** — for artifacts /
+    reports. Per user memory; Resend is already wired for signup
+    notifications, but transactional + outbound user-facing email
+    is still pending.
+  - **Resend integration** — better transactional email beyond the
+    current signup notify.
+
+### Phase 3 (post-Stripe)
+  - **Dietitian scheduling** — calendaring + provider availability +
+    booking flow. Blocked on Providers tab being live (✅) and
+    Stripe being live (❌).
+
+### Smaller deferred items (preserved from pre-session)
+  - **Provider application flow** — currently alerts "coming soon"
+  - **Real `tags` table** — currently derived from `recipes.tags` +
+    `state._stagedCustomTags`; should be first-class
+  - **Save-pipeline normalization** — `parseAmount` applied at write
+    time, not just read time, so DB stores clean numbers
+  - **Refresh snapshot on personal meal-plan shares** — today a
+    share is a static snapshot at create-time. Add a "Refresh"
+    button that re-captures the current week's planner state into
+    the same share row. Caveat: public landing page caches ~60s.
+  - **Native Google Sign-In on Capacitor iOS** — only relevant if we
+    keep `ios/` alive for some reason. The native iOS rewrite uses
+    Apple Sign-In; Google Sign-In on the native side is unbuilt
+    (web users still get Google via OAuth).
+  - **Supabase MCP setup** — direct DB access from Claude desktop
+    (the Supabase MCP server is already wired in this Claude Code
+    session — this item likely refers to the desktop client).
+
+---
+
+## Known Issues / Tech Debt
+
+  - **Password reset broken** — reported 2026-04-28. Reset flow does
+    not work for `sam.grimes8@yahoo.com`. Need to repro: check
+    whether the reset email sends at all (Resend logs / Supabase
+    auth logs), whether the link's redirect URL is correct, and
+    whether the new password actually persists. Yahoo deliverability
+    is also a likely suspect — compare against a Gmail account.
+  - **Meal planner day offset timezone bug** — listed in CLAUDE.md
+    Pending Items. Needs desktop console debug session to repro.
+  - **Uncommitted Xcode project changes** — `project.pbxproj`
+    modified + `project.xcworkspace/` untracked since this session
+    started. Likely worker-grocery-parity in flight or stale Xcode
+    state — investigate before committing.
+
+---
+
+## Done — pre-session items still meaningful
+
+  - **Cooking mode paid voices** — code shipped Apr 28; iOS native
+    cooking mode now uses it (`2bf83a8`, `151fc7e`, eager prefetch
+    `d4e329b`). `OPENAI_API_KEY` is live in Vercel; recipe_audio
+    migration ran. Working in production.
+  - **Multi-provider pricing infrastructure** — shipped Apr 26.
+    `token_usage` + `model_pricing` extended for unit-based pricing
+    (per-character TTS) + effective_from/effective_until ranges.
+    `calculate_request_cost_v2` dispatches on (provider, model,
+    unit_type). All historical cost_usd values stay accurate
+    through rate changes.
+  - **Account deletion** — `delete_my_account` SECURITY DEFINER
+    shipped Apr 30.
+  - **Apple Health integration** — was listed in CLAUDE.md Pending
+    Items; shipped via HealthKit two-way sync (`1dec465` +
+    follow-ups). CLAUDE.md should be updated to reflect this.
+
+---
+
+## Reference docs (preserved from earlier planning)
+
+The sections below are kept for context — they pre-date this
+session's work but the design choices documented here still
+inform current code.
+
+### iOS native migration roadmap
 
 The Capacitor build at `ios/` was Phase 1 — proved we could get on a
-phone but felt like a webview wrapper (because it was). We're rewriting
-section by section in SwiftUI under `ios-native/`. Hybrid model: the
-native shell hosts both native screens and `WKWebView` fallbacks for
-not-yet-migrated pages, so the app is fully usable at every phase.
-When the last webview tab flips to native, we delete `ios/` and the
-`server.url` line from the old `capacitor.config.json`.
+phone but felt like a webview wrapper (because it was). We rewrote
+section by section in SwiftUI under `ios-native/`. As of 2026-05-07
+all 8 tabs are native (Dashboard, Goals, Planner, Recipes, Foods,
+Account, Providers, Analytics). Remaining: delete `ios/`, drop
+`server.url` from `capacitor.config.json`, remove `@capacitor/*`
+deps from `package.json`, App Store submission (Phase 9).
 
 ### Definition of "done" for a screen
+  - Native view replaces its webview tab in `AppShell.SignedInShell`
+  - All interactive paths the web version supports work natively
+  - Reads + writes Supabase via `supabase-swift` (no proxying)
+  - Vercel-hosted edge functions reached via `URLSession` with the
+    user's Supabase JWT
+  - Pull-to-refresh works
+  - Honors Theme.swift color tokens
 
-A screen is migrated when:
-- The native view replaces its webview tab in `AppShell.SignedInShell`
-- All interactive paths the web version supports work natively (CRUD,
-  drag/drop where applicable, modals, validation)
-- It reads + writes Supabase via `supabase-swift` (no proxying through
-  the Vercel app)
-- Vercel-hosted edge functions (`/api/analyze`, `/api/tts`, etc.) it
-  needs are reached via `URLSession` with the user's Supabase JWT
-- Pull-to-refresh works
-- It honors the same color tokens (Theme.swift) so light/dark parity
-  is trivial later
+### Open architectural questions
+  - **API base URL config** — debug/release split for staging
+    branch URL. Defer until Vercel preview env exists.
+  - **Supabase realtime subscriptions** — not used today. Live
+    planner sync across two devices would be nice — decide when
+    Planner has enough usage to warrant it.
+  - **In-App Purchases** — StoreKit 2; required by App Store
+    before anyone can pay for Premium.
 
-### Phase status
+### Account linking + merge across providers
 
-- **Phase 0 — Foundation: ✅ DONE**
-  Project scaffold, supabase-swift wired, AuthManager + AuthView,
-  AppShell with auth gate, Theme.swift (light palette).
+Lets a user who signed up with one provider attach another (typical
+case: Apple-on-iPhone user wants to also sign in via Google on
+desktop). Two flavors:
 
-- **Phase 1 — App shell + webview fallbacks: 🚧 IN PROGRESS**
-  Add a `WebViewTab` (UIViewRepresentable around WKWebView) and wire
-  TabView with: Dashboard (native, partial), Goals (webview), Planner
-  (webview), Recipes (webview), Account (webview). Webview tabs load
-  `vercel.app/?page=<name>&embed=1` so the web app picks the right
-  page and hides its own nav (sidebar/hamburger) since the native tab
-  bar replaces them. Auth is forwarded via URL fragment
-  `#access_token=...&refresh_token=...` so users don't sign in twice.
+**A. Link identity (additive — same auth.users row).** Signed-in
+user taps "Link Google" in Account → Sign-in methods. Web app calls
+`supabase.auth.linkIdentity({ provider: 'google' })`, opens OAuth
+in ASWebAuthenticationSession (native) or redirect (web). On
+success, Google becomes a linked identity on the current
+auth.users row.
 
-- **Phase 2 — Dashboard finish:**
-  Today's Dashboard ships only the macro-counts row + Today's meals
-  list. Remaining sections, ordered by daily-use signal:
-  1. Quick log (search recipes + history → tap to log) — small
-  2. Daily charts (Charts framework, donut + goal-progress bars) — small
-  3. Analytics widget (last-7-day stat tiles + sparklines) — small
-  4. Analyze food (camera + photo picker + `/api/analyze` upload +
-     result card + Log button) — biggest single piece, probably an
-     evening on its own
-
-- **Phase 3 — Goals page:**
-  Body metrics (collapsible card), Goal settings (collapsible card),
-  weekly check-in with the tiered weekly/monthly/yearly history view
-  + scan callouts, weight chart with auto-y axis. Reads checkins,
-  body_metrics, goals from Supabase. Reuses the existing `?page=goals`
-  webview while the native version is in flight.
-
-- **Phase 4 — Planner page:**
-  Week grid (7 columns desktop / responsive on mobile), drag-and-drop
-  meal moves between days/slots, Share-week modal, Grocery-list view
-  with per-meal include/exclude toggles. The drag interaction needs
-  careful native UX — SwiftUI's `.draggable` + `.dropDestination` is
-  the right primitive but worth a focused session.
-
-- **Phase 5 — Recipes page:**
-  Recipe library list, recipe detail modal, recipe edit screen,
-  ingredient extraction (existing `/api/analyze`-backed flows),
-  read-aloud entry point.
-
-- **Phase 6 — Foods page:**
-  Food items library, barcode lookup, custom food create.
-
-- **Phase 7 — Account page:**
-  Theme picker, body metrics summary, providers/follows,
-  spending/usage display, sign-out, admin panel (admin users only).
-
-- **Phase 8 — Cooking mode:**
-  Read-aloud step navigator with the speechify text transform and
-  voice-off mode. Audio playback can still proxy through `/api/tts`
-  for premium voices. Native AVAudioPlayer for MP3 fallback.
-
-- **Phase 9 — Retire Capacitor:**
-  Delete `ios/`, remove `server.url` from `capacitor.config.json` (or
-  delete the file entirely), remove `@capacitor/*` deps from
-  package.json. Submit to App Store.
-
-### Open architectural questions for this migration
-
-- **API base URL config**: every native call to a Vercel edge function
-  uses `Config.apiBaseURL`. For App Store submission we'll likely want
-  a debug/release split so dev builds can hit a staging branch URL.
-  Defer until we set up a Vercel preview environment.
-- **Supabase realtime subscriptions**: web doesn't use them today.
-  Adding native realtime updates (e.g., live planner changes across
-  two devices) would be nice — but ties to Phase 4. Decide then.
-- **Apple Health integration**: phase 8+ or its own thing. Will need
-  a `HKHealthStore` wrapper. Real value is two-way sync (push our
-  weight/macros into Health, pull workout calories back).
-- **In-App Purchases**: required by App Store before anyone can pay
-  for Premium. StoreKit 2. Same Premium-flag-on-user logic the web
-  Stripe path will use; just a different billing source.
-
-### Webview-tab plumbing (Phase 1 details)
-
-For the hybrid model to work cleanly, two web-app changes are needed:
-
-1. `?page=<name>` URL param → `state.currentPage` on init (overrides
-   the sessionStorage `macrolens_page` restore). Tabs use this to
-   point at the right page.
-2. `?embed=1` URL param → hide the sidebar + hamburger so the native
-   tab bar isn't competing with web nav. Add a `body.embed` class
-   that `display: none`s `.sidebar`, `.sidebar-overlay`, `.hamburger`.
-
-The native side passes session tokens via URL fragment so Supabase's
-`detectSessionInUrl` auto-restores the session in the webview — same
-mechanism Supabase OAuth callbacks use. Means users sign in once
-natively and the webview tabs are already authenticated.
-
-## Account linking + merge across providers
-
-Lets a user who signed up with one provider attach another (the
-typical case: Apple-on-iPhone user wants to also sign in via Google
-on their desktop). Two flavors that look similar but mean different
-things:
-
-**A. Link identity (additive — same auth.users row).**
-The user is signed in. They tap "Link Google" in Account → Sign-in
-methods. The web app calls `supabase.auth.linkIdentity({ provider:
-'google' })`, opens the Google OAuth flow in either ASWebAuthenticationSession
-(native) or a redirect (web). On success, Google becomes a linked
-identity on the current auth.users row. Same user_id, same data;
-they can now sign in with either method.
-
-Caveat for Apple-private-relay users: the Apple identity provides a
+Caveat for Apple-private-relay users: Apple identity provides a
 relay address as the user's email. Linking Google adds a Google
-identity with a different email. Supabase tolerates this — auth.users
-keeps the original (relay) email as the primary, identities table
-tracks both. UX-wise the user just sees their providers list.
+identity with a different email. Supabase tolerates this.
 
-**B. Merge two accounts (separate auth.users rows → one).**
-Rare but real: user signs up on iOS with Apple (relay@privaterelay…),
-then signs up on web with Google + a different email. They want to
-combine. Manual flow:
+**B. Merge two accounts (separate auth.users rows → one).** Rare
+but real. Manual flow:
   1. Sign in to the account they want to keep (account A).
   2. Tap "Merge from another account" → modal asks them to sign in
      to account B in a popup.
-  3. We get account B's session, transfer everything: meal_log,
-     recipes, food_items, planner, body_metrics, goals, checkins,
+  3. Get B's session, transfer everything: meal_log, recipes,
+     food_items, planner, body_metrics, goals, checkins,
      meal_plan_shares, recipe_shares, ingredient_synonyms — repoint
      user_id from B to A.
-  4. Delete account B (reuse delete_my_account but parameterized).
+  4. Delete B (parameterized delete_my_account).
 
-Conflicts to handle: same recipe name on both, overlapping planner
-rows on the same date, meal_log entries on the same `logged_at`.
-Probably let A win on conflict and keep B's row alongside (not
-deduped). Document the behavior in a confirmation step.
+Conflicts: same recipe name on both, overlapping planner rows,
+meal_log entries on the same `logged_at`. Let A win on conflict;
+keep B's row alongside (not deduped). Document in confirmation.
 
 UI sketch (Account → "Sign-in methods"):
-- Primary email shown clearly so private-relay users know their
-  identity address (lets them use it for password reset on desktop
-  if they choose).
-- List of linked providers with provider name + email per identity.
-- "Link Google" / "Link Apple" buttons (Apple only on iOS native).
-- "Unlink" per non-primary identity (with confirmation).
-- "Merge from another account" — separate flow.
-- "Delete my account" already shipped (Apr 30).
+  - Primary email shown clearly so private-relay users know their
+    identity address
+  - List of linked providers with name + email per identity
+  - "Link Google" / "Link Apple" buttons
+  - "Unlink" per non-primary identity (with confirmation)
+  - "Merge from another account" — separate flow
+  - "Delete my account" — already shipped
 
 Implementation notes:
-- Supabase has linkIdentity / unlinkIdentity since v2.16. Need
-  `Manual Linking` enabled at project level in Supabase Auth.
-- Native Apple Sign-In already uses signInWithIdToken — for linking
-  we'd use a different SDK call (linkIdentity isn't directly
-  exposed via the iOS SDK at time of writing; might need to call
-  the Auth REST API directly).
-- Merge step needs a SECURITY DEFINER function similar to
-  delete_my_account that takes (a_user_id, b_user_id), verifies
-  the caller has a session for both (passes refresh tokens for
-  both), and does the row-by-row repoint inside one transaction.
+  - Supabase has linkIdentity / unlinkIdentity since v2.16. Need
+    `Manual Linking` enabled at project level.
+  - Native Apple Sign-In already uses signInWithIdToken — for
+    linking we'd use linkIdentity (might need REST API directly).
+  - Merge step needs a SECURITY DEFINER function that takes
+    (a_user_id, b_user_id), verifies the caller has a session for
+    both, and does row-by-row repoint inside one transaction.
 
-## Cooking mode — paid voices
+### Cooking mode TTS — design notes (shipped, kept for reference)
 
-**Status:** ✅ SHIPPED (code) — Apr 28 session. Pending: `OPENAI_API_KEY`
-in Vercel env, and the `recipe_audio.sql` migration to run in Supabase
-before going live. Once those land, premium voices appear in the voice
-picker under "✨ Premium voices" and route through `/api/tts` with
-per-recipe MP3 caching. Graceful fallback to browser SpeechSynthesis on
-network failure or spend-cap hits.
+OpenAI `tts-1-hd` + per-recipe caching. ~$0.033 first read of a
+(recipe, servings, version) combo, $0 every subsequent read.
+ElevenLabs reserved as a future "premium voice" upgrade.
 
-User feedback after launching free read-aloud (Apr 26 session):
-"sounds like Stephen hawking ... we might need to upgrade to paid
-voices how much we talking?"
+**Cache key includes servings** because instruction text scales
+with serving size. Same recipe at 4 vs 6 servings → different
+text → different audio.
 
-### Cost analysis
+**Cache key includes `instructions_version`** for cache
+invalidation. `recipes.instructions_version` bumps on every save
+through `upsertRecipe`. Atomic with the save, concurrent-safe;
+storage cleanup is async (nightly sweep).
 
-**ElevenLabs** (gold standard for natural-sounding TTS — closest to
-"Margot Robbie" though obviously not literally her voice):
-- Pricing tiers (as of pricing page check; verify before commit):
-  - Starter: $5/mo, 30k chars/mo  → ~$0.000167/char
-  - Creator: $22/mo, 100k chars/mo → ~$0.00022/char
-  - Pay-as-you-go above tier: ~$0.30 per 1k chars
-- Typical recipe instruction: ~30 words × 6 steps = ~1100 chars
-  → roughly $0.30 per recipe read-through at PAYG rates
-- A premium user reading 30 recipes/month: ~$9 in TTS alone
+Edits that don't strictly need invalidation (tags, share toggles,
+serving label) still bump — over-invalidation is cheap vs. risk
+of stale audio.
 
-**OpenAI TTS** (cheaper, decent quality but more "AI-sounding"):
-- $15 per 1M chars (tts-1) or $30 per 1M (tts-1-hd)
-- Same recipe: ~$0.0165 per read at tts-1, $0.033 at tts-1-hd
-- Way cheaper but voices are noticeably less expressive
+**Cache hit cost = 0.** When we serve audio from cache we don't
+call `record_usage` at all. Only the FIRST generation per
+(recipe, servings, version, voice) records usage.
 
-**Google Cloud TTS Wavenet/Neural2:**
-- $16 per 1M chars
-- Similar economics to OpenAI
+Schema:
+  - `recipe_audio(recipe_id, step_index, servings, voice_id,
+    instructions_version, mp3_url, char_count, created_at)` —
+    `servings` is `numeric(6,2)` to handle 0.5, 1.5, etc.
+  - `recipes.instructions_version int default 1`
 
-### Design decisions to make
-
-1. **Which provider?**
-   - ElevenLabs sounds best, costs most
-   - OpenAI tts-1-hd is the value play — 10x cheaper, 80% as good
-   - Could start with OpenAI, add ElevenLabs as a "premium voice"
-     option for users who want the best
-
-2. **Who pays?**
-   - Bundle into AI Bucks (read-aloud burns Bucks per char) — fairest
-     but discourages use of the feature
-   - Premium-only feature with unlimited reads — simplest UX, eats
-     into the Premium tier margin
-   - Standalone microtransaction ($1 to "unlock premium voice for
-     this recipe" or for the month) — annoying
-
-3. **Caching strategy**
-   - Generate audio per recipe step, store as MP3 in Supabase Storage
-   - Re-use across reads of the same recipe (massive cost savings —
-     1 generation per recipe per voice forever)
-   - Re-generate only when instructions change
-   - Storage cost is negligible compared to TTS cost
-
-### Recommendation when we revisit
-
-Start with **OpenAI tts-1-hd + per-recipe caching**. ~$0.033 first
-read, $0 every subsequent read of the same recipe. Burn rate is
-manageable even with heavy use. Can layer ElevenLabs on top later
-as a "premium voice" upgrade if users explicitly want better.
-
-Voice options would be: Alloy, Echo, Fable, Nova, Onyx, Shimmer.
-Nova is the warm-female one most users gravitate toward.
-
-### Implementation sketch
-
-- New table: `recipe_audio(recipe_id, step_index, servings, voice_id, instructions_version, mp3_url, char_count, created_at)`
-  - **Cache key includes servings** because instruction text scales with serving size (scaleStepText regex-replaces quantities). Same recipe at 4 vs 6 servings produces different text → different audio. Without `servings` in the key, scaled-up reads would play wrong numbers.
-  - **Cache key includes instructions_version** for cache invalidation on edit. See "Edit invalidation" below.
-  - Servings is `numeric(6,2)` to handle 0.5, 1.5, 2.5 etc.
-  - `voice_id` indexed because we'll likely settle on Nova for everyone but want flexibility to add ElevenLabs voices later.
-- New column on recipes: `instructions_version int default 1`. Bumped (`+= 1`) on every recipe save. The save itself IS the invalidation — atomic, concurrent-safe, no cleanup race conditions.
-- New endpoint: `api/tts.js` that takes (recipe_id, step_index, servings, voice_id, instructions_version), checks cache, generates if missing via OpenAI tts-1-hd, uploads MP3 to Supabase Storage, returns URL
-- Cooking mode: instead of `speakStep()` calling browser TTS, fetch the MP3 URL and play it via `<audio>` element
-- Pass `state.recipeServings` (or recipe.servings if null) AND `recipe.instructions_version` into the fetch so the cache key matches the current recipe state
-- Fallback: if api/tts is unavailable or user is over budget, fall back to current free browser TTS (graceful degrade)
-- Voice picker: add "Premium voices" section above the device voices
-
-### Edit invalidation
-
-If a user listens to instructions, finds an error, edits the recipe, and re-opens cooking mode, they MUST hear the corrected version — not a cached MP3 with the old wrong text. Stale audio while cooking is way worse than spending another $0.033 to regenerate.
-
-**Trigger: bump `recipes.instructions_version` on every recipe save.** Hooks into the existing upsertRecipe path — no new save flows to wire. Cache rows referencing the old version become unreachable. New reads at the new version trigger regeneration.
-
-Why a version counter rather than `DELETE FROM recipe_audio WHERE recipe_id = X` on save:
-- **Atomic with the save.** No crash window between delete and write that leaves stale rows cached.
-- **Concurrent-safe.** Two users editing simultaneously don't trample each other.
-- **Storage cleanup is async.** A nightly job (or cron) sweeps `recipe_audio` rows where `instructions_version != recipes.instructions_version` and deletes the orphaned MP3s from Supabase Storage. Doesn't block any user flow.
-
-Bump triggers (anywhere we already write to the recipes table — these all go through upsertRecipe so it's one place):
-- User edits an instruction step manually
-- User taps "✨ Regenerate instructions" (AI rewrites)
-- User edits ingredients (conservative — might affect a referenced quantity)
-- User changes the recipe name or other fields (cheap to over-invalidate vs. risk of stale audio)
-
-The only edits that DON'T need invalidation are tags, share toggles, and serving label (these don't appear in scaleStepText). Could exempt those for marginal cost savings, but probably not worth the complexity — let everything bump.
-
-### Cost math with servings caching + invalidation
-
-- Storage cost per recipe: ~50KB per MP3 × 6 steps × 5 typical serving sizes = 1.5MB. At Supabase $0.021/GB/mo → effectively $0 even at 10k recipes.
-- Each unique (recipe, servings, version) combo costs ~$0.033 ONCE, then $0 for all subsequent reads (across all users).
-- Edits that bump the version → re-pay for that recipe's reads going forward. But edits are infrequent — most recipes are read many more times than they're edited.
-- Most users use 1-2 serving sizes per recipe (base + doubled). So a typical recipe's lifetime TTS cost is $0.07-$0.10 even with occasional edits.
-- Edge case: weird custom servings (e.g. user types 7) → cache miss → $0.033 → one-time. Acceptable.
-
-### Tracking infrastructure changes (✅ DONE — Apr 26 session)
-
-Schema migration shipped: supabase/migrations/multi_provider_pricing.sql
-ran successfully against production.
-
-What ships:
-- token_usage: + provider, units_used, unit_type, input_rate_snapshot,
-  output_rate_snapshot, unit_rate_snapshot. Backfilled to 'anthropic'/'tokens'.
-- model_pricing: + provider, unit_type, unit_cost_per_1m, effective_from,
-  effective_until. Old NOT NULL on input/output cost columns dropped to
-  allow per-character (unit-based) pricing rows.
-- record_usage RPC extended with p_provider / p_units_used / p_unit_type
-  (with defaults so existing analyze.js calls unchanged).
-- calculate_request_cost_v2 dispatches on (provider, model, unit_type)
-  and looks up the pricing row that was effective at the call timestamp.
-  Old 3-arg signature preserved as wrapper for backward compat.
-- Pricing data refreshed:
-  • Stale Opus 4.5 row at $15/$75 marked as effective_until=now()
-  • New Opus 4.5 row at $5/$25 effective from 2025-11-24
-  • Added claude-opus-4-6, claude-sonnet-4-6, claude-opus-4-7 (current flagship)
-  • Added openai/tts-1 ($15/M chars) and openai/tts-1-hd ($30/M chars)
-    placeholders for the upcoming paid voice work
-
-Behavior change: unknown model now returns $0 instead of silently
-treating as Sonnet pricing. Old default was a footgun for non-Anthropic
-providers.
+Fallback: if `/api/tts` is unavailable or user is over budget,
+fall back to browser SpeechSynthesis on web / native AVSpeech on
+iOS.
 
 Future rate change procedure (when Anthropic raises Sonnet, etc):
 ```sql
@@ -322,71 +422,11 @@ update public.model_pricing
  where provider = 'anthropic' and model = 'claude-sonnet-4-6'
    and effective_until is null;
 
-insert into public.model_pricing (provider, model, input_cost_per_1m,
-  output_cost_per_1m, unit_type, effective_from, updated_at)
-values ('anthropic', 'claude-sonnet-4-6', 4.00, 20.00, 'tokens', now(), now());
+insert into public.model_pricing (provider, model,
+  input_cost_per_1m, output_cost_per_1m, unit_type,
+  effective_from, updated_at)
+values ('anthropic', 'claude-sonnet-4-6', 4.00, 20.00, 'tokens',
+  now(), now());
 ```
-Two SQL statements. No code deploy. Historical cost_usd values stay
-accurate. Calls before the change keep their old rates (snapshotted).
-
-Spend cap continues to work — total_spent_usd accumulates uniformly
-across providers via the unified cost_usd column.
-
-### Cache hit cost
-
-When we serve audio from cache, we DON'T call record_usage at all
-— no cost, no tracking. Only the FIRST generation per (recipe,
-servings, version, voice) records usage. This is what keeps the
-average cost per user low even with persistent caching.
-
----
-
-## Known bugs
-
-- **Password reset broken** — reported 2026-04-28. Reset flow does
-  not work for `sam.grimes8@yahoo.com`. Need to repro: check whether
-  the reset email sends at all (Resend logs / Supabase auth logs),
-  whether the link's redirect URL is correct, and whether the new
-  password actually persists. Yahoo deliverability is also a likely
-  suspect — may need to compare against a Gmail account.
-
-## Other deferred items
-
-- **Stripe wiring** — handleUpgradeClick is a placeholder; real
-  Premium upgrades aren't wired yet
-- **Provider application flow** — currently alerts "coming soon"
-- **Resend integration** — better transactional email
-- **Supabase MCP setup** — direct DB access from Claude desktop
-- **Soft warning banner at 80% AI Bucks** — friendly heads-up
-  before paywall hits
-- **Real `tags` table** — currently derived from recipes.tags +
-  state._stagedCustomTags; should be first-class
-- **Save-pipeline normalization** — parseAmount applied at write
-  time, not just read time, so DB stores clean numbers
-- **Refresh snapshot on personal meal-plan shares** — today a share
-  is a static snapshot at create-time. Add a "Refresh" button on
-  each share row in the planner's share modal that re-captures the
-  current week's planner state into the same share row (same URL,
-  same token, just updated `plan_data` + `updated_at`). Saves users
-  from generating a new link every time they tweak a meal. Caveat:
-  the public landing page caches for ~60s, so recipients might see
-  a brief lag after a refresh — acceptable.
-- **Native Google Sign-In on iOS (Capacitor)** — web OAuth opens
-  Safari and never redirects back into the app. For now we hide the
-  Google button when running natively (isNative() check in auth.js)
-  so users only see email/password. Proper fix: install
-  `@codetrix-studio/capacitor-google-auth` (or
-  `@capacitor-firebase/authentication`), register an iOS OAuth
-  client in Google Cloud Console, drop GoogleService-Info.plist
-  into `ios/App/App/`, then call signInWithIdToken() against
-  Supabase using the native id_token. Probably 1–2 hours end to
-  end. Required before App Store submission since users will
-  expect Google Sign-In on a nutrition app.
-- **Bundled web assets + configurable API base URL** — Phase 1 mobile
-  is loading the live Vercel origin via capacitor.config.json
-  `server.url`. Apple rejects "just a website wrapper" under
-  guideline 4.2, so before App Store submission we have to bundle
-  `dist/` into the app (drop `server.url`) and replace every
-  `fetch('/api/...')` with `fetch(API_BASE + '/api/...')` where
-  API_BASE is the Vercel origin. Probably a `src/lib/api.js`
-  wrapper that picks the right base based on `Capacitor.isNativePlatform()`.
+Two SQL statements. No code deploy. Historical `cost_usd` values
+stay accurate (rates were snapshotted at call time).
