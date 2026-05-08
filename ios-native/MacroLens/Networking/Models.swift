@@ -855,3 +855,17 @@ struct AdminUserRow: Codable, Hashable, Identifiable {
     var requests_this_month: Int?
     var tokens_this_month: Int?
 }
+
+/// One row of public.error_logs. Admin error-log view selects the
+/// scalar columns directly; we don't need the joined email since the
+/// row only displays the user_id prefix anyway.
+struct ErrorLogRow: Codable, Hashable, Identifiable {
+    var id: String?
+    var user_id: String?
+    var error_message: String?
+    var error_stack: String?
+    var context: String?
+    var page: String?
+    var url: String?
+    var created_at: String?
+}

@@ -699,6 +699,20 @@ enum DBService {
             .execute()
     }
 
+    /// Pulls the most recent rows from public.error_logs across all
+    /// users. Auto-purged after 14 days by cleanupOldErrors() in db.js
+    /// (runs at session start), so this list naturally stays bounded.
+    static func adminErrorLogs(limit: Int = 200) async throws -> [ErrorLogRow] {
+        let response: [ErrorLogRow] = try await client
+            .from("error_logs")
+            .select("id, user_id, error_message, error_stack, context, page, url, created_at")
+            .order("created_at", ascending: false)
+            .limit(limit)
+            .execute()
+            .value
+        return response
+    }
+
     // ─── HealthKit dedup helpers ───────────────────────────────────────
     //
     // Two helpers for the iOS HK sync path. Schema: see

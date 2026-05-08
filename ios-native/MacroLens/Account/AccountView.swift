@@ -48,6 +48,7 @@ struct AccountView: View {
                 aiInfoCard
                 if isAdmin {
                     AdminUserPanel()
+                    AdminErrorLogPanel()
                 }
                 signInMethodsCard
                 sessionCard
