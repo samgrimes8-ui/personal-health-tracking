@@ -5706,6 +5706,36 @@ function renderAccount(container) {
           Clear
         </button>
       </div>` : ''}
+
+      ${(() => {
+        // Per-feature spend breakdown. Mirrors the iOS breakdown list
+        // (AccountView.swift breakdownList). Sorted by cost descending
+        // and rendered in Computer Calories so it lines up with the big
+        // remaining-bucks number above.
+        const rows = Object.entries(u.breakdown || {})
+          .filter(([_, v]) => v > 0)
+          .sort((a, b) => b[1] - a[1])
+        if (!rows.length) return ''
+        const featureLabel = (raw) => ({
+          'analyze-food':  'Analyze food',
+          'recipe-text':   'Recipe text',
+          'recipe-photo':  'Recipe photo',
+          'describe-food': 'Describe food',
+          'barcode':       'Barcode',
+        }[raw] || raw.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))
+        return `
+        <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:6px">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px">Breakdown</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            ${rows.map(([feat, cost]) => `
+              <div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg3);border-radius:var(--r);padding:6px 10px">
+                <span style="font-size:12px;color:var(--text2)">${esc(featureLabel(feat))}</span>
+                <span style="font-size:12px;font-weight:500;color:var(--text)">${bucksCount(cost)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>`
+      })()}
     </div>
 
     <!-- AI info -->
