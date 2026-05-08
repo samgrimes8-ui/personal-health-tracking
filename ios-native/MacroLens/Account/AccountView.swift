@@ -1,16 +1,16 @@
 import SwiftUI
+import Supabase
+import AuthenticationServices
 
 /// Native Account screen. Mirrors the web `renderAccount` page —
 /// profile + appearance + body-metrics summary (read-only; editing
-/// lives in the Goals tab) + monthly spend + sign-in methods + sign-out
-/// + delete-account flow.
+/// lives in the Goals tab) + monthly spend + sign-in methods (link /
+/// unlink Google) + sign-out + delete-account flow.
 ///
-/// What's deferred from the web equivalent: provider-channel editor,
-/// admin user panel, error log, and identity link / unlink. The
-/// "Manage in browser" row inside the Sign-in methods card deep-links
-/// the user into the existing web Account page when they need one of
-/// those flows. App Store-required surface (delete account) is fully
-/// native because the webview path is too easy to bounce out of.
+/// What's still deferred from the web equivalent: provider-channel
+/// editor and the admin user panel + error log (admin-only). Apple
+/// linking is deferred on both web AND iOS — web has no JS SDK for
+/// it, iOS has the entitlement gated behind Config.appleSignInEnabled.
 struct AccountView: View {
     @Environment(AppState.self) private var state
     @Environment(AuthManager.self) private var auth
@@ -29,6 +29,11 @@ struct AccountView: View {
     @State private var signOutInProgress = false
     @State private var fullLabelSaving: Bool = false
     @State private var fullLabelError: String?
+    @State private var identities: [UserIdentity] = []
+    @State private var identitiesLoaded = false
+    @State private var identitiesError: String?
+    @State private var linkInFlight = false
+    @State private var unlinkingIdentityId: UUID?
     @FocusState private var deleteFocused: Bool
 
     var body: some View {
@@ -62,6 +67,7 @@ struct AccountView: View {
                dbValue != trackFullNutritionCached {
                 trackFullNutritionCached = dbValue
             }
+            await loadSigninMethods()
         }
         .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
@@ -484,8 +490,12 @@ struct AccountView: View {
         }
     }
 
-    // MARK: - Sign-in methods (manage in web for now)
+    // MARK: - Sign-in methods
 
+    /// Native parity with web's loadSigninMethods (app.js:5822). Lists
+    /// every identity attached to the auth user, lets you unlink any
+    /// non-primary one, and offers a Link Google button when Google
+    /// isn't yet attached. Apple linking is deferred (see file header).
     private var signInMethodsCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
@@ -502,34 +512,170 @@ struct AccountView: View {
                             .truncationMode(.middle)
                     }
                 }
-                Link(destination: webPageURL("account")) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "link")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.text2)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Manage providers in browser")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Theme.text)
-                            Text("Link or unlink Google / Apple")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Theme.text3)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.system(size: 13))
+
+                if !identitiesLoaded {
+                    HStack(spacing: 8) {
+                        ProgressView().scaleEffect(0.8)
+                        Text("Loading sign-in methods…")
+                            .font(.system(size: 12))
                             .foregroundStyle(Theme.text3)
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 11)
-                    .background(Theme.bg3, in: .rect(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
+                } else {
+                    ForEach(identities, id: \.identityId) { identity in
+                        identityRow(identity)
+                    }
+                    if identities.isEmpty {
+                        Text("No sign-in methods on file.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.text3)
+                    }
+                    if !hasGoogleIdentity {
+                        linkGoogleButton
+                    }
+                }
+
+                if let identitiesError {
+                    Text(identitiesError)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var hasGoogleIdentity: Bool {
+        identities.contains { $0.provider == "google" }
+    }
+
+    private func identityRow(_ identity: UserIdentity) -> some View {
+        let providerLabel: String = {
+            switch identity.provider {
+            case "google": return "Google"
+            case "apple":  return "Apple"
+            case "email":  return "Email + password"
+            default:       return identity.provider.capitalized
+            }
+        }()
+        let providerEmoji: String = {
+            switch identity.provider {
+            case "google": return "🟢"
+            case "apple":  return "⚫"
+            default:       return "✉️"
+            }
+        }()
+        let identityEmail = identity.identityData?["email"]?.stringValue ?? ""
+        // Match the web rule (app.js:5843): the email-provider row whose
+        // address matches the account email is "primary" and can't be
+        // unlinked. The user must always retain at least one way in.
+        let isPrimaryEmail = identity.provider == "email" && identityEmail == sessionEmail
+        let canUnlink = identities.count > 1 && !isPrimaryEmail
+        let isUnlinking = unlinkingIdentityId == identity.identityId
+        return HStack(spacing: 10) {
+            Text(providerEmoji).font(.system(size: 18))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(providerLabel)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                if !identityEmail.isEmpty {
+                    Text(identityEmail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.text3)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 0)
+            if canUnlink {
+                Button {
+                    Task { await unlink(identity) }
+                } label: {
+                    if isUnlinking {
+                        ProgressView().scaleEffect(0.7)
+                    } else {
+                        Text("Unlink")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Theme.text3)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                .stroke(Theme.border2, lineWidth: 1))
+                    }
                 }
                 .buttonStyle(.plain)
-                Text("Native identity linking is coming in a future update — until then, link or unlink sign-in providers from the web app.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.text3)
-                    .fixedSize(horizontal: false, vertical: true)
+                .disabled(isUnlinking || linkInFlight)
             }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Theme.bg3, in: .rect(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
+    }
+
+    private var linkGoogleButton: some View {
+        Button {
+            Task { await linkGoogle() }
+        } label: {
+            HStack(spacing: 8) {
+                if linkInFlight {
+                    ProgressView().scaleEffect(0.8)
+                } else {
+                    Image(systemName: "link.badge.plus")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.text2)
+                }
+                Text(linkInFlight ? "Opening Google…" : "Link Google account")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.text)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(Theme.bg3, in: .rect(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(linkInFlight || unlinkingIdentityId != nil)
+    }
+
+    private func loadSigninMethods() async {
+        do {
+            let list = try await auth.listIdentities()
+            identities = list
+            identitiesError = nil
+        } catch {
+            identitiesError = "Couldn't load sign-in methods: \(error.localizedDescription)"
+        }
+        identitiesLoaded = true
+    }
+
+    private func linkGoogle() async {
+        linkInFlight = true
+        identitiesError = nil
+        defer { linkInFlight = false }
+        do {
+            try await auth.linkGoogleIdentity()
+            await loadSigninMethods()
+        } catch {
+            // ASWebAuthenticationSession user-cancel surfaces here too;
+            // we suppress that one specifically since it's not an error.
+            if let aerr = error as? ASWebAuthenticationSessionError,
+               aerr.code == .canceledLogin { return }
+            let msg = error.localizedDescription
+            if msg.localizedCaseInsensitiveContains("manual_linking_disabled") {
+                identitiesError = "Linking is disabled on this project. Contact support."
+            } else {
+                identitiesError = "Could not link: \(msg)"
+            }
+        }
+    }
+
+    private func unlink(_ identity: UserIdentity) async {
+        unlinkingIdentityId = identity.identityId
+        identitiesError = nil
+        defer { unlinkingIdentityId = nil }
+        do {
+            try await auth.unlinkIdentity(identity)
+            await loadSigninMethods()
+        } catch {
+            identitiesError = "Could not unlink: \(error.localizedDescription)"
         }
     }
 
