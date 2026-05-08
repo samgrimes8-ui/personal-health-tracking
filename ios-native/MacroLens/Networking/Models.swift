@@ -831,3 +831,27 @@ struct BodyScanRef: Hashable, Identifiable {
     var scanType: String?             // "INBODY" | "DEXA"
     var scanDate: String?             // YYYY-MM-DD
 }
+
+// ─── Admin Panel ─────────────────────────────────────────────────────
+//
+// Read-only summary of every user, sourced from the
+// `admin_user_overview` SECURITY DEFINER RPC. Same shape the web admin
+// list consumes (loadAdminPanel in src/pages/app.js).
+
+struct AdminUserRow: Codable, Hashable, Identifiable {
+    var id: String { user_id }
+    var user_id: String
+    var email: String?
+    var role: String?
+    var account_status: String?
+    var created_at: String?
+    var last_active: String?
+    var log_entries_total: Int?
+    var log_entries_this_month: Int?
+    var recipe_count: Int?
+    var spending_limit_usd: Double?
+    var spent_this_month_usd: Double?
+    var total_spent_usd: Double?
+    var requests_this_month: Int?
+    var tokens_this_month: Int?
+}

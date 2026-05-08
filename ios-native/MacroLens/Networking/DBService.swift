@@ -658,6 +658,47 @@ enum DBService {
         try await client.rpc("delete_my_account").execute()
     }
 
+    // ─── Admin ─────────────────────────────────────────────────────────
+    //
+    // Mirrors getAdminUserOverview / setUserRole / setUserPrivileges /
+    // getAllErrorLogs in src/lib/db.js. Server-side checks gate access:
+    // the admin_user_overview RPC enforces is_admin(auth.uid()), and the
+    // direct user_profiles UPDATEs ride on the row's RLS policy (which
+    // permits admin role). Callers should still hide UI behind a role
+    // check so non-admins never see the controls.
+
+    static func adminUserOverview() async throws -> [AdminUserRow] {
+        let response: [AdminUserRow] = try await client
+            .rpc("admin_user_overview")
+            .order("spent_this_month_usd", ascending: false)
+            .execute()
+            .value
+        return response
+    }
+
+    static func adminSetUserRole(userId: String, role: String) async throws {
+        struct Payload: Encodable {
+            let role: String
+            let is_admin: Bool
+        }
+        try await client
+            .from("user_profiles")
+            .update(Payload(role: role, is_admin: role == "admin"))
+            .eq("user_id", value: userId)
+            .execute()
+    }
+
+    static func adminSetAccountStatus(userId: String, status: String) async throws {
+        struct Payload: Encodable {
+            let account_status: String
+        }
+        try await client
+            .from("user_profiles")
+            .update(Payload(account_status: status))
+            .eq("user_id", value: userId)
+            .execute()
+    }
+
     // ─── HealthKit dedup helpers ───────────────────────────────────────
     //
     // Two helpers for the iOS HK sync path. Schema: see

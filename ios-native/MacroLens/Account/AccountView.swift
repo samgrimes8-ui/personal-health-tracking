@@ -46,6 +46,9 @@ struct AccountView: View {
                 HealthSettingsSection()
                 spendingCard
                 aiInfoCard
+                if isAdmin {
+                    AdminUserPanel()
+                }
                 signInMethodsCard
                 sessionCard
                 dangerZoneCard
@@ -865,6 +868,11 @@ struct AccountView: View {
         let label: String
         let bg: Color
         let fg: Color
+    }
+
+    private var isAdmin: Bool {
+        let p = state.profile
+        return (p?.role == "admin") || (p?.is_admin == true)
     }
 
     private var roleBadge: RoleBadge? {
