@@ -228,18 +228,32 @@ enum GroceryAggregator {
         let ingredients: [IngredientInput]
     }
 
-    /// Aggregate meals → grocery items.
+    /// Aggregate meals → grocery items + a stats payload describing the
+    /// raw-line vs merged-row counts so the caller can show "merged N
+    /// lines into M rows" in the UI. Mirrors the two passes in
+    /// sumIngredients (app.js:2702).
     /// - includeMeal: closure to filter which meals contribute (lets
     ///   the caller honor per-meal user overrides + leftover defaults).
     /// - applyCanonicalization: when true, runs IngredientCanonicalizer
-    ///   so e.g. "red onion" + "yellow onion" collapse to "onion".
+    ///   AND the cross-dimension unit-merge pass; "red onion" + "yellow
+    ///   onion" collapse to "onion", "1 cup oil" + "1 tbsp oil" become
+    ///   one row through the volume dimension. When false, neither
+    ///   collapse runs — only exact (lowercased name + unit) duplicates
+    ///   merge. Off mode exists so the user can see the unmerged raw
+    ///   per-recipe rows when they want to verify what got combined.
+    struct AggregationResult {
+        let items: [GroceryItem]
+        let rawLineCount: Int    // total ingredient lines fed in (pre-merge)
+    }
+
     static func aggregate(
         meals: [PlannedMealInput],
         recipesById: [String: RecipeInput],
         includeMeal: (PlannedMealInput) -> Bool,
         applyCanonicalization: Bool
-    ) -> [GroceryItem] {
+    ) -> AggregationResult {
         var bucket: [String: GroceryItem] = [:]
+        var rawLineCount = 0
 
         for meal in meals where includeMeal(meal) {
             guard let recipeId = meal.recipeId,
@@ -251,6 +265,7 @@ enum GroceryAggregator {
             for ing in recipe.ingredients {
                 let raw = ing.name.lowercased().trimmingCharacters(in: .whitespaces)
                 guard !raw.isEmpty else { continue }
+                rawLineCount += 1
                 let canonical = applyCanonicalization
                     ? IngredientCanonicalizer.canonicalize(raw)
                     : raw
@@ -284,14 +299,21 @@ enum GroceryAggregator {
             }
         }
 
-        // Second pass: try to merge across keys that share a name but
-        // differ in unit, when both units belong to the same dimension.
-        // This is what produces "1.5 cups" instead of "1 cup + 0.5 cup"
-        // when two recipes wrote the same ingredient with the same unit
-        // family. Without it the canonical-name match alone wouldn't
-        // help when units differ slightly (cup vs cups, etc).
-        return mergeAcrossDimensions(Array(bucket.values))
-            .sorted { $0.name < $1.name }
+        // Cross-dimension merge only runs when smart-merge is on. With
+        // it off the user is asking to see the raw bucketed rows — they
+        // get one row per (lowercased name + unit), no further folding.
+        // Without this gate the OFF state still folded "1 cup oil" +
+        // "1 tbsp oil" into one row, making the toggle look like a no-op
+        // for the most common multi-recipe duplicate case (different
+        // units of the same ingredient). Reported as "Smart merge does
+        // nothing on iOS" — fixed here.
+        let final = applyCanonicalization
+            ? mergeAcrossDimensions(Array(bucket.values))
+            : Array(bucket.values)
+        return AggregationResult(
+            items: final.sorted { $0.name < $1.name },
+            rawLineCount: rawLineCount
+        )
     }
 
     /// Sum two amount/unit pairs through whichever dimension they

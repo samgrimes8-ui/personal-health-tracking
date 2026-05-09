@@ -68,6 +68,15 @@ struct GroceryListView: View {
     }
     @State private var viewMode: GroceryViewMode = .full
 
+    /// Brief in-view banner shown after the user taps Copy. Auto-dismiss
+    /// keeps it out of the way once the user has seen it. Without this
+    /// the pasteboard write is a silent success and users assume the
+    /// button is broken.
+    @State private var copyFeedback: String? = nil
+    /// Tap on the (?) chip next to Reset opens this alert with a plain-
+    /// English summary of what Reset clears (and what it leaves alone).
+    @State private var showResetHelp: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -152,19 +161,100 @@ struct GroceryListView: View {
                     addCustomItem()
                 }
 
-                if !userMealOverrides.isEmpty {
-                    actionButton(
-                        label: "Reset",
-                        systemImage: "arrow.uturn.backward",
-                        color: Theme.text3
-                    ) {
-                        userMealOverrides = [:]
-                    }
+                // Reset is always rendered so users can see it exists
+                // before they have anything to reset. Disabled state
+                // makes the inactive case obvious. Tap-to-help (?) chip
+                // explains what's cleared vs preserved.
+                actionButton(
+                    label: "Reset",
+                    systemImage: "arrow.uturn.backward",
+                    color: Theme.text3
+                ) {
+                    performReset()
                 }
+                .disabled(!hasResettableState)
+
+                Button { showResetHelp = true } label: {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.text3)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("What does Reset do?")
 
                 Spacer(minLength: 0)
             }
+
+            // Inline merge-savings hint. Only surfaces when there's
+            // actually something to communicate so the layout stays
+            // tight when the list is empty.
+            if itemRows.count > 0 {
+                HStack(spacing: 6) {
+                    if smartMergeApplied {
+                        if mergeSavings > 0 {
+                            Text("✨ Combined \(rawLineCount) ingredient lines into \(itemRows.count) rows")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.carbs)
+                        } else {
+                            Text("✨ Smart merge on — no duplicates to combine")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.text3)
+                        }
+                    } else {
+                        Text("✨ Smart merge off — showing raw per-recipe rows")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+
+            if let feedback = copyFeedback {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Theme.green)
+                    Text(feedback)
+                        .foregroundStyle(Theme.green)
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Theme.green.opacity(0.10), in: .rect(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.green.opacity(0.30), lineWidth: 1))
+                .transition(.opacity)
+            }
         }
+        .alert("What Reset clears", isPresented: $showResetHelp) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Reset clears your customizations on this list:\n\n• Smart merge → on\n• Per-meal Add to list / In list toggles\n• Custom items you typed\n• Date range overrides\n\nIt does NOT change your planner — meals stay scheduled, recipes are untouched.")
+        }
+    }
+
+    /// True when at least one form of customization is active, so the
+    /// Reset button has something to undo. Date range overrides count
+    /// even though they have their own "Reset to today" link below the
+    /// pickers — the global Reset is a single sweep.
+    private var hasResettableState: Bool {
+        if !smartMergeApplied { return true }
+        if !userMealOverrides.isEmpty { return true }
+        if !customItems.isEmpty { return true }
+        if fromDate != nil || toDate != nil { return true }
+        return false
+    }
+
+    /// Clears every grocery-list customization. Mirrors the broad-stroke
+    /// reset macro-tracker spec'd: smart-merge → on, per-meal overrides
+    /// → empty, custom items → empty (and persisted store cleared),
+    /// date range → auto. The planner data itself is left alone — only
+    /// view-side state resets.
+    private func performReset() {
+        smartMergeApplied = true
+        userMealOverrides = [:]
+        customItems = []
+        saveCustomItems()           // also wipes the @AppStorage cache
+        fromDate = nil
+        toDate = nil
     }
 
     private func actionButton(
@@ -624,10 +714,12 @@ struct GroceryListView: View {
         return rangeMealsRemote ?? []
     }
 
-    /// Aggregated rows. Skips leftovers by default (mirrors the
-    /// `isMealIncludedInGroceries` default in app.js — leftovers reuse
-    /// a previous cook and don't add to the grocery list).
-    private var itemRows: [GroceryItem] {
+    /// Full aggregation result — items + the pre-merge raw-line count
+    /// so the UI can show "merged N lines into M rows" feedback. Skips
+    /// leftovers by default (mirrors the `isMealIncludedInGroceries`
+    /// default in app.js — leftovers reuse a previous cook and don't
+    /// add to the grocery list).
+    private var aggregation: GroceryAggregator.AggregationResult {
         let inputs = effectiveMeals.map { row -> GroceryAggregator.PlannedMealInput in
             GroceryAggregator.PlannedMealInput(
                 mealId: row.id,
@@ -668,6 +760,13 @@ struct GroceryListView: View {
             applyCanonicalization: smartMergeApplied
         )
     }
+
+    private var itemRows: [GroceryItem] { aggregation.items }
+    private var rawLineCount: Int { aggregation.rawLineCount }
+    /// How many rows the current merge collapsed away. 0 when nothing
+    /// merged (typical for empty list, single-recipe weeks, or smart
+    /// merge OFF with no exact-key duplicates).
+    private var mergeSavings: Int { max(rawLineCount - itemRows.count, 0) }
 
     // MARK: - Leftover detection
 
@@ -953,8 +1052,14 @@ struct GroceryListView: View {
 
     // MARK: - Clipboard
 
+    /// Build a plaintext list, write to UIPasteboard, and surface a
+    /// brief in-view "Copied N items" banner. The pasteboard write
+    /// itself was always working — the bug report ("Copy doesn't
+    /// work") was the silent-success problem, where the user couldn't
+    /// tell whether anything happened.
     private func copyToClipboard() {
         var lines: [String] = []
+        var copiedCount = 0
         lines.append("Grocery list — \(PlannerDateMath.weekLabel(weekStart))")
         for cat in GroceryCategory.order {
             guard let rows = grouped[cat], !rows.isEmpty else { continue }
@@ -962,6 +1067,7 @@ struct GroceryListView: View {
             lines.append("\(cat.emoji) \(cat.label)")
             for r in rows {
                 lines.append("  • \(r.amountLabel) \(r.name)")
+                copiedCount += 1
             }
         }
         let nonEmptyCustom = customItems.filter { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -970,11 +1076,24 @@ struct GroceryListView: View {
             lines.append("📝 Custom items")
             for c in nonEmptyCustom {
                 lines.append("  • \(c.text)")
+                copiedCount += 1
             }
         }
 #if canImport(UIKit)
         UIPasteboard.general.string = lines.joined(separator: "\n")
 #endif
+        let label = copiedCount == 1 ? "Copied 1 item to clipboard" : "Copied \(copiedCount) items to clipboard"
+        withAnimation(.easeInOut(duration: 0.2)) { copyFeedback = label }
+        // Auto-dismiss so the banner doesn't linger in the layout.
+        // Capture-by-task is fine — overwriting copyFeedback before
+        // 1.6s passes (e.g. user taps Copy again) just refreshes the
+        // banner; the older dismissal still fires harmlessly.
+        let snapshot = label
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            if copyFeedback == snapshot {
+                withAnimation(.easeInOut(duration: 0.25)) { copyFeedback = nil }
+            }
+        }
     }
 }
 
