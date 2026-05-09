@@ -19,11 +19,7 @@ struct AnalyticsSection: View {
     var body: some View {
         if shouldShow {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Last 7 days")
-                    .font(.system(size: 11, weight: .medium))
-                    .tracking(1.0)
-                    .textCase(.uppercase)
-                    .foregroundStyle(Theme.text3)
+                header
 
                 HStack(spacing: 10) {
                     avgCaloriesTile
@@ -32,6 +28,37 @@ struct AnalyticsSection: View {
                 }
             }
         }
+    }
+
+    /// Section header with a "View all →" affordance that jumps to the
+    /// full Analytics tab. The whole row is tappable (not just the
+    /// chevron) so the hit target is generous, and the hint text
+    /// stays subtle so the widget still reads as a snapshot rather
+    /// than a CTA. Mirrors web's renderDashboardAnalyticsWidget header
+    /// link to the analytics page.
+    private var header: some View {
+        Button {
+            state.selectedTab = .analytics
+        } label: {
+            HStack(spacing: 6) {
+                Text("Last 7 days")
+                    .font(.system(size: 11, weight: .medium))
+                    .tracking(1.0)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Theme.text3)
+                Spacer()
+                Text("View all")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("View full analytics")
+        .accessibilityHint("Opens the Analytics tab")
     }
 
     private var shouldShow: Bool {

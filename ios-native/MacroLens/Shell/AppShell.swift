@@ -64,7 +64,6 @@ struct SignedInShell: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.scenePhase) private var scenePhase
     @State private var state = AppState()
-    @State private var selected: AppTab = .dashboard
     /// Throttle for the foreground re-pull. .task fires once per view
     /// lifetime; scenePhase active fires every time the user reopens
     /// the app — without throttling, a quick fg/bg/fg burst would run
@@ -72,7 +71,13 @@ struct SignedInShell: View {
     @State private var lastForegroundPull: Date?
 
     var body: some View {
-        TabView(selection: $selected) {
+        // Bind both the swipe-paged TabView and the bottom bar to
+        // AppState.selectedTab so cross-tab navigation works from any
+        // view that has the AppState environment (e.g. the Dashboard's
+        // "View all →" analytics shortcut). Bindable() exposes a
+        // SwiftUI Binding into an @Observable property.
+        @Bindable var state = state
+        TabView(selection: $state.selectedTab) {
             ForEach(AppTab.allCases, id: \.self) { tab in
                 NavigationStack {
                     rootView(for: tab)
@@ -82,7 +87,7 @@ struct SignedInShell: View {
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ScrollableTabBar(selected: $selected)
+            ScrollableTabBar(selected: $state.selectedTab)
         }
         .environment(state)
         .tint(Theme.accent)

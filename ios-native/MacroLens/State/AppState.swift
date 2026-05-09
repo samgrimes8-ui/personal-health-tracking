@@ -10,6 +10,12 @@ import Supabase
 final class AppState {
     // ─── Dashboard / Goals (pre-existing) ──────────────────────────────
     var goals: Goals = Goals()
+    /// Currently-active tab. Owned here (rather than in SignedInShell's
+    /// local @State) so any view can navigate cross-tab — e.g. a "View
+    /// all →" link on the Dashboard's analytics widget can flip this to
+    /// `.analytics` to jump to the full Analytics tab without dragging
+    /// the whole bottom-bar binding through the view hierarchy.
+    var selectedTab: AppTab = .dashboard
     /// Calendar day the dashboard is currently showing. Defaults to today;
     /// chevron-nav on the Today's Meals header walks it backward (and
     /// optionally forward, capped at today). Drives `todayLog` — when
