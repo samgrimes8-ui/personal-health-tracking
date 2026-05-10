@@ -19,6 +19,14 @@ struct RecipeEditView: View {
     let onSaved: (RecipeFull) -> Void
     let onCancel: () -> Void
     let onDeleted: () -> Void
+    /// Pool of every tag the user has access to — presets + customs in
+    /// use across other recipes + tags coined via the Edit Tags sheet
+    /// (user_profiles.tag_order). Without this, the chip editor only
+    /// shows presets + this recipe's own tags, so a tag created on
+    /// Recipe A wouldn't appear when editing Recipe B. The parent
+    /// (RecipesView) computes the union so every editor sees the same
+    /// global view.
+    var availableTags: [String] = []
 
     @Environment(\.dismiss) private var dismiss
 
@@ -582,7 +590,16 @@ struct RecipeEditView: View {
             seen.insert(t.lowercased())
             out.append(t)
         }
-        // Currently selected (custom or otherwise) — keep them visible.
+        // Tags from across the user's library + tag_order. Aggregated
+        // by the parent so a tag coined on Recipe A appears in Recipe B's
+        // picker without us needing to re-scan the library here.
+        for t in availableTags where !seen.contains(t.lowercased()) {
+            seen.insert(t.lowercased())
+            out.append(t)
+        }
+        // Currently selected on this recipe (custom or otherwise) —
+        // keep them visible even if they're not in availableTags yet
+        // (e.g. user just typed a brand-new custom tag in this session).
         for t in (recipe.tags ?? []) where !seen.contains(t.lowercased()) {
             seen.insert(t.lowercased())
             out.append(t)

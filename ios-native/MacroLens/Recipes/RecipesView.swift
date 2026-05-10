@@ -160,7 +160,8 @@ struct RecipesView: View {
                                    onDeleted: {
                                        presented = nil
                                        Task { await refresh() }
-                                   })
+                                   },
+                                   availableTags: globalAvailableTags())
                 }
             case .newDraft(let r):
                 NavigationStack {
@@ -170,7 +171,8 @@ struct RecipesView: View {
                                        Task { await refresh() }
                                    },
                                    onCancel: { presented = nil },
-                                   onDeleted: { presented = nil })
+                                   onDeleted: { presented = nil },
+                                   availableTags: globalAvailableTags())
                 }
             }
         }
@@ -627,6 +629,51 @@ struct RecipesView: View {
             // a brand new account where tag_order is empty.
             savedTagOrder = []
         }
+    }
+
+    /// Global tag pool used by every editor / picker so a tag created on
+    /// Recipe A immediately appears in Recipe B's picker (and in the
+    /// "+ New" form's picker, the QuickTag sheet, etc). Union of:
+    ///   • presets (with hidden ones filtered out)
+    ///   • every custom tag actually applied across the library
+    ///   • savedTagOrder — covers tags coined via the Edit Tags sheet
+    ///     that aren't on any recipe yet
+    /// Case is preserved from whichever source surfaced it last.
+    /// `library` is a SwiftUI @State so this is recomputed on every
+    /// render after refresh — no stale snapshot.
+    private func globalAvailableTags() -> [String] {
+        var displayMap: [String: String] = [:] // lowercase → preferred casing
+        var ordered: [String] = []
+        for p in RecipeTagPresets.all {
+            let key = p.lowercased()
+            if displayMap[key] == nil {
+                displayMap[key] = p
+                ordered.append(p)
+            }
+        }
+        // Library customs first by appearance, presets de-duped above.
+        for r in library {
+            for t in r.tags ?? [] {
+                let trimmed = t.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty { continue }
+                let key = trimmed.lowercased()
+                if displayMap[key] == nil {
+                    displayMap[key] = trimmed
+                    ordered.append(trimmed)
+                }
+            }
+        }
+        // Tags coined via Edit Tags sheet — they're in savedTagOrder
+        // but might not be on any recipe yet. Add them last so they
+        // surface as suggestions even before being applied.
+        for t in savedTagOrder {
+            let key = t.lowercased()
+            if displayMap[key] == nil {
+                displayMap[key] = t
+                ordered.append(t)
+            }
+        }
+        return ordered
     }
 
     private func tagCounts(_ rows: [RecipeFull]) -> [String: Int] {
