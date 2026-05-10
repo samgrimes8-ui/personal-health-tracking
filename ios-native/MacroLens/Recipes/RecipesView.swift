@@ -222,18 +222,42 @@ struct RecipesView: View {
             // tag list so users see exactly the pills they're rearranging.
             let counts = tagCounts(library)
             let display = orderedDisplayTags(counts: counts)
-            TagOrderEditorSheet(initialOrder: display) { newOrder in
-                savedTagOrder = newOrder
-                Task {
-                    do {
-                        try await DBService.saveRecipeTagOrder(newOrder)
-                    } catch {
-                        // Save failures revert to the canonical order on
-                        // next load; logging keeps it findable but we
-                        // don't want a transient network blip to block
-                        // the close gesture.
-                        print("[recipes] saveRecipeTagOrder failed: \(error.localizedDescription)")
+            TagOrderEditorSheet(initialOrder: display, library: library) { payload in
+                // Snapshot the library BEFORE we optimistically prune so
+                // the DB strip pass downstream still has the affected-
+                // recipe set to iterate over.
+                let preDeleteSnapshot = library
+                // 1. Splice the new order into the parent's snapshot so
+                //    the filter strip reflects the change immediately.
+                savedTagOrder = payload.order
+                // 2. Optimistically strip deleted tags from the local
+                //    library so the chip / count UIs update right away.
+                if !payload.deletedTags.isEmpty {
+                    let deletedLower = Set(payload.deletedTags.map { $0.lowercased() })
+                    for i in library.indices {
+                        if let tags = library[i].tags {
+                            library[i].tags = tags.filter { !deletedLower.contains($0.lowercased()) }
+                        }
                     }
+                }
+                Task {
+                    // Persist the new tag_order. Failures revert to the
+                    // canonical order on next load — log but don't block.
+                    do { try await DBService.saveRecipeTagOrder(payload.order) }
+                    catch { print("[recipes] saveRecipeTagOrder failed: \(error.localizedDescription)") }
+                    // Strip deleted tags from every affected recipe in DB,
+                    // using the pre-prune snapshot so the loop has work.
+                    for tag in payload.deletedTags {
+                        let affected = preDeleteSnapshot.filter {
+                            ($0.tags ?? []).contains { $0.lowercased() == tag.lowercased() }
+                        }
+                        do { _ = try await DBService.removeTagFromRecipes(tag, recipes: affected) }
+                        catch { print("[recipes] removeTagFromRecipes(\(tag)) failed: \(error.localizedDescription)") }
+                    }
+                    // Refresh from DB so the next render sees the
+                    // canonical post-strip state (in case the optimistic
+                    // prune missed anything edge-case).
+                    if !payload.deletedTags.isEmpty { await refresh() }
                 }
             }
         }

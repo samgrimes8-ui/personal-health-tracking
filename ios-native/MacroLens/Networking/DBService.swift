@@ -191,6 +191,43 @@ enum DBService {
             .execute()
     }
 
+    /// Strip a tag (case-insensitive) from every recipe in the user's
+    /// library that currently has it. Used by the Reorder/Manage Tags
+    /// sheet's swipe-to-delete action. Mirrors `executeTagDelete` in
+    /// src/pages/app.js — same per-recipe loop, same casing semantics.
+    ///
+    /// Caller hands in the affected `recipes` snapshot so we don't have
+    /// to re-query for the candidate set. Returns the count of recipes
+    /// that were actually updated so the parent can surface a "deleted
+    /// from N recipes" toast.
+    @discardableResult
+    static func removeTagFromRecipes(_ tag: String, recipes: [RecipeFull]) async throws -> Int {
+        struct Payload: Encodable { let tags: [String]; let updated_at: String }
+        let userId = try await currentUserID()
+        let lower = tag.lowercased()
+        let nowIso = ISO8601DateFormatter().string(from: Date())
+        var updated = 0
+        for recipe in recipes {
+            let oldTags = recipe.tags ?? []
+            let newTags = oldTags.filter { $0.lowercased() != lower }
+            if newTags.count == oldTags.count { continue }
+            do {
+                try await client
+                    .from("recipes")
+                    .update(Payload(tags: newTags, updated_at: nowIso))
+                    .eq("id", value: recipe.id)
+                    .eq("user_id", value: userId)
+                    .execute()
+                updated += 1
+            } catch {
+                // Skip individual failures — a transient row error
+                // shouldn't block the rest of the batch.
+                print("[tags] removeTagFromRecipes failed for \(recipe.id): \(error.localizedDescription)")
+            }
+        }
+        return updated
+    }
+
     // ─── Planner ───────────────────────────────────────────────────────
     //
     // savePlannerEntry mirrors addPlannerMeal() in db.js: the caller

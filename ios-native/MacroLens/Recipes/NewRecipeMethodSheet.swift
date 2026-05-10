@@ -15,13 +15,22 @@ import PhotosUI
 /// `onComplete(prefilledRecipe)` which the parent uses to dismiss the
 /// picker AND open RecipeEditView with the prefilled draft in one
 /// gesture.
+/// One enum case per sub-flow so the picker can drive programmatic
+/// navigation via NavigationPath. Lets the link path's "Take a photo
+/// instead" Tier 4 deep link replace the stack with [.photo] in one
+/// gesture instead of forcing the user to back out and pick again.
+enum NewRecipeRoute: Hashable {
+    case link, photo, manual, generate
+}
+
 struct NewRecipeMethodSheet: View {
     let onComplete: (RecipeFull) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var path: [NewRecipeRoute] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("How do you want to add it?")
@@ -29,9 +38,7 @@ struct NewRecipeMethodSheet: View {
                         .foregroundStyle(Theme.text3)
                         .padding(.bottom, 4)
 
-                    NavigationLink {
-                        NewRecipeLinkPath(onComplete: completeAndDismiss)
-                    } label: {
+                    Button { path.append(.link) } label: {
                         methodCard(
                             icon: "🔗",
                             iconBg: Theme.accent.opacity(0.12),
@@ -41,9 +48,7 @@ struct NewRecipeMethodSheet: View {
                     }
                     .buttonStyle(.plain)
 
-                    NavigationLink {
-                        NewRecipePhotoPath(onComplete: completeAndDismiss)
-                    } label: {
+                    Button { path.append(.photo) } label: {
                         methodCard(
                             icon: "📸",
                             iconBg: Theme.green.opacity(0.12),
@@ -53,9 +58,7 @@ struct NewRecipeMethodSheet: View {
                     }
                     .buttonStyle(.plain)
 
-                    NavigationLink {
-                        NewRecipeManualPath(onComplete: completeAndDismiss)
-                    } label: {
+                    Button { path.append(.manual) } label: {
                         methodCard(
                             icon: "✏️",
                             iconBg: Theme.carbs.opacity(0.12),
@@ -65,9 +68,7 @@ struct NewRecipeMethodSheet: View {
                     }
                     .buttonStyle(.plain)
 
-                    NavigationLink {
-                        NewRecipeGeneratePath(onComplete: completeAndDismiss)
-                    } label: {
+                    Button { path.append(.generate) } label: {
                         methodCard(
                             icon: "✨",
                             iconBg: Theme.fat.opacity(0.12),
@@ -87,6 +88,26 @@ struct NewRecipeMethodSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
+                }
+            }
+            .navigationDestination(for: NewRecipeRoute.self) { route in
+                switch route {
+                case .link:
+                    NewRecipeLinkPath(
+                        onComplete: completeAndDismiss,
+                        onJumpToPhoto: {
+                            // Replace the back stack so Back from the photo
+                            // sub-view returns to the picker root, not to
+                            // the failed link sheet.
+                            path = [.photo]
+                        }
+                    )
+                case .photo:
+                    NewRecipePhotoPath(onComplete: completeAndDismiss)
+                case .manual:
+                    NewRecipeManualPath(onComplete: completeAndDismiss)
+                case .generate:
+                    NewRecipeGeneratePath(onComplete: completeAndDismiss)
                 }
             }
         }
@@ -131,13 +152,29 @@ struct NewRecipeMethodSheet: View {
 /// for it). Mirrors `openNewRecipeFromLink` + `importRecipeFromLink` in
 /// src/pages/app.js.
 struct NewRecipeLinkPath: View {
+    /// Hand back the prefilled draft to the picker (which handles dismiss
+    /// + handoff to RecipeEditView).
     let onComplete: (RecipeFull) -> Void
+    /// Bail out of the picker entirely and route the user to the photo-
+    /// upload sub-view. Wired up in NewRecipeMethodSheet so the Tier 4
+    /// "Take a photo instead" deep link works without re-opening the
+    /// picker.
+    let onJumpToPhoto: () -> Void
 
     @State private var url: String = ""
     @State private var dishName: String = ""
-    @State private var importing: Bool = false
-    @State private var error: String?
+    @State private var importTask: Task<Void, Never>? = nil
+    @State private var importStartedAt: Date? = nil
+    @State private var error: ImportError?
     @FocusState private var keyboardFocused: Bool
+
+    enum ImportError: Equatable {
+        case generic(String)
+        /// Server walked every tier and gave up — render the photo-jump CTA.
+        case importFailed(String)
+    }
+
+    private var importing: Bool { importTask != nil }
 
     private var blockedPlatform: String? {
         let lower = url.lowercased()
@@ -148,60 +185,25 @@ struct NewRecipeLinkPath: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Recipe websites, blogs, and YouTube videos work. Instagram and TikTok links are private — use the dish name field below for those.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.text3)
-
-                fieldLabel("URL")
-                TextField("https://...", text: $url)
-                    .focused($keyboardFocused)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .padding(12)
-                    .background(Theme.bg3, in: .rect(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
-
-                if let platform = blockedPlatform {
-                    privatePlatformHint(platform)
-                }
-
-                fieldLabel("Or describe the dish")
-                TextField("e.g. Chicken tikka masala…", text: $dishName)
-                    .focused($keyboardFocused)
-                    .textInputAutocapitalization(.sentences)
-                    .padding(12)
-                    .background(Theme.bg3, in: .rect(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
-
+            VStack(alignment: .leading, spacing: 18) {
+                pasteLinkSection
+                orDivider
+                describeDishSection
                 if let error {
-                    Text(error).font(.system(size: 12)).foregroundStyle(Theme.red)
+                    errorBlock(error)
                 }
-
-                Button {
-                    Task { await importRecipe() }
-                } label: {
-                    HStack(spacing: 8) {
-                        if importing { ProgressView().controlSize(.small).tint(Theme.accentFG) }
-                        Text(importing ? "Importing…" : "Import recipe")
-                            .font(.system(size: 15, weight: .semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-                    .foregroundStyle(Theme.accentFG)
-                    .background(canSubmit ? Theme.accent : Theme.bg4, in: .rect(cornerRadius: 12))
+                if importing {
+                    inProgressBlock
                 }
-                .buttonStyle(.plain)
-                .disabled(!canSubmit)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 12)
+            .padding(.top, 8)
             .padding(.bottom, 28)
+            .disabled(importing)
         }
         .background(Theme.bg)
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle("Paste a link")
+        .navigationTitle("Add a recipe")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -211,11 +213,164 @@ struct NewRecipeLinkPath: View {
                 }
             }
         }
+        .onDisappear {
+            // Cancelling the in-flight task on disappear avoids stale
+            // completions trying to call onComplete after the sheet's
+            // already gone away.
+            importTask?.cancel()
+            importTask = nil
+        }
     }
 
-    private var canSubmit: Bool {
-        !importing && !(url.trimmingCharacters(in: .whitespaces).isEmpty
-                         && dishName.trimmingCharacters(in: .whitespaces).isEmpty)
+    // MARK: - Sections
+
+    private var pasteLinkSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(title: "Paste a recipe link",
+                          subtitle: "Recipe websites, blogs, and YouTube videos work. Instagram and TikTok are private — use the description field below for those.")
+            TextField("https://...", text: $url)
+                .focused($keyboardFocused)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .padding(12)
+                .background(Theme.bg3, in: .rect(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
+            if let platform = blockedPlatform {
+                privatePlatformHint(platform)
+            }
+            primaryButton(
+                title: "Import recipe",
+                accent: Theme.accent,
+                enabled: !importing && !url.trimmingCharacters(in: .whitespaces).isEmpty
+            ) {
+                runImport(useDishOnly: false)
+            }
+        }
+    }
+
+    private var orDivider: some View {
+        HStack(spacing: 10) {
+            Rectangle().fill(Theme.border).frame(height: 1)
+            Text("OR")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.text3)
+            Rectangle().fill(Theme.border).frame(height: 1)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var describeDishSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(title: "Describe the dish",
+                          subtitle: "Type a dish name and AI will search for the recipe — useful when you don't have a clean URL.")
+            TextField("e.g. Chicken tikka masala…", text: $dishName)
+                .focused($keyboardFocused)
+                .textInputAutocapitalization(.sentences)
+                .padding(12)
+                .background(Theme.bg3, in: .rect(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border2, lineWidth: 1))
+            primaryButton(
+                title: "Search & import",
+                accent: Theme.fat,
+                enabled: !importing && !dishName.trimmingCharacters(in: .whitespaces).isEmpty
+            ) {
+                runImport(useDishOnly: true)
+            }
+        }
+    }
+
+    private func errorBlock(_ err: ImportError) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.red)
+                Text(messageFor(err))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.text2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if case .importFailed = err {
+                Button {
+                    onJumpToPhoto()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "camera.fill")
+                        Text("Take a photo instead →")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .foregroundStyle(Theme.accentFG)
+                    .background(Theme.accent, in: .rect(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(Theme.red.opacity(0.06), in: .rect(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.red.opacity(0.2), lineWidth: 1))
+    }
+
+    private func messageFor(_ err: ImportError) -> String {
+        switch err {
+        case .generic(let msg): return msg
+        case .importFailed(let msg): return msg
+        }
+    }
+
+    /// Tier-walk progress UI. The server can spend up to ~60s walking the
+    /// 4-tier fallback. Use a TimelineView so elapsed time + status caption
+    /// re-render every 0.5s without us managing our own timer state.
+    /// Status messages are wall-clock estimates — the server walks the
+    /// tiers in the same order the captions advance, so the rolling
+    /// caption is "close enough" without needing SSE/streaming wiring.
+    private var inProgressBlock: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { context in
+            let elapsed = importStartedAt.map { context.date.timeIntervalSince($0) } ?? 0
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small).tint(Theme.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(progressTitle(elapsed: elapsed))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.text2)
+                        Text("Working on it… (\(Int(elapsed))s)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.text3)
+                    }
+                    Spacer(minLength: 0)
+                }
+                Button(role: .destructive) {
+                    importTask?.cancel()
+                    importTask = nil
+                    importStartedAt = nil
+                } label: {
+                    Text("Cancel — try Add Manually or Photo instead")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .foregroundStyle(Theme.red)
+                        .background(Theme.bg2, in: .rect(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.red.opacity(0.3), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(12)
+            .background(Theme.bg3, in: .rect(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
+        }
+    }
+
+    /// Tier-walk caption. Estimates aligned with the server's per-tier
+    /// budgets in api/import-recipe.js (Tier 1 ≤25s → Tier 2 ≤20s →
+    /// Tier 3 ≤15s). Synthetic; close enough that users feel something
+    /// is changing rather than the spinner being stuck.
+    private func progressTitle(elapsed: TimeInterval) -> String {
+        if elapsed < 25 { return "Reading recipe site…" }
+        if elapsed < 45 { return "Site is slow — trying reader mode…" }
+        return "Asking AI to extract the recipe…"
     }
 
     private func privatePlatformHint(_ platform: String) -> some View {
@@ -223,7 +378,7 @@ struct NewRecipeLinkPath: View {
             Text("📱 \(platform) links are private")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.accent)
-            Text("We can't read reel content directly. Type the dish name below (e.g. \"viral baked feta pasta\") and AI will search for the recipe.")
+            Text("We can't read reel content directly. Use the OR section below — type the dish name (e.g. \"viral baked feta pasta\") and AI will search for the recipe.")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.text2)
         }
@@ -232,42 +387,82 @@ struct NewRecipeLinkPath: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.accent.opacity(0.25), lineWidth: 1))
     }
 
-    private func fieldLabel(_ s: String) -> some View {
-        Text(s)
-            .font(.system(size: 11, weight: .medium))
-            .tracking(1).textCase(.uppercase)
-            .foregroundStyle(Theme.text3)
+    private func sectionHeader(title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.text)
+            Text(subtitle)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text3)
+        }
     }
 
-    private func importRecipe() async {
+    private func primaryButton(title: String, accent: Color, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .foregroundStyle(Theme.accentFG)
+                .background(enabled ? accent : Theme.bg4, in: .rect(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    // MARK: - Behavior
+
+    private func runImport(useDishOnly: Bool) {
         let trimmedURL = url.trimmingCharacters(in: .whitespaces)
         let trimmedDish = dishName.trimmingCharacters(in: .whitespaces)
-        importing = true
+        let urlArg: String? = useDishOnly ? nil : (trimmedURL.isEmpty ? nil : trimmedURL)
+        let dishArg: String = useDishOnly
+            ? trimmedDish
+            : (trimmedDish.isEmpty ? trimmedURL : trimmedDish)
+        keyboardFocused = false
         error = nil
-        defer { importing = false }
-        do {
-            let result = try await AnalyzeService.analyzeDishBySearch(
-                trimmedDish.isEmpty ? trimmedURL : trimmedDish,
-                link: trimmedURL.isEmpty ? nil : trimmedURL
-            )
-            var draft = RecipeFull.newDraft()
-            draft.name = result.name
-            draft.description = result.description
-            draft.servings = result.servings ?? draft.servings
-            draft.calories = result.calories
-            draft.protein = result.protein
-            draft.carbs = result.carbs
-            draft.fat = result.fat
-            draft.fiber = result.fiber ?? draft.fiber
-            draft.sugar = result.sugar ?? draft.sugar
-            if let ings = result.ingredients, !ings.isEmpty {
-                draft.ingredients = ings.map(RecipeIngredient.fromAI)
+        importStartedAt = Date()
+        let task = Task {
+            defer {
+                Task { @MainActor in
+                    importTask = nil
+                    importStartedAt = nil
+                }
             }
-            draft.source_url = trimmedURL.isEmpty ? nil : trimmedURL
-            onComplete(draft)
-        } catch {
-            self.error = "Could not import: \(error.localizedDescription)"
+            do {
+                let result = try await AnalyzeService.analyzeDishBySearch(dishArg, link: urlArg)
+                if Task.isCancelled { return }
+                var draft = RecipeFull.newDraft()
+                draft.name = result.name
+                draft.description = result.description
+                draft.servings = result.servings ?? draft.servings
+                draft.calories = result.calories
+                draft.protein = result.protein
+                draft.carbs = result.carbs
+                draft.fat = result.fat
+                draft.fiber = result.fiber ?? draft.fiber
+                draft.sugar = result.sugar ?? draft.sugar
+                if let ings = result.ingredients, !ings.isEmpty {
+                    draft.ingredients = ings.map(RecipeIngredient.fromAI)
+                }
+                draft.source_url = urlArg
+                await MainActor.run { onComplete(draft) }
+            } catch is CancellationError {
+                // Silent — user-initiated cancel.
+            } catch let analyze as AnalyzeService.AnalyzeError {
+                if case .importFailed(let msg) = analyze {
+                    await MainActor.run { error = .importFailed(msg) }
+                } else {
+                    await MainActor.run { error = .generic(analyze.errorDescription ?? "Could not import") }
+                }
+            } catch {
+                await MainActor.run {
+                    self.error = .generic("Could not import: \(error.localizedDescription)")
+                }
+            }
         }
+        importTask = task
     }
 }
 

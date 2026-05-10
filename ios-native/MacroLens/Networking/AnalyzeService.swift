@@ -19,6 +19,11 @@ enum AnalyzeService {
         case spendingLimitExceeded(spent: Double, limit: Double)
         case server(String)
         case parse
+        /// Recipe-import-specific terminal failure — every tier in the
+        /// /api/import-recipe fallback chain gave up. The UI uses this as
+        /// the trigger to deep-link the user into the photo-upload path
+        /// instead of just showing the error message inline.
+        case importFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -26,6 +31,7 @@ enum AnalyzeService {
             case .spendingLimitExceeded: return "You've used all your Computer Calories this month."
             case .server(let msg): return msg
             case .parse: return "Couldn't read the analysis result. Try a more specific input."
+            case .importFailed(let msg): return msg
             }
         }
     }
@@ -280,38 +286,66 @@ enum AnalyzeService {
         )
     }
 
-    /// Web-search-backed recipe import. Mirrors `analyzeDishBySearch` in
-    /// src/lib/ai.js — kicks off Anthropic's web_search tool to pull the
-    /// full recipe off the URL the user pasted (or to find one matching
-    /// the dish name when no URL is given). Used by the "Paste a link"
-    /// path of the new-recipe method picker.
+    /// Recipe import via the dedicated /api/import-recipe endpoint. Replaces
+    /// the previous /api/analyze + web_search single-tier path that timed
+    /// out at 504 on heavy JS sites like foodnetwork.com. The new endpoint
+    /// walks a 4-tier fallback chain on the server: direct fetch +
+    /// JSON-LD/HTML extraction → r.jina.ai reader proxy → Claude web_search
+    /// → structured failure with `code:'import_failed'`.
+    ///
+    /// On Tier 4 failure we throw `.importFailed(message)` so the picker
+    /// UI can deep-link the user into the photo-upload path instead of
+    /// just surfacing the error string.
     static func analyzeDishBySearch(_ dishName: String, link: String?) async throws -> AnalysisResult {
-        let query: String
-        if let link, !link.isEmpty {
-            query = "Search for the recipe \"\(dishName)\" from this URL: \(link). Find the full ingredient list and serving size."
-        } else {
-            query = "Search for the recipe \"\(dishName)\". Find the full ingredient list and serving size."
-        }
-        let promptText = "\(query)\n\nAfter searching, return ONLY a JSON object with the macros per serving and full ingredient list. \(fullAnalysisPrompt)"
+        var body: [String: Any] = [:]
+        if let link, !link.isEmpty { body["url"] = link }
+        if !dishName.isEmpty { body["dish_name"] = dishName }
+        if body.isEmpty { throw AnalyzeError.server("Need a URL or a dish name") }
 
-        let userMessage: [String: Any] = ["role": "user", "content": promptText]
-        let body: [String: Any] = [
-            "feature": "search",
-            "max_tokens": 4000,
-            "input_type": "text",
-            "action": "analyze_dish_by_search",
-            "messages": [userMessage],
-            "tools": [["type": "web_search_20250305", "name": "web_search"]],
-        ]
-        let text = try await rawTextWithEnvelope(body: body)
-        guard !text.isEmpty else {
-            throw AnalyzeError.server("No response — try being more specific with the dish name")
+        let session = try await SupabaseService.client.auth.session
+        var request = URLRequest(url: Config.apiBaseURL.appendingPathComponent("/api/import-recipe"))
+        request.httpMethod = "POST"
+        // Match the server's maxDuration cap so the iOS client doesn't
+        // bail before the tier walk completes — Vercel allows 60s, give
+        // ourselves a 5s grace period for transit + handshake.
+        request.timeoutInterval = 65
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw AnalyzeError.server("No response") }
+        if http.statusCode == 401 { throw AnalyzeError.unauthenticated }
+        if http.statusCode == 429,
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           (json["code"] as? String) == "spending_limit_exceeded" {
+            throw AnalyzeError.spendingLimitExceeded(
+                spent: (json["spent_usd"] as? Double) ?? 0,
+                limit: (json["limit_usd"] as? Double) ?? 0
+            )
         }
-        let cleaned = extractJSON(from: text)
-        guard let data = cleaned.data(using: .utf8),
-              let result = try? JSONDecoder().decode(AnalysisResult.self, from: data)
-        else {
-            throw AnalyzeError.server("Could not extract recipe data — try pasting the ingredients directly")
+
+        // Tier 4 — server tried every tier and gave up. Surface as a
+        // typed error so the UI can render the "Take a photo instead"
+        // deep link without parsing the message string.
+        if !(200..<300).contains(http.statusCode) {
+            let payload = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            if (payload["code"] as? String) == "import_failed" {
+                let msg = (payload["error"] as? String) ?? "Couldn't read this site automatically."
+                throw AnalyzeError.importFailed(msg)
+            }
+            let msg = (payload["error"] as? String) ?? "Request failed (\(http.statusCode))"
+            throw AnalyzeError.server(msg)
+        }
+
+        // Success envelope: { recipe: {...}, tier: 1|2|3, via?: 'json-ld'|'html' }
+        guard let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let recipeDict = envelope["recipe"] as? [String: Any] else {
+            throw AnalyzeError.parse
+        }
+        let recipeData = try JSONSerialization.data(withJSONObject: recipeDict)
+        guard let result = try? JSONDecoder().decode(AnalysisResult.self, from: recipeData) else {
+            throw AnalyzeError.parse
         }
         return result
     }
