@@ -437,35 +437,65 @@ export async function analyzeRecipe(recipe, mealHint) {
   return parseJSON(data)
 }
 
+// Recipe import via the dedicated /api/import-recipe endpoint. Replaces
+// the previous /api/analyze + web_search single-tier path that timed out
+// (504) on heavy JS sites like foodnetwork.com — the new endpoint walks
+// a 4-tier fallback chain on the server (direct fetch + JSON-LD/HTML →
+// r.jina.ai reader proxy → Claude web_search → structured failure).
+//
+// On Tier 4 failure the server responds 502 with `{code:'import_failed'}`;
+// callers get a thrown Error whose `.code` is set to 'import_failed' so
+// the picker UI can deep-link the user into the photo-upload path.
 export async function analyzeDishBySearch(dishName, link) {
-  const query = link
-    ? `Search for the recipe "${dishName}" from this URL: ${link}. Find the full ingredient list and serving size.`
-    : `Search for the recipe "${dishName}". Find the full ingredient list and serving size.`
+  let session
+  try {
+    const { data: refreshed } = await supabase.auth.refreshSession()
+    if (refreshed?.session) session = refreshed.session
+    else {
+      const { data } = await supabase.auth.getSession()
+      session = data?.session
+    }
+  } catch {
+    const { data } = await supabase.auth.getSession()
+    session = data?.session
+  }
+  if (!session?.access_token) throw new Error('Session expired — please refresh the page')
 
-  const data = await callProxy('search', [{
-    role: 'user',
-    content: `${query}\n\nAfter searching, return ONLY a JSON object with the macros per serving and full ingredient list. ${FULL_ANALYSIS_PROMPT}`
-  }], {
-    max_tokens: 4000,
-    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-    action: 'analyze_dish_by_search',
+  const body = {}
+  if (link) body.url = link
+  if (dishName) body.dish_name = dishName
+  if (!body.url && !body.dish_name) throw new Error('Need a URL or a dish name')
+
+  const res = await fetch('/api/import-recipe', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify(body),
   })
 
-  // Web search responses mix tool_use and text blocks — grab all text
-  const text = data.content
-    .filter(b => b.type === 'text')
-    .map(b => b.text)
-    .join('')
-
-  if (!text) throw new Error('No response — try being more specific with the dish name')
-
-  // Use the same resilient parser
-  const fakeData = { content: [{ type: 'text', text }] }
-  try {
-    return parseJSON(fakeData)
-  } catch {
-    throw new Error('Could not extract recipe data — try pasting the ingredients directly in the Recipe tab')
+  const data = await res.json().catch(() => ({ error: `Server returned ${res.status}` }))
+  if (!res.ok) {
+    // Spend cap → re-use the same upgrade modal hook other AI calls use.
+    if (res.status === 429 && data.code === 'spending_limit_exceeded') {
+      if (typeof window !== 'undefined' && typeof window.openLimitReachedModal === 'function') {
+        window.openLimitReachedModal({ spentUsd: data.spent_usd, limitUsd: data.limit_usd })
+      }
+      throw new Error("You've used all your Computer Calories this month")
+    }
+    const err = new Error(data.error || `Request failed (${res.status})`)
+    err.code = data.code
+    err.status = res.status
+    err.suggested_action = data.suggested_action
+    throw err
   }
+  if (!data.recipe) throw new Error('No recipe in response')
+  // Stash the tier on the result so callers can surface "imported via
+  // reader-mode" / etc as a debug breadcrumb if useful. Non-enumerable
+  // so it doesn't accidentally end up in saved recipe rows.
+  Object.defineProperty(data.recipe, '__importTier', { value: data.tier, enumerable: false })
+  return data.recipe
 }
 
 export async function analyzePlannerDescription(description) {

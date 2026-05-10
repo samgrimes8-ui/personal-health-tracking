@@ -11183,6 +11183,11 @@ function wireGlobals() {
   }
 
   window.openNewRecipeFromLink = () => {
+    // Renamed from "Paste a link" → "Add link or describe recipe" so the
+    // dual capability (URL OR dish-name search) is obvious before the user
+    // commits to one. Layout split into two clear sections with their own
+    // primary CTAs and an OR divider, so it reads as a "pick one" wizard
+    // step rather than a single form with optional fields.
     document.getElementById('recipe-modal-content').innerHTML = `
       <div style="position:relative">
         <button class="modal-close" onclick="closeRecipeModal()" style="position:absolute;top:12px;right:12px">×</button>
@@ -11190,74 +11195,177 @@ function wireGlobals() {
           <button onclick="openNewRecipeModal()" style="background:none;border:none;color:var(--text3);font-size:13px;font-family:inherit;cursor:pointer;padding:0;margin-bottom:16px;display:flex;align-items:center;gap:4px">
             ← Back
           </button>
-          <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:6px">Paste a link</div>
-          <div style="font-size:13px;color:var(--text3);margin-bottom:20px">Recipe websites, blogs, and YouTube videos work. Instagram and TikTok links are private — use the dish name field below for those.</div>
+          <div style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:6px">Add link or describe recipe</div>
+          <div style="font-size:13px;color:var(--text3);margin-bottom:20px">Either paste a URL we can fetch, or describe the dish and we'll search for the recipe.</div>
+
+          <!-- Section 1: Paste a recipe link -->
+          <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px">Paste a recipe link</div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Recipe websites, blogs, and YouTube videos work. Instagram and TikTok are private — use the OR section below for those.</div>
           <input type="url" id="new-recipe-url" placeholder="https://..." autofocus
             style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:15px;font-family:inherit;outline:none;margin-bottom:10px"
             oninput="checkImportLinkHint(this.value)"
-            onkeydown="if(event.key==='Enter')importRecipeFromLink()" />
-
-          <!-- Dynamic warning box — appears only when user pastes an
-               Instagram or TikTok URL. Same behavior as the Write-it
-               textarea hint so users learn the pattern consistently. -->
-          <div id="import-link-private-hint" style="display:none;margin-bottom:16px;padding:10px 12px;border-radius:var(--r);background:color-mix(in srgb, var(--accent) 8%, transparent);border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);font-size:12px;color:var(--text2);line-height:1.45">
+            onkeydown="if(event.key==='Enter')importRecipeFromLink({useDishOnly:false})" />
+          <div id="import-link-private-hint" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:var(--r);background:color-mix(in srgb, var(--accent) 8%, transparent);border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);font-size:12px;color:var(--text2);line-height:1.45">
             <div style="font-weight:600;color:var(--accent);margin-bottom:4px">📱 <span id="import-link-private-platform">Instagram</span> links are private</div>
-            <div style="margin-bottom:4px">We can't read reel content directly. Instead:</div>
-            <ul style="margin:0;padding-left:18px">
-              <li>Type the dish name below (e.g. <em>"viral baked feta pasta"</em>) — leave the URL or clear it, either works</li>
-              <li>Or close this and use <strong>Take a photo</strong> to capture the ingredient list from a screenshot</li>
-            </ul>
+            <div>Use the OR section below — type the dish name (e.g. <em>"viral baked feta pasta"</em>) and AI will search for the recipe.</div>
           </div>
-
-          <div style="font-size:12px;color:var(--text3);margin-bottom:20px">Or describe the dish name to search for it</div>
-          <input type="text" id="new-recipe-dish" placeholder="e.g. Chicken tikka masala..."
-            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:15px;font-family:inherit;outline:none;margin-bottom:20px"
-            onkeydown="if(event.key==='Enter')importRecipeFromLink()" />
-          <button onclick="importRecipeFromLink()" id="import-link-btn"
+          <button onclick="importRecipeFromLink({useDishOnly:false})" id="import-link-btn"
             style="width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
             Import recipe
           </button>
+
+          <!-- OR divider -->
+          <div style="display:flex;align-items:center;gap:10px;margin:18px 0">
+            <div style="flex:1;height:1px;background:var(--border)"></div>
+            <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:1px">OR</div>
+            <div style="flex:1;height:1px;background:var(--border)"></div>
+          </div>
+
+          <!-- Section 2: Describe the dish -->
+          <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px">Describe the dish</div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:8px">Type a dish name and AI will search for the recipe — useful when you don't have a clean URL.</div>
+          <input type="text" id="new-recipe-dish" placeholder="e.g. Chicken tikka masala..."
+            style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:12px 14px;color:var(--text);font-size:15px;font-family:inherit;outline:none;margin-bottom:10px"
+            onkeydown="if(event.key==='Enter')importRecipeFromLink({useDishOnly:true})" />
+          <button onclick="importRecipeFromLink({useDishOnly:true})" id="import-dish-btn"
+            style="width:100%;background:var(--fat);color:var(--accent-fg);border:none;border-radius:var(--r);padding:14px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
+            Search & import
+          </button>
+
+          <!-- Progress + status block. Hidden until import kicks off. -->
+          <div id="import-link-progress" style="display:none;margin-top:14px;padding:12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r)">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+              <span class="analyzing-spinner" style="flex-shrink:0"></span>
+              <div style="flex:1;min-width:0">
+                <div id="import-link-progress-title" style="font-size:13px;font-weight:600;color:var(--text2)">Reading recipe site…</div>
+                <div id="import-link-progress-elapsed" style="font-size:11px;color:var(--text3);margin-top:1px">Working on it…</div>
+              </div>
+            </div>
+            <button onclick="cancelImportRecipeFromLink()"
+              style="width:100%;background:none;border:1px solid color-mix(in srgb, var(--red) 30%, transparent);color:var(--red);border-radius:var(--r);padding:8px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer">
+              Cancel — try Add Manually or Photo instead
+            </button>
+          </div>
+
           <div id="import-link-status" style="font-size:12px;color:var(--text3);margin-top:10px;text-align:center;min-height:18px"></div>
         </div>
       </div>
     `
   }
 
-  window.importRecipeFromLink = async () => {
-    const url = document.getElementById('new-recipe-url')?.value.trim()
-    const dish = document.getElementById('new-recipe-dish')?.value.trim()
+  // Tracks the in-flight tier-walk so the user's Cancel button can stop
+  // the elapsed-time interval and let them bail to Add Manually / Photo.
+  // The actual fetch can't be aborted (analyzeDishBySearch doesn't take
+  // a signal), but cancelling here at least stops the spinner / interval
+  // and frees the buttons.
+  let _importLinkInterval = null
+  let _importLinkCancelled = false
+  window.importRecipeFromLink = async (opts = {}) => {
+    const useDishOnly = opts.useDishOnly === true
+    const url = document.getElementById('new-recipe-url')?.value.trim() || ''
+    const dish = document.getElementById('new-recipe-dish')?.value.trim() || ''
     if (!url && !dish) { showToast('Enter a link or dish name', 'error'); return }
-    const btn = document.getElementById('import-link-btn')
+    const dishArg = useDishOnly ? dish : (dish || url)
+    const urlArg = useDishOnly ? '' : url
+
+    const btnImport = document.getElementById('import-link-btn')
+    const btnSearch = document.getElementById('import-dish-btn')
     const status = document.getElementById('import-link-status')
-    if (btn) { btn.disabled = true; btn.textContent = 'Importing...' }
-    if (status) { status.style.color = 'var(--text3)'; status.textContent = 'Searching for recipe...' }
+    const progress = document.getElementById('import-link-progress')
+    const progressTitle = document.getElementById('import-link-progress-title')
+    const progressElapsed = document.getElementById('import-link-progress-elapsed')
+
+    if (btnImport) btnImport.disabled = true
+    if (btnSearch) btnSearch.disabled = true
+    if (status) { status.style.color = 'var(--text3)'; status.textContent = '' }
+    if (progress) progress.style.display = 'block'
+
+    _importLinkCancelled = false
+    const startedAt = Date.now()
+    const updateProgress = () => {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000)
+      if (progressElapsed) progressElapsed.textContent = `Working on it… (${elapsed}s)`
+      // Tier captions track the server's per-tier budgets in
+      // api/import-recipe.js (Tier 1 ≤25s → Tier 2 ≤20s → Tier 3 ≤15s).
+      // Synthetic but close — gives the user a feeling that something is
+      // happening rather than a stuck spinner.
+      let title = 'Reading recipe site…'
+      if (elapsed >= 25 && elapsed < 45) title = 'Site is slow — trying reader mode…'
+      else if (elapsed >= 45) title = 'Asking AI to extract the recipe…'
+      if (progressTitle) progressTitle.textContent = title
+    }
+    updateProgress()
+    _importLinkInterval = setInterval(updateProgress, 500)
+
     try {
-      const result = await analyzeDishBySearch(dish || url, url)
+      const result = await analyzeDishBySearch(dishArg, urlArg)
+      if (_importLinkCancelled) return
       if (!result) throw new Error('No recipe found in the response')
-      state.editingRecipe = { ...state.editingRecipe, ...result, source_url: url || '' }
+      state.editingRecipe = { ...state.editingRecipe, ...result, source_url: urlArg || '' }
       document.getElementById('recipe-modal-content').innerHTML = renderRecipeModalContent(state.editingRecipe, 'edit')
-      showToast('Recipe imported — review and save', 'success')
+      const tier = result.__importTier
+      showToast(`Recipe imported${tier && tier > 1 ? ' (via reader mode)' : ''} — review and save`, 'success')
     } catch (err) {
-      // Surface the error everywhere so it's impossible to miss AND so we
-      // get log breadcrumbs. Previous version swallowed the error to an
-      // inline status line that was easy to miss, and didn't record
-      // anything to error_logs — which made "silent fail" reports
-      // impossible to debug.
+      if (_importLinkCancelled) return
       const msg = err?.message || 'Unknown error'
       console.error('[importRecipeFromLink] failed:', err)
       logError(state.user?.id, err, {
         context: 'import_recipe_from_link',
         page: state.currentPage,
-        url: url || null,
-        dish: dish || null,
+        url: urlArg || null,
+        dish: dishArg || null,
+        code: err?.code || null,
       })
-      if (status) {
-        status.style.color = 'var(--red)'
-        status.textContent = 'Could not import: ' + msg
+      // Tier 4 → render the photo deep-link banner inside the modal so
+      // the user can pivot without losing their place.
+      if (err?.code === 'import_failed' || err?.suggested_action === 'photo') {
+        if (status) {
+          status.style.color = 'var(--red)'
+          status.innerHTML = `<div style="text-align:left;line-height:1.45">${esc(msg)}</div>
+            <button onclick="openNewRecipeFromPhotoPicker()"
+              style="margin-top:10px;width:100%;background:var(--accent);color:var(--accent-fg);border:none;border-radius:var(--r);padding:11px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">
+              📸 Take a photo instead →
+            </button>`
+        }
+      } else {
+        if (status) {
+          status.style.color = 'var(--red)'
+          status.textContent = 'Could not import: ' + msg
+        }
+        showToast('Could not import recipe: ' + msg, 'error')
       }
-      showToast('Could not import recipe: ' + msg, 'error')
-      if (btn) { btn.disabled = false; btn.textContent = 'Import recipe' }
+    } finally {
+      if (_importLinkInterval) { clearInterval(_importLinkInterval); _importLinkInterval = null }
+      if (progress) progress.style.display = 'none'
+      if (btnImport) btnImport.disabled = false
+      if (btnSearch) btnSearch.disabled = false
     }
+  }
+
+  // Cancel button on the in-progress block. Stops the elapsed interval
+  // and frees the form so the user can bail to Add Manually / Photo.
+  window.cancelImportRecipeFromLink = () => {
+    _importLinkCancelled = true
+    if (_importLinkInterval) { clearInterval(_importLinkInterval); _importLinkInterval = null }
+    const progress = document.getElementById('import-link-progress')
+    if (progress) progress.style.display = 'none'
+    const btnImport = document.getElementById('import-link-btn')
+    const btnSearch = document.getElementById('import-dish-btn')
+    if (btnImport) btnImport.disabled = false
+    if (btnSearch) btnSearch.disabled = false
+    const status = document.getElementById('import-link-status')
+    if (status) { status.style.color = 'var(--text3)'; status.textContent = 'Cancelled — try Add Manually or Photo from the back menu.' }
+  }
+
+  // Trigger the file picker from the Tier 4 photo deep link. Mirrors
+  // the picker the new-recipe Photo card uses.
+  window.openNewRecipeFromPhotoPicker = () => {
+    // Re-open the method picker on the Photo step. The simplest path is
+    // to navigate back to the picker and let the user tap Photo again —
+    // file pickers can't be triggered programmatically without a user
+    // gesture in some browsers, so the explicit Photo card tap is more
+    // reliable than auto-clicking the hidden input.
+    openNewRecipeModal()
   }
 
   window.openNewRecipeFromPhoto = async (file) => {
