@@ -22,19 +22,34 @@ struct TagOrderEditorSheet: View {
     ///   • `order` — final tag_order to persist on user_profiles
     ///   • `deletedTags` — case-preserving names the parent should strip
     ///     from every affected recipe.tags array
+    ///   • `renames` — old→new mappings to cascade across every recipe
+    ///     that currently carries the old tag
     struct Payload {
         let order: [String]
         let deletedTags: [String]
+        let renames: [TagRename]
+    }
+
+    /// A single rename mapping recorded in the sheet. The parent applies
+    /// these by calling DBService.renameTagInRecipes(old:new:...) for
+    /// every affected recipe in its snapshot.
+    struct TagRename: Equatable {
+        let oldName: String
+        let newName: String
     }
 
     @Environment(\.dismiss) private var dismiss
 
     @State private var order: [String]
     @State private var deletedTags: [String] = []
+    @State private var renames: [TagRename] = []
     @State private var didChange: Bool = false
     @State private var newTagText: String = ""
     @State private var pendingDelete: String? = nil
+    @State private var renameTarget: String? = nil
+    @State private var renameDraft: String = ""
     @FocusState private var newTagFocused: Bool
+    @FocusState private var renameFocused: Bool
 
     init(initialOrder: [String], library: [RecipeFull], onSave: @escaping (Payload) -> Void) {
         self.initialOrder = initialOrder
@@ -70,6 +85,13 @@ struct TagOrderEditorSheet: View {
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
+                                Button {
+                                    renameTarget = tag
+                                    renameDraft = tag
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                                .tint(Theme.accent)
                             }
                         }
                         .onMove(perform: move)
@@ -94,7 +116,7 @@ struct TagOrderEditorSheet: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
-                        onSave(Payload(order: order, deletedTags: deletedTags))
+                        onSave(Payload(order: order, deletedTags: deletedTags, renames: renames))
                         dismiss()
                     }
                     .foregroundStyle(Theme.accent)
@@ -125,6 +147,31 @@ struct TagOrderEditorSheet: View {
                     Text("This tag isn't on any recipes — it'll just disappear from the filter bar.")
                 } else {
                     Text("It will be removed from \(count) recipe\(count == 1 ? "" : "s") that currently have it.")
+                }
+            }
+            .alert(
+                renameTarget.map { "Rename \"\($0)\"" } ?? "",
+                isPresented: Binding(
+                    get: { renameTarget != nil },
+                    set: { if !$0 { renameTarget = nil; renameDraft = "" } }
+                ),
+                presenting: renameTarget
+            ) { tag in
+                TextField("New name", text: $renameDraft)
+                    .focused($renameFocused)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Save") { performRename(from: tag) }
+                Button("Cancel", role: .cancel) {
+                    renameTarget = nil
+                    renameDraft = ""
+                }
+            } message: { tag in
+                let count = usageCount(for: tag)
+                if count == 0 {
+                    Text("This tag isn't on any recipes yet — only the filter bar entry will be renamed.")
+                } else {
+                    Text("Will rename across \(count) recipe\(count == 1 ? "" : "s") that currently have it.")
                 }
             }
         }
@@ -217,8 +264,52 @@ struct TagOrderEditorSheet: View {
                 deletedTags.append(tag)
             }
         }
+        // If a pending rename targeted this tag, drop it — a delete wins.
+        renames.removeAll { $0.oldName.lowercased() == tag.lowercased() }
         didChange = true
         pendingDelete = nil
+    }
+
+    /// Apply a rename locally and queue it for the parent's cascade. We
+    /// rewrite the in-memory order list immediately so the user sees the
+    /// change in the sheet; the parent persists tag_order and walks the
+    /// library on Save.
+    private func performRename(from old: String) {
+        let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        defer {
+            renameTarget = nil
+            renameDraft = ""
+        }
+        guard !trimmed.isEmpty else { return }
+        // No-op when the input is identical to the existing name (incl.
+        // casing) — nothing to do, no cascade needed.
+        if trimmed == old { return }
+        // Case-insensitive collision with a different existing tag would
+        // silently merge two distinct entries on save. Bail rather than
+        // surprise the user; they can delete the duplicate first.
+        if trimmed.lowercased() != old.lowercased(),
+           order.contains(where: { $0.lowercased() == trimmed.lowercased() }) {
+            return
+        }
+        // Replace in order, preserving position.
+        if let idx = order.firstIndex(where: { $0.lowercased() == old.lowercased() }) {
+            order[idx] = trimmed
+        }
+        // Collapse any existing rename that targeted the same `old` so we
+        // don't queue chained renames. The user's latest intent wins.
+        renames.removeAll { $0.oldName.lowercased() == old.lowercased() }
+        // Only record a cascade if the tag is actually on any recipe —
+        // a rename of a tag-order-only entry doesn't need a DB walk.
+        let isInLibrary = library.contains {
+            ($0.tags ?? []).contains { $0.lowercased() == old.lowercased() }
+        }
+        if isInLibrary {
+            renames.append(TagRename(oldName: old, newName: trimmed))
+        }
+        // If the renamed tag was pending delete, drop it.
+        pendingDelete = (pendingDelete?.lowercased() == old.lowercased()) ? nil : pendingDelete
+        deletedTags.removeAll { $0.lowercased() == old.lowercased() }
+        didChange = true
     }
 
     private func usageCount(for tag: String) -> Int {

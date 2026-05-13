@@ -23,6 +23,13 @@ struct QuickTagSheet: View {
     /// Per-tag-key lock so rapid double-taps don't fire overlapping upserts.
     @State private var inFlight: Set<String> = []
     @FocusState private var keyboardFocused: Bool
+    /// Authoritative tag pool, fetched fresh from the DB on `.task`.
+    /// Seeded synchronously from `knownLibrary` so the chips render
+    /// without a flash, then overwritten by the DB result. Defense-in-
+    /// depth on top of the parent's optimistic splice — covers the case
+    /// where a tag created elsewhere hasn't reached the parent's library
+    /// snapshot yet (cold start, concurrent edits, etc).
+    @State private var livePool: [String] = []
 
     init(recipe: RecipeFull,
          knownLibrary: [RecipeFull],
@@ -64,7 +71,39 @@ struct QuickTagSheet: View {
                     }
                 }
             }
+            .task {
+                // Seed from the parent snapshot for a no-flash first render,
+                // then fetch the canonical pool. The fetch wins because it
+                // includes user_profiles.tag_order (standalone tags from
+                // Manage Tags) which the parent library snapshot lacks.
+                if livePool.isEmpty {
+                    livePool = Self.derivePool(from: knownLibrary)
+                }
+                do {
+                    livePool = try await DBService.fetchTagLibrary()
+                } catch {
+                    print("[recipes] fetchTagLibrary (QuickTag) failed: \(error.localizedDescription)")
+                }
+            }
         }
+    }
+
+    /// Initial seed: union of customs already applied across the library
+    /// snapshot the parent handed in. Used only until `.task` lands the
+    /// authoritative DB pool.
+    private static func derivePool(from library: [RecipeFull]) -> [String] {
+        var seen: Set<String> = []
+        var out: [String] = []
+        for r in library {
+            for t in r.tags ?? [] {
+                let trimmed = t.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty { continue }
+                if seen.insert(trimmed.lowercased()).inserted {
+                    out.append(trimmed)
+                }
+            }
+        }
+        return out
     }
 
     // MARK: - Sections
@@ -173,21 +212,18 @@ struct QuickTagSheet: View {
     }
 
     private func knownTags() -> [String] {
-        // Presets first (visible order), then any custom tag the user has
-        // coined anywhere in their library, sorted alphabetically. Currently-
-        // selected tags always appear in the list even if they're not
-        // otherwise known.
+        // Presets first (visible order), then the authoritative tag pool
+        // (recipes ∪ tag_order, refreshed on .task). Currently-selected
+        // tags always appear last even if they're not otherwise known —
+        // covers a brand-new custom tag the user just typed in this
+        // session and hasn't yet been written to the DB.
         var seen: Set<String> = []
         var out: [String] = []
         for t in RecipeTagPresets.all where !seen.contains(t.lowercased()) {
             seen.insert(t.lowercased())
             out.append(t)
         }
-        let customs = Set(knownLibrary
-            .flatMap { $0.tags ?? [] }
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty })
-        for t in customs.sorted() where !seen.contains(t.lowercased()) {
+        for t in livePool where !seen.contains(t.lowercased()) {
             seen.insert(t.lowercased())
             out.append(t)
         }

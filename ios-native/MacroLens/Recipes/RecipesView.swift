@@ -151,6 +151,7 @@ struct RecipesView: View {
                 NavigationStack {
                     RecipeEditView(recipe: r,
                                    onSaved: { saved in
+                                       spliceIntoLibrary(saved)
                                        presented = .viewExisting(saved)
                                        Task { await refresh() }
                                    },
@@ -167,6 +168,7 @@ struct RecipesView: View {
                 NavigationStack {
                     RecipeEditView(recipe: r,
                                    onSaved: { saved in
+                                       spliceIntoLibrary(saved)
                                        presented = .viewExisting(saved)
                                        Task { await refresh() }
                                    },
@@ -225,42 +227,7 @@ struct RecipesView: View {
             let counts = tagCounts(library)
             let display = orderedDisplayTags(counts: counts)
             TagOrderEditorSheet(initialOrder: display, library: library) { payload in
-                // Snapshot the library BEFORE we optimistically prune so
-                // the DB strip pass downstream still has the affected-
-                // recipe set to iterate over.
-                let preDeleteSnapshot = library
-                // 1. Splice the new order into the parent's snapshot so
-                //    the filter strip reflects the change immediately.
-                savedTagOrder = payload.order
-                // 2. Optimistically strip deleted tags from the local
-                //    library so the chip / count UIs update right away.
-                if !payload.deletedTags.isEmpty {
-                    let deletedLower = Set(payload.deletedTags.map { $0.lowercased() })
-                    for i in library.indices {
-                        if let tags = library[i].tags {
-                            library[i].tags = tags.filter { !deletedLower.contains($0.lowercased()) }
-                        }
-                    }
-                }
-                Task {
-                    // Persist the new tag_order. Failures revert to the
-                    // canonical order on next load — log but don't block.
-                    do { try await DBService.saveRecipeTagOrder(payload.order) }
-                    catch { print("[recipes] saveRecipeTagOrder failed: \(error.localizedDescription)") }
-                    // Strip deleted tags from every affected recipe in DB,
-                    // using the pre-prune snapshot so the loop has work.
-                    for tag in payload.deletedTags {
-                        let affected = preDeleteSnapshot.filter {
-                            ($0.tags ?? []).contains { $0.lowercased() == tag.lowercased() }
-                        }
-                        do { _ = try await DBService.removeTagFromRecipes(tag, recipes: affected) }
-                        catch { print("[recipes] removeTagFromRecipes(\(tag)) failed: \(error.localizedDescription)") }
-                    }
-                    // Refresh from DB so the next render sees the
-                    // canonical post-strip state (in case the optimistic
-                    // prune missed anything edge-case).
-                    if !payload.deletedTags.isEmpty { await refresh() }
-                }
+                applyTagPayload(payload)
             }
         }
         .sheet(isPresented: $newRecipePickerOpen) {
@@ -362,23 +329,27 @@ struct RecipesView: View {
                 }
                 .padding(.vertical, 4)
             }
-            // Pencil affordance to enter reorder mode. Hidden when there
-            // are 0–1 tags (nothing meaningful to reorder) so the bar stays
-            // clean for users who haven't built up a tag library yet.
-            if display.count >= 2 {
-                Button {
-                    tagOrderEditorOpen = true
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.text3)
-                        .frame(width: 28, height: 28)
-                        .background(Theme.bg3, in: .circle)
-                        .overlay(Circle().stroke(Theme.border2, lineWidth: 1))
+            // Manage Tags entry point — handles reorder, rename, delete,
+            // and adding standalone tags. Always shown so users discover
+            // it; on a fresh account they can pre-create tags here before
+            // any recipe carries one.
+            Button {
+                tagOrderEditorOpen = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "tag")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Manage")
+                        .font(.system(size: 12, weight: .medium))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Reorder tags")
+                .foregroundStyle(Theme.text2)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Theme.bg3, in: .rect(cornerRadius: 999))
+                .overlay(RoundedRectangle(cornerRadius: 999).stroke(Theme.border2, lineWidth: 1))
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Manage tags")
         }
     }
 
@@ -704,5 +675,107 @@ struct RecipesView: View {
             loadError = error.localizedDescription
         }
         await app
+    }
+
+    /// Synchronously fold a just-saved recipe into the local library so
+    /// `globalAvailableTags()` (and the chip pickers downstream) see new
+    /// tags BEFORE the async `refresh()` round-trip completes. Closes the
+    /// race where a user could save a tag on Recipe A and immediately open
+    /// Recipe B's editor — without this splice, Recipe B's pool stayed
+    /// stale until the network refresh landed.
+    private func spliceIntoLibrary(_ saved: RecipeFull) {
+        guard !saved.id.isEmpty else { return }
+        if let idx = library.firstIndex(where: { $0.id == saved.id }) {
+            library[idx] = saved
+        } else {
+            library.append(saved)
+        }
+    }
+
+    /// Apply the Manage Tags sheet's save payload: rewrite tag_order,
+    /// optimistically rename + strip tags from the local library so the
+    /// UI updates instantly, then persist everything in the background
+    /// and refresh from the DB.
+    private func applyTagPayload(_ payload: TagOrderEditorSheet.Payload) {
+        // Snapshot the library BEFORE any optimistic mutation so the
+        // network cascades downstream still have the affected-recipe
+        // set to iterate (the local library is about to lose those
+        // tag entries).
+        let preSnapshot = library
+
+        // 1. New tag_order — drives the filter strip immediately.
+        savedTagOrder = payload.order
+
+        // If the user's active filter was renamed or deleted, retarget
+        // it so the strip doesn't render a "0 results" state for a tag
+        // that no longer exists under that name.
+        if !activeTag.isEmpty, activeTag != "__untagged__" {
+            let activeLower = activeTag.lowercased()
+            if payload.deletedTags.contains(where: { $0.lowercased() == activeLower }) {
+                activeTag = ""
+            } else if let rn = payload.renames.first(where: { $0.oldName.lowercased() == activeLower }) {
+                activeTag = rn.newName
+            }
+        }
+
+        // 2. Rename pass first (so a later delete on the new name still
+        // works correctly).
+        if !payload.renames.isEmpty {
+            for rn in payload.renames {
+                let oldLower = rn.oldName.lowercased()
+                for i in library.indices {
+                    guard let tags = library[i].tags else { continue }
+                    var seen: Set<String> = []
+                    var out: [String] = []
+                    for t in tags {
+                        let mapped = (t.lowercased() == oldLower) ? rn.newName : t
+                        let key = mapped.lowercased()
+                        if seen.insert(key).inserted { out.append(mapped) }
+                    }
+                    library[i].tags = out
+                }
+            }
+        }
+
+        // 3. Delete pass — strip every deleted tag from each local row.
+        if !payload.deletedTags.isEmpty {
+            let deletedLower = Set(payload.deletedTags.map { $0.lowercased() })
+            for i in library.indices {
+                if let tags = library[i].tags {
+                    library[i].tags = tags.filter { !deletedLower.contains($0.lowercased()) }
+                }
+            }
+        }
+
+        Task {
+            // Persist the new tag_order. Non-fatal on failure — the next
+            // load will fall back to the canonical order.
+            do { try await DBService.saveRecipeTagOrder(payload.order) }
+            catch { print("[recipes] saveRecipeTagOrder failed: \(error.localizedDescription)") }
+
+            // Cascade renames against the pre-mutation snapshot.
+            for rn in payload.renames {
+                let affected = preSnapshot.filter {
+                    ($0.tags ?? []).contains { $0.lowercased() == rn.oldName.lowercased() }
+                }
+                do { _ = try await DBService.renameTagInRecipes(old: rn.oldName, new: rn.newName, recipes: affected) }
+                catch { print("[recipes] renameTagInRecipes(\(rn.oldName)→\(rn.newName)) failed: \(error.localizedDescription)") }
+            }
+
+            // Cascade deletes against the pre-mutation snapshot.
+            for tag in payload.deletedTags {
+                let affected = preSnapshot.filter {
+                    ($0.tags ?? []).contains { $0.lowercased() == tag.lowercased() }
+                }
+                do { _ = try await DBService.removeTagFromRecipes(tag, recipes: affected) }
+                catch { print("[recipes] removeTagFromRecipes(\(tag)) failed: \(error.localizedDescription)") }
+            }
+
+            // Reconcile with DB if anything was a cascade — covers edge
+            // cases the optimistic pass might have missed.
+            if !payload.deletedTags.isEmpty || !payload.renames.isEmpty {
+                await refresh()
+            }
+        }
     }
 }

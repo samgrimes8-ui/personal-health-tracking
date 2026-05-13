@@ -19,13 +19,12 @@ struct RecipeEditView: View {
     let onSaved: (RecipeFull) -> Void
     let onCancel: () -> Void
     let onDeleted: () -> Void
-    /// Pool of every tag the user has access to — presets + customs in
-    /// use across other recipes + tags coined via the Edit Tags sheet
-    /// (user_profiles.tag_order). Without this, the chip editor only
-    /// shows presets + this recipe's own tags, so a tag created on
-    /// Recipe A wouldn't appear when editing Recipe B. The parent
-    /// (RecipesView) computes the union so every editor sees the same
-    /// global view.
+    /// Initial pool the parent (RecipesView) seeds from its in-memory
+    /// library snapshot. The editor copies this into `livePool` on first
+    /// render and then refreshes from the DB on `.task` — see `livePool`
+    /// for the rationale. Keeping the prop preserves the existing call
+    /// sites + gives us a synchronous seed so the chip strip never
+    /// renders empty for users with a primed library.
     var availableTags: [String] = []
 
     @Environment(\.dismiss) private var dismiss
@@ -38,6 +37,14 @@ struct RecipeEditView: View {
     @State private var aiBusy: AIBusy?
     @State private var aiError: String?
     @FocusState private var keyboardFocused: Bool
+
+    /// Live tag pool used by the chip picker. Seeded from `availableTags`
+    /// at first render (so opening doesn't flash empty), then refreshed
+    /// from the DB on `.task` so a tag coined elsewhere in this session
+    /// — even one persisted under us by a concurrent flow — surfaces
+    /// without requiring the parent's in-memory snapshot to be current.
+    /// Defense-in-depth on top of the parent's optimistic splice.
+    @State private var livePool: [String] = []
 
     enum AIBusy: Equatable {
         case estimate, extractIngredients, recalculate
@@ -101,6 +108,21 @@ struct RecipeEditView: View {
                 } onCancel: {
                     showExtractSheet = false
                 }
+            }
+        }
+        .task {
+            // Seed from the parent's snapshot for a no-flash first render,
+            // then fetch the authoritative pool from the DB. The fetched
+            // result wins because it reflects writes from any other path
+            // (QuickTagSheet, Manage Tags) that may not have flowed back
+            // through the parent yet.
+            if livePool.isEmpty { livePool = availableTags }
+            do {
+                let pool = try await DBService.fetchTagLibrary()
+                livePool = pool
+            } catch {
+                // Non-fatal — fall back to whatever the parent seeded.
+                print("[recipes] fetchTagLibrary failed: \(error.localizedDescription)")
             }
         }
     }
@@ -590,15 +612,17 @@ struct RecipeEditView: View {
             seen.insert(t.lowercased())
             out.append(t)
         }
-        // Tags from across the user's library + tag_order. Aggregated
-        // by the parent so a tag coined on Recipe A appears in Recipe B's
-        // picker without us needing to re-scan the library here.
-        for t in availableTags where !seen.contains(t.lowercased()) {
+        // Authoritative pool: every distinct tag the user has ever applied
+        // across their recipes, plus tag_order entries (Manage Tags
+        // standalone tags). Refreshed on `.task` so a tag created in a
+        // parallel flow surfaces without depending on the parent's
+        // in-memory library snapshot.
+        for t in livePool where !seen.contains(t.lowercased()) {
             seen.insert(t.lowercased())
             out.append(t)
         }
         // Currently selected on this recipe (custom or otherwise) —
-        // keep them visible even if they're not in availableTags yet
+        // keep them visible even if they're not in livePool yet
         // (e.g. user just typed a brand-new custom tag in this session).
         for t in (recipe.tags ?? []) where !seen.contains(t.lowercased()) {
             seen.insert(t.lowercased())

@@ -228,6 +228,96 @@ enum DBService {
         return updated
     }
 
+    /// Replace every occurrence of `old` (case-insensitive) with `new` in
+    /// every recipe that currently carries it. Used by the Manage Tags
+    /// sheet's rename action. Mirrors `removeTagFromRecipes`'s per-recipe
+    /// loop so a transient failure on one row doesn't block the batch.
+    ///
+    /// De-dupes case-insensitively: if a recipe already has the target
+    /// casing, the rename collapses the two onto a single entry (the
+    /// new value, keeping its first position).
+    @discardableResult
+    static func renameTagInRecipes(old: String, new: String, recipes: [RecipeFull]) async throws -> Int {
+        struct Payload: Encodable { let tags: [String]; let updated_at: String }
+        let userId = try await currentUserID()
+        let oldLower = old.lowercased()
+        let nowIso = ISO8601DateFormatter().string(from: Date())
+        var updated = 0
+        for recipe in recipes {
+            let oldTags = recipe.tags ?? []
+            guard oldTags.contains(where: { $0.lowercased() == oldLower }) else { continue }
+            var newTags: [String] = []
+            var seen: Set<String> = []
+            for t in oldTags {
+                let mapped = (t.lowercased() == oldLower) ? new : t
+                let key = mapped.lowercased()
+                if seen.insert(key).inserted {
+                    newTags.append(mapped)
+                }
+            }
+            // Skip the update if rename was a no-op (e.g. case-only change
+            // that collapsed onto an identical entry already present).
+            if newTags == oldTags { continue }
+            do {
+                try await client
+                    .from("recipes")
+                    .update(Payload(tags: newTags, updated_at: nowIso))
+                    .eq("id", value: recipe.id)
+                    .eq("user_id", value: userId)
+                    .execute()
+                updated += 1
+            } catch {
+                print("[tags] renameTagInRecipes failed for \(recipe.id): \(error.localizedDescription)")
+            }
+        }
+        return updated
+    }
+
+    /// Authoritative tag pool for chip pickers / autocomplete. Returns the
+    /// case-preserving union of:
+    ///   • every distinct tag actually applied across the user's recipes
+    ///   • every entry in `user_profiles.tag_order` (covers tags coined
+    ///     via the Manage Tags sheet that aren't on any recipe yet)
+    /// Order is undefined — callers merge with presets + their preferred
+    /// ordering. Preferred casing is the first occurrence we see across
+    /// recipes (else tag_order's casing).
+    ///
+    /// Implementation note: Supabase's REST client doesn't expose `SELECT
+    /// DISTINCT unnest(tags)`, and the recipes library is already capped
+    /// at 500 rows elsewhere — aggregating client-side is cheap and avoids
+    /// a one-off RPC.
+    static func fetchTagLibrary() async throws -> [String] {
+        struct Row: Decodable { let tags: [String]? }
+        let userId = try await currentUserID()
+        async let recipeRows: [Row] = client
+            .from("recipes")
+            .select("tags")
+            .eq("user_id", value: userId)
+            .limit(500)
+            .execute()
+            .value
+        async let tagOrder: [String] = getRecipeTagOrder()
+        let rows = try await recipeRows
+        let order = try await tagOrder
+        var seen: Set<String> = []
+        var out: [String] = []
+        for row in rows {
+            for t in row.tags ?? [] {
+                let trimmed = t.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty { continue }
+                let key = trimmed.lowercased()
+                if seen.insert(key).inserted { out.append(trimmed) }
+            }
+        }
+        for t in order {
+            let trimmed = t.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            let key = trimmed.lowercased()
+            if seen.insert(key).inserted { out.append(trimmed) }
+        }
+        return out
+    }
+
     // ─── Planner ───────────────────────────────────────────────────────
     //
     // savePlannerEntry mirrors addPlannerMeal() in db.js: the caller
