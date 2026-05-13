@@ -9431,6 +9431,13 @@ function wireGlobals() {
 
   window.saveEditEntry = async () => {
     if (!state.editingEntry) return
+    // Commit any in-flight input: WKWebView / mobile Safari can hold
+    // a typed-but-uncommitted number value in the field's editing
+    // buffer, so .value reads stale until blur. Forcing blur on the
+    // active element flushes that buffer before we read edit-servings.
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur()
+    }
     const { id, source, plannerCtx } = state.editingEntry
     const servings = parseFloat(document.getElementById('edit-servings').value) || 1
     const base = state.editingBaseMacros || {}
