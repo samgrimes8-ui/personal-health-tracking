@@ -1059,6 +1059,17 @@ struct MealLogEditor: View {
     }
 
     private func save() async {
+        // Force any active TextField to flush its typed value to its
+        // binding before we read displayedAmount / calories / etc.
+        // FractionalNumberField wraps a UITextField that only commits
+        // on focus loss, so tapping Save with the keyboard still up
+        // would otherwise read the OLD bound value. Mirrors the web
+        // fix in commit 8f6eb14 (document.activeElement.blur() before
+        // reading the input).
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil, from: nil, for: nil
+        )
         saving = true
         errorMessage = nil
         defer { saving = false }
